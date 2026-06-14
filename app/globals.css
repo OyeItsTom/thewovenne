@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-ink: #1c1f3b;
+  --color-linen: #f0ead6;
+  --color-terracotta: #c2714f;
+  --color-gold: #c9a84c;
+  --color-cream: #faf7f2;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-cream text-ink font-body antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-heading;
+  }
+
+  ::selection {
+    background-color: theme("colors.gold");
+    color: theme("colors.ink");
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: theme("colors.linen");
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: theme("colors.gold");
+    border-radius: 9999px;
+  }
+}
+
+@layer components {
+  .container-wovenne {
+    @apply mx-auto w-full max-w-7xl px-5 sm:px-8 lg:px-12;
+  }
+
+  .section-padding {
+    @apply py-16 md:py-24;
+  }
+}
+
+/* Hand-drawn loom / weave texture watermark, ink-toned for light backgrounds */
+.bg-weave {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%231C1F3B' stroke-opacity='0.05' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M0 24 Q 30 12 60 24 T 120 24'/%3E%3Cpath d='M0 60 Q 30 48 60 60 T 120 60'/%3E%3Cpath d='M0 96 Q 30 84 60 96 T 120 96'/%3E%3Cpath d='M24 0 Q 12 30 24 60 T 24 120'/%3E%3Cpath d='M60 0 Q 48 30 60 60 T 60 120'/%3E%3Cpath d='M96 0 Q 84 30 96 60 T 96 120'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 120px 120px;
+}
+
+/* Hand-drawn loom / weave texture watermark, gold-toned for dark backgrounds */
+.bg-weave-light {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%23C9A84C' stroke-opacity='0.14' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M0 24 Q 30 12 60 24 T 120 24'/%3E%3Cpath d='M0 60 Q 30 48 60 60 T 120 60'/%3E%3Cpath d='M0 96 Q 30 84 60 96 T 120 96'/%3E%3Cpath d='M24 0 Q 12 30 24 60 T 24 120'/%3E%3Cpath d='M60 0 Q 48 30 60 60 T 60 120'/%3E%3Cpath d='M96 0 Q 84 30 96 60 T 96 120'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 120px 120px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

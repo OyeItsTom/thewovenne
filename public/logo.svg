@@ -1,0 +1,11 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="THE WOVENNE emblem">
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#1C1F3B" stroke-width="1.5" />
+  <g fill="none" stroke-linecap="round" stroke-width="1.5">
+    <path d="M6 20 Q 32 12 58 20" stroke="#C2714F" />
+    <path d="M6 32 Q 32 24 58 32" stroke="#C2714F" />
+    <path d="M6 44 Q 32 36 58 44" stroke="#C2714F" />
+    <path d="M20 6 Q 12 32 20 58" stroke="#C9A84C" />
+    <path d="M32 6 Q 24 32 32 58" stroke="#C9A84C" />
+    <path d="M44 6 Q 36 32 44 58" stroke="#C9A84C" />
+  </g>
+</svg>
