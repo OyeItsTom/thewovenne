@@ -40,14 +40,15 @@ async function handleCreate({ items }: CreatePayload) {
   }
 
   try {
+    // Razorpay expects the amount in the smallest unit — paise for INR.
     const amount = Math.round(
-      items.reduce((sum, item) => sum + item.price_gbp * item.quantity, 0) *
+      items.reduce((sum, item) => sum + item.price_inr * item.quantity, 0) *
         100
     );
 
     const order = await razorpay.orders.create({
       amount,
-      currency: "GBP",
+      currency: "INR",
       receipt: `wovenne_${Date.now()}`,
     });
 
@@ -82,8 +83,8 @@ async function handleVerify({
   if (verified) {
     const supabase = createServiceClient();
     const { error } = await supabase.from("orders").insert({
-      total_gbp: items.reduce(
-        (sum, item) => sum + item.price_gbp * item.quantity,
+      total_inr: items.reduce(
+        (sum, item) => sum + item.price_inr * item.quantity,
         0
       ),
       payment_provider: "razorpay",
@@ -93,7 +94,7 @@ async function handleVerify({
         name: item.name,
         size: item.size,
         quantity: item.quantity,
-        price_gbp: item.price_gbp,
+        price_inr: item.price_inr,
       })),
     });
 

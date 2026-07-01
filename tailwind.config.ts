@@ -26,6 +26,25 @@ const config: Config = {
         body: ["var(--font-body)", "sans-serif"],
         script: ["var(--font-script)", "cursive"],
       },
+      fontSize: {
+        // Deliberate editorial scale — large, confident display; generous body.
+        eyebrow: ["0.8125rem", { lineHeight: "1.2", letterSpacing: "0.28em" }],
+        "display-sm": ["2.75rem", { lineHeight: "1.08" }],
+        "display-md": ["4rem", { lineHeight: "1.04" }],
+        "display-lg": ["5.5rem", { lineHeight: "1.0" }],
+        "display-xl": ["7.5rem", { lineHeight: "0.98" }],
+      },
+      letterSpacing: {
+        luxe: "0.02em",
+        wide: "0.08em",
+        widest: "0.3em",
+      },
+      maxWidth: {
+        prose: "68ch",
+      },
+      transitionTimingFunction: {
+        cloth: "cubic-bezier(0.22, 1, 0.36, 1)",
+      },
       keyframes: {
         "pulse-ring": {
           "0%": { boxShadow: "0 0 0 0 rgba(37, 211, 102, 0.55)" },

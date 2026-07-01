@@ -26,7 +26,7 @@ export default function AddToCart({
         id: product.id,
         slug: product.slug,
         name: product.name,
-        price_gbp: product.price_gbp,
+        price_inr: product.price_inr,
         image_url: product.image_url,
         size,
       },

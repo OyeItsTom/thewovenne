@@ -3,26 +3,13 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { Hand, Heart, Leaf } from "lucide-react";
 import { fadeUp, staggerContainer } from "@/lib/motion";
+import { DEFAULT_CONTENT } from "@/lib/content";
+import type { WhyLinenContent } from "@/lib/types";
 
-const points = [
-  {
-    icon: Heart,
-    title: "Body-Friendly",
-    copy: "Zero harm to skin — breathable natural fibres that soften with every wash, never synthetic, never itchy.",
-  },
-  {
-    icon: Leaf,
-    title: "Naturally Sustainable",
-    copy: "Low environmental impact from field to fabric. Linen that returns to the earth, not a landfill.",
-  },
-  {
-    icon: Hand,
-    title: "Direct From the Loom",
-    copy: "No middleman, no markup games. Every piece is sourced straight from the artisans who weave it.",
-  },
-];
+const ICONS = [Heart, Leaf, Hand];
 
-export default function WhyLinen() {
+export default function WhyLinen({ content }: { content?: WhyLinenContent }) {
+  const c = content ?? DEFAULT_CONTENT.why_linen;
   const reduced = useReducedMotion();
   const container = staggerContainer(reduced);
   const item = fadeUp(reduced);
@@ -36,11 +23,11 @@ export default function WhyLinen() {
         variants={container}
         className="text-center"
       >
-        <motion.span variants={item} className="font-script text-2xl text-terracotta">
-          Why Linen
+        <motion.span variants={item} className="eyebrow">
+          The Wovenne difference
         </motion.span>
-        <motion.h2 variants={item} className="mt-2 font-heading text-4xl text-ink sm:text-5xl">
-          Cloth That Cares Back
+        <motion.h2 variants={item} className="mt-3 font-heading text-4xl text-ink sm:text-5xl">
+          {c.title}
         </motion.h2>
       </motion.div>
 
@@ -51,17 +38,20 @@ export default function WhyLinen() {
         variants={container}
         className="mt-14 grid gap-6 sm:grid-cols-3 sm:gap-8"
       >
-        {points.map(({ icon: Icon, title, copy }) => (
-          <motion.div
-            key={title}
-            variants={item}
-            className="rounded-2xl bg-linen/60 p-8 text-center"
-          >
-            <Icon className="mx-auto h-8 w-8 text-terracotta" strokeWidth={1.5} />
-            <h3 className="mt-4 font-heading text-xl text-ink">{title}</h3>
-            <p className="mt-2 text-sm leading-relaxed text-ink/70">{copy}</p>
-          </motion.div>
-        ))}
+        {c.cards.map((card, i) => {
+          const Icon = ICONS[i % ICONS.length];
+          return (
+            <motion.div
+              key={card.title}
+              variants={item}
+              className="rounded-2xl bg-linen/60 p-8 text-center"
+            >
+              <Icon className="mx-auto h-8 w-8 text-terracotta" strokeWidth={1.5} />
+              <h3 className="mt-4 font-heading text-xl text-ink">{card.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-ink/70">{card.text}</p>
+            </motion.div>
+          );
+        })}
       </motion.div>
     </section>
   );

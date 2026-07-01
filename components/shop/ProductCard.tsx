@@ -6,7 +6,7 @@ import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import { Plus } from "lucide-react";
 import type { Product } from "@/lib/types";
-import { formatGBP } from "@/lib/utils";
+import { formatINR } from "@/lib/utils";
 import { fadeUp } from "@/lib/motion";
 import { useCartStore } from "@/lib/store";
 import Badge from "@/components/ui/Badge";
@@ -26,7 +26,7 @@ export default function ProductCard({ product }: { product: Product }) {
       id: product.id,
       slug: product.slug,
       name: product.name,
-      price_gbp: product.price_gbp,
+      price_inr: product.price_inr,
       image_url: product.image_url,
       size: "One Size",
     });
@@ -86,7 +86,7 @@ export default function ProductCard({ product }: { product: Product }) {
             )}
           </div>
           <span className="whitespace-nowrap font-body text-sm font-medium text-ink">
-            {formatGBP(product.price_gbp)}
+            {formatINR(product.price_inr)}
           </span>
         </div>
       </Link>

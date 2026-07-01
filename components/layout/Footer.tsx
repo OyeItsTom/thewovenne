@@ -2,6 +2,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { Facebook, Instagram, MessageCircle } from "lucide-react";
 
+const INSTAGRAM_URL = "https://www.instagram.com/thewovenne";
+
 export default function Footer() {
   const number = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
   const message = encodeURIComponent("Hi, I'm interested in THE WOVENNE products");
@@ -64,7 +66,13 @@ export default function Footer() {
             </li>
           </ul>
           <div className="mt-5 flex gap-4 text-cream/70">
-            <a href="#" aria-label="Instagram" className="transition-colors hover:text-cream">
+            <a
+              href={INSTAGRAM_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="THE WOVENNE on Instagram (@thewovenne)"
+              className="transition-colors hover:text-cream"
+            >
               <Instagram className="h-5 w-5" />
             </a>
             <a href="#" aria-label="Facebook" className="transition-colors hover:text-cream">

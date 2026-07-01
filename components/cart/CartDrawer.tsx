@@ -4,7 +4,7 @@ import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ShoppingBag, X } from "lucide-react";
 import { useCartStore } from "@/lib/store";
-import { formatGBP } from "@/lib/utils";
+import { formatINR } from "@/lib/utils";
 import { buttonClassName } from "@/components/ui/Button";
 import { slideInFromRight } from "@/lib/motion";
 import CartItem from "./CartItem";
@@ -64,7 +64,7 @@ export default function CartDrawer() {
               <div className="mt-6 space-y-4 border-t border-ink/10 pt-6">
                 <div className="flex items-center justify-between font-heading text-lg text-ink">
                   <span>Subtotal</span>
-                  <span>{formatGBP(subtotal)}</span>
+                  <span>{formatINR(subtotal)}</span>
                 </div>
                 <Link
                   href="/cart"

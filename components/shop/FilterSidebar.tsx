@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
-import { cn, formatGBP } from "@/lib/utils";
+import { cn, formatINR } from "@/lib/utils";
 import { slideInFromLeft } from "@/lib/motion";
 
 export interface Filters {
@@ -25,7 +25,7 @@ export const EMPTY_FILTERS: Filters = {
   maxPrice: null,
 };
 
-const PRICE_STEPS = [50, 75, 100, 150];
+const PRICE_STEPS = [1500, 2500, 3500, 5000];
 
 export default function FilterSidebar({
   options,
@@ -87,7 +87,7 @@ export default function FilterSidebar({
                   : "border-ink/15 text-ink hover:border-terracotta"
               )}
             >
-              Under {formatGBP(price)}
+              Under {formatINR(price)}
             </button>
           ))}
         </div>

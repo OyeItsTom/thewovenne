@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
-import { Check, MessageCircle } from "lucide-react";
+import { MessageCircle } from "lucide-react";
 import { buttonClassName } from "@/components/ui/Button";
 import { fadeUp, staggerContainer } from "@/lib/motion";
+import WovenCheck from "@/components/weave/WovenCheck";
 
 export default function CheckoutSuccessPage() {
   const reduced = useReducedMotion();
@@ -25,21 +26,8 @@ export default function CheckoutSuccessPage() {
         variants={container}
         className="flex flex-col items-center"
       >
-        <motion.div
-          variants={item}
-          className="flex h-20 w-20 items-center justify-center rounded-full bg-terracotta/10"
-        >
-          <motion.div
-            initial={reduced ? { opacity: 0 } : { scale: 0, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{
-              delay: reduced ? 0 : 0.3,
-              duration: reduced ? 0.3 : 0.5,
-              ease: [0.22, 1, 0.36, 1],
-            }}
-          >
-            <Check className="h-10 w-10 text-terracotta" strokeWidth={2.5} />
-          </motion.div>
+        <motion.div variants={item}>
+          <WovenCheck />
         </motion.div>
 
         <motion.h1

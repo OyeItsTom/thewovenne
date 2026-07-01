@@ -5,6 +5,7 @@ import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
 import WhatsAppButton from "@/components/layout/WhatsAppButton";
 import CartDrawer from "@/components/cart/CartDrawer";
+import AskWovenne from "@/components/chat/AskWovenne";
 
 const heading = Cormorant_Garamond({
   subsets: ["latin"],
@@ -48,6 +49,7 @@ export default function RootLayout({
         <main className="flex-1">{children}</main>
         <Footer />
         <WhatsAppButton />
+        <AskWovenne />
         <CartDrawer />
       </body>
     </html>
