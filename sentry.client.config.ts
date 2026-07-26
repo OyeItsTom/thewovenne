@@ -1,8 +1,12 @@
 import * as Sentry from "@sentry/nextjs";
 
-// Browser-side error monitoring. No-ops when the DSN is unset.
+// Browser-side error monitoring. Only initialises when a real DSN (a URL) is set
+// — a placeholder like "your-sentry-dsn" is treated as not configured.
+const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
+const enabled = typeof dsn === "string" && dsn.startsWith("http");
+
 Sentry.init({
-  dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+  dsn: enabled ? dsn : undefined,
+  enabled,
   tracesSampleRate: 1.0,
-  enabled: !!process.env.NEXT_PUBLIC_SENTRY_DSN,
 });

@@ -1,6 +1,8 @@
 -- THE WOVENNE — Supabase schema
 -- Run this in the Supabase SQL editor (Project → SQL Editor → New query).
--- Safe to re-run: uses "if not exists" / "on conflict do nothing" throughout.
+-- Fully idempotent — re-run any time on an existing database with no errors:
+-- "create table if not exists", "drop policy if exists" before every policy
+-- (tables + storage.objects), and "on conflict do nothing" on all seeds.
 --
 -- ── Connection pooling (serverless) ──────────
 -- For queries from Vercel serverless functions, use the TRANSACTION-mode pooler
@@ -68,41 +70,59 @@ alter table orders enable row level security;
 alter table site_content enable row level security;
 alter table journal_posts enable row level security;
 
+-- Every policy is drop-then-create so this whole file re-runs cleanly on a
+-- database that already has the original policies (no "already exists" errors).
+
 -- Products: public can view active; admins can view/manage all.
+drop policy if exists "Public can view active products" on products;
 create policy "Public can view active products"
   on products for select using (is_active = true);
+drop policy if exists "Authenticated can view all products" on products;
 create policy "Authenticated can view all products"
   on products for select to authenticated using (true);
+drop policy if exists "Authenticated can insert products" on products;
 create policy "Authenticated can insert products"
   on products for insert to authenticated with check (true);
+drop policy if exists "Authenticated can update products" on products;
 create policy "Authenticated can update products"
   on products for update to authenticated using (true);
+drop policy if exists "Authenticated can delete products" on products;
 create policy "Authenticated can delete products"
   on products for delete to authenticated using (true);
 
 -- Orders: written server-side via the service role (bypasses RLS); admins read.
+drop policy if exists "Authenticated can view orders" on orders;
 create policy "Authenticated can view orders"
   on orders for select to authenticated using (true);
 
 -- Site content: public can read; admins can manage.
+drop policy if exists "Public can view site content" on site_content;
 create policy "Public can view site content"
   on site_content for select using (true);
+drop policy if exists "Authenticated can insert site content" on site_content;
 create policy "Authenticated can insert site content"
   on site_content for insert to authenticated with check (true);
+drop policy if exists "Authenticated can update site content" on site_content;
 create policy "Authenticated can update site content"
   on site_content for update to authenticated using (true);
+drop policy if exists "Authenticated can delete site content" on site_content;
 create policy "Authenticated can delete site content"
   on site_content for delete to authenticated using (true);
 
 -- Journal: public can read published; admins can read all + manage.
+drop policy if exists "Public can view published journal" on journal_posts;
 create policy "Public can view published journal"
   on journal_posts for select using (published = true);
+drop policy if exists "Authenticated can view all journal" on journal_posts;
 create policy "Authenticated can view all journal"
   on journal_posts for select to authenticated using (true);
+drop policy if exists "Authenticated can insert journal" on journal_posts;
 create policy "Authenticated can insert journal"
   on journal_posts for insert to authenticated with check (true);
+drop policy if exists "Authenticated can update journal" on journal_posts;
 create policy "Authenticated can update journal"
   on journal_posts for update to authenticated using (true);
+drop policy if exists "Authenticated can delete journal" on journal_posts;
 create policy "Authenticated can delete journal"
   on journal_posts for delete to authenticated using (true);
 

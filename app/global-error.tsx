@@ -1,16 +1,18 @@
 "use client";
 
-import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
 
-// Reports uncaught React render errors (App Router) to Sentry with a stack trace.
+// Reports uncaught React render errors (App Router) to Sentry with a stack
+// trace — only when a DSN is configured; otherwise it's a no-op.
 export default function GlobalError({
   error,
 }: {
   error: Error & { digest?: string };
 }) {
   useEffect(() => {
-    Sentry.captureException(error);
+    const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
+    if (!dsn || !dsn.startsWith("http")) return;
+    import("@sentry/nextjs").then((Sentry) => Sentry.captureException(error));
   }, [error]);
 
   return (
