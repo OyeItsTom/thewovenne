@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import type { Product } from "@/lib/types";
-import { cn, formatGBP } from "@/lib/utils";
+import { cn, formatINR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
 import StockEditor from "./StockEditor";
 
@@ -67,15 +67,26 @@ export default function ProductTable({
                 {product.category ?? "—"}
               </td>
               <td className="px-4 py-3 text-ink/70">
-                {formatGBP(product.price_gbp)}
+                {formatINR(product.price_inr)}
               </td>
               <td className="px-4 py-3">
-                <StockEditor
-                  value={product.stock_quantity}
-                  onSave={(value) =>
-                    updateProduct(product, { stock_quantity: value })
-                  }
-                />
+                <div className="flex items-center gap-2">
+                  <StockEditor
+                    value={product.stock_quantity}
+                    onSave={(value) =>
+                      updateProduct(product, { stock_quantity: value })
+                    }
+                  />
+                  {product.stock_quantity === 0 ? (
+                    <span className="rounded-full bg-ink/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ink/60">
+                      Out
+                    </span>
+                  ) : product.stock_quantity <= 5 ? (
+                    <span className="rounded-full bg-terracotta/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-terracotta-dark">
+                      Low
+                    </span>
+                  ) : null}
+                </div>
               </td>
               <td className="px-4 py-3">
                 <button

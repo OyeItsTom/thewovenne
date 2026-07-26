@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { Minus, Plus, X } from "lucide-react";
 import { type CartItem as CartItemType, useCartStore } from "@/lib/store";
-import { formatGBP } from "@/lib/utils";
+import { formatINR } from "@/lib/utils";
 
 export default function CartItem({ item }: { item: CartItemType }) {
   const updateQuantity = useCartStore((s) => s.updateQuantity);
@@ -55,7 +55,7 @@ export default function CartItem({ item }: { item: CartItemType }) {
             </button>
           </div>
           <span className="font-body text-sm font-medium text-ink">
-            {formatGBP(item.price_gbp * item.quantity)}
+            {formatINR(item.price_inr * item.quantity)}
           </span>
         </div>
       </div>

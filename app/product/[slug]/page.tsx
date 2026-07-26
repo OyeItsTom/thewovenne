@@ -1,10 +1,34 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getProductBySlug, getRelatedProducts } from "@/lib/products";
-import { formatGBP } from "@/lib/utils";
+import { formatINR } from "@/lib/utils";
 import ImageGallery from "@/components/product/ImageGallery";
 import ProductOptions from "@/components/product/ProductOptions";
 import CareAccordion from "@/components/product/CareAccordion";
 import ProductGrid from "@/components/shop/ProductGrid";
+
+export const revalidate = 60;
+
+export async function generateMetadata({
+  params,
+}: {
+  params: { slug: string };
+}): Promise<Metadata> {
+  const product = await getProductBySlug(params.slug);
+  if (!product) return { title: "Product not found | THE WOVENNE" };
+  const description =
+    product.description?.slice(0, 155) ??
+    "Authentic handloom linen from Kerala.";
+  return {
+    title: `${product.name} | THE WOVENNE`,
+    description,
+    openGraph: {
+      title: product.name,
+      description,
+      images: product.image_url ? [product.image_url] : undefined,
+    },
+  };
+}
 
 export default async function ProductPage({
   params,
@@ -26,7 +50,7 @@ export default async function ProductPage({
   ].filter((src): src is string => Boolean(src));
 
   return (
-    <div className="container-wovenne section-padding">
+    <div className="container-wovenne section-padding pb-28 lg:pb-24">
       <div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
         <ImageGallery images={images} alt={product.name} />
 
@@ -40,7 +64,7 @@ export default async function ProductPage({
             {product.name}
           </h1>
           <p className="mt-3 font-body text-2xl text-ink">
-            {formatGBP(product.price_gbp)}
+            {formatINR(product.price_inr)}
           </p>
 
           {product.description && (

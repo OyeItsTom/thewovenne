@@ -7,16 +7,18 @@ import {
   TextareaHTMLAttributes,
   useState,
 } from "react";
+import Image from "next/image";
 import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
 import { supabase } from "@/lib/supabase";
+import { uploadImage } from "@/lib/storage";
 import type { Product } from "@/lib/types";
 
 const initialForm = {
   name: "",
   slug: "",
   description: "",
-  price_gbp: "",
+  price_inr: "",
   category: "",
   fabric: "",
   colour: "",
@@ -38,17 +40,33 @@ export default function AddProductModal({
   const [form, setForm] = useState<FormState>(initialForm);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const update =
     (key: keyof FormState) =>
     (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       setForm((f) => ({ ...f, [key]: e.target.value }));
 
+  const handleFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError(null);
+    setUploading(true);
+    try {
+      const url = await uploadImage(file, "products");
+      setForm((f) => ({ ...f, image_url: url }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Image upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    if (!form.name || !form.slug || !form.price_gbp) {
+    if (!form.name || !form.slug || !form.price_inr) {
       setError("Name, slug and price are required.");
       return;
     }
@@ -61,7 +79,7 @@ export default function AddProductModal({
         name: form.name,
         slug: form.slug,
         description: form.description || null,
-        price_gbp: Number(form.price_gbp),
+        price_inr: Number(form.price_inr),
         category: form.category || null,
         fabric: form.fabric || null,
         colour: form.colour || null,
@@ -118,13 +136,13 @@ export default function AddProductModal({
 
         <div className="grid gap-4 sm:grid-cols-3">
           <Field
-            label="Price (GBP)"
+            label="Price (₹ INR)"
             type="number"
             step="0.01"
             min="0"
             required
-            value={form.price_gbp}
-            onChange={update("price_gbp")}
+            value={form.price_inr}
+            onChange={update("price_inr")}
           />
           <Field
             label="Category"
@@ -157,16 +175,44 @@ export default function AddProductModal({
           />
         </div>
 
-        <Field
-          label="Image URL"
-          placeholder="https://placehold.co/800x1000/F0EAD6/1C1F3B?text=THE+WOVENNE"
-          value={form.image_url}
-          onChange={update("image_url")}
-        />
+        <div>
+          <span className="text-sm font-medium text-ink/70">Product photo</span>
+          <div className="mt-1 flex items-center gap-4">
+            <div className="relative h-20 w-16 shrink-0 overflow-hidden rounded-lg bg-linen">
+              {form.image_url && (
+                <Image
+                  src={form.image_url}
+                  alt="Product preview"
+                  fill
+                  sizes="64px"
+                  className="object-cover"
+                />
+              )}
+            </div>
+            <label className="cursor-pointer rounded-full border border-ink/15 px-4 py-2 text-sm text-ink transition-colors hover:border-terracotta">
+              {uploading ? "Uploading…" : form.image_url ? "Change photo" : "Upload photo"}
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleFile}
+                disabled={uploading}
+                className="hidden"
+              />
+            </label>
+          </div>
+          <p className="mt-1 text-xs text-ink/50">
+            Uploads straight to storage — no links to paste.
+          </p>
+        </div>
 
         {error && <p className="text-sm text-terracotta-dark">{error}</p>}
 
-        <Button type="submit" disabled={saving} size="lg" className="w-full">
+        <Button
+          type="submit"
+          disabled={saving || uploading}
+          size="lg"
+          className="w-full"
+        >
           {saving ? "Saving…" : "Add Product"}
         </Button>
       </form>

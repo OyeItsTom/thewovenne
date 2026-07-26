@@ -5,7 +5,7 @@ export interface CartItem {
   id: string;
   slug: string;
   name: string;
-  price_gbp: number;
+  price_inr: number;
   image_url: string | null;
   size: string;
   quantity: number;
@@ -65,7 +65,7 @@ export const useCartStore = create<CartState>()(
       closeCart: () => set({ isOpen: false }),
       toggleCart: () => set((state) => ({ isOpen: !state.isOpen })),
       subtotal: () =>
-        get().items.reduce((sum, i) => sum + i.price_gbp * i.quantity, 0),
+        get().items.reduce((sum, i) => sum + i.price_inr * i.quantity, 0),
       totalItems: () => get().items.reduce((sum, i) => sum + i.quantity, 0),
     }),
     { name: "wovenne-cart" }

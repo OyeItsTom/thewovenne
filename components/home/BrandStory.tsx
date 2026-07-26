@@ -3,8 +3,11 @@
 import Image from "next/image";
 import { motion, useReducedMotion } from "framer-motion";
 import { fadeUp, staggerContainer } from "@/lib/motion";
+import { DEFAULT_CONTENT } from "@/lib/content";
+import type { BrandStoryContent } from "@/lib/types";
 
-export default function BrandStory() {
+export default function BrandStory({ content }: { content?: BrandStoryContent }) {
+  const c = content ?? DEFAULT_CONTENT.brand_story;
   const reduced = useReducedMotion();
   const container = staggerContainer(reduced);
   const item = fadeUp(reduced);
@@ -37,17 +40,14 @@ export default function BrandStory() {
         variants={container}
         className="order-1 md:order-2"
       >
-        <motion.span variants={item} className="font-script text-2xl text-terracotta">
-          Our Story
+        <motion.span variants={item} className="eyebrow">
+          Our story
         </motion.span>
-        <motion.h2 variants={item} className="mt-2 font-heading text-4xl text-ink sm:text-5xl">
-          From Loom House to Front Door
+        <motion.h2 variants={item} className="mt-3 font-heading text-4xl text-ink sm:text-5xl">
+          {c.title}
         </motion.h2>
         <motion.p variants={item} className="mt-6 text-base leading-relaxed text-ink/70">
-          THE WOVENNE began with a simple frustration: the best Indian linen
-          never seemed to leave India. We work directly with handloom weavers
-          across Tamil Nadu and Varanasi, paying fair prices and shipping the
-          same fabric worn at home — straight to your door in the UK.
+          {c.body}
         </motion.p>
         <motion.blockquote
           variants={item}

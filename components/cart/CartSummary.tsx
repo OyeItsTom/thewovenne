@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Script from "next/script";
 import { useCartStore } from "@/lib/store";
-import { formatGBP } from "@/lib/utils";
+import { formatINR } from "@/lib/utils";
 import Button from "@/components/ui/Button";
 
 interface RazorpayPaymentResponse {
@@ -38,28 +38,13 @@ export default function CartSummary() {
   const items = useCartStore((s) => s.items);
   const subtotal = useCartStore((s) => s.subtotal());
   const clearCart = useCartStore((s) => s.clearCart);
-  const [loading, setLoading] = useState<"stripe" | "razorpay" | null>(null);
+  // Razorpay is the only provider for now (India/Kerala — covers UPI, GPay, cards).
+  const [loading, setLoading] = useState<"razorpay" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const handleStripeCheckout = async () => {
-    setError(null);
-    setLoading("stripe");
-    try {
-      const res = await fetch("/api/checkout/stripe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.url) {
-        throw new Error(data.error || "Could not start checkout");
-      }
-      window.location.href = data.url;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-      setLoading(null);
-    }
-  };
+  // TODO(payments): When re-adding PayPal for UK customers, add a
+  // `handlePayPalCheckout` handler + a second <Button> below, and gate which
+  // provider shows by region/currency. The old Stripe flow was removed.
 
   const handleRazorpayCheckout = async () => {
     setError(null);
@@ -117,7 +102,7 @@ export default function CartSummary() {
       <div className="rounded-2xl bg-linen/60 p-6 sm:p-8">
         <div className="flex items-center justify-between font-heading text-xl text-ink">
           <span>Subtotal</span>
-          <span>{formatGBP(subtotal)}</span>
+          <span>{formatINR(subtotal)}</span>
         </div>
         <p className="mt-1 text-xs text-ink/50">
           Shipping &amp; taxes calculated at checkout.
@@ -127,23 +112,18 @@ export default function CartSummary() {
 
         <div className="mt-6 space-y-3">
           <Button
-            onClick={handleStripeCheckout}
-            disabled={loading !== null}
-            size="lg"
-            className="w-full"
-          >
-            {loading === "stripe" ? "Redirecting…" : "Pay with Card (Stripe)"}
-          </Button>
-          <Button
             onClick={handleRazorpayCheckout}
-            disabled={loading !== null}
-            variant="secondary"
+            disabled={loading !== null || items.length === 0}
             size="lg"
             className="w-full"
           >
-            {loading === "razorpay" ? "Opening…" : "Pay via Razorpay"}
+            {loading === "razorpay" ? "Opening…" : "Pay securely — UPI · GPay · Cards"}
           </Button>
+          {/* TODO(payments): PayPal button for UK customers slots in here later. */}
         </div>
+        <p className="mt-3 text-center text-xs text-ink/50">
+          Powered by Razorpay
+        </p>
       </div>
     </>
   );
