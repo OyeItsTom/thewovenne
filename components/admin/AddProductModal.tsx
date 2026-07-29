@@ -52,6 +52,12 @@ export default function AddProductModal({
 
   const parents = categories.filter((c) => c.parent_id === null);
   const subCategories = categories.filter((c) => c.parent_id === parentId);
+  const selectedSubCategory = categories.find((c) => c.id === subCategoryId);
+
+  /** Mirrors getVisibleCategoryIds: a hidden parent hides its children too. */
+  const isPubliclyVisible = (sub: Category) =>
+    sub.is_visible &&
+    categories.some((p) => p.id === sub.parent_id && p.is_visible);
 
   const update =
     (key: keyof FormState) =>
@@ -82,6 +88,13 @@ export default function AddProductModal({
       return;
     }
 
+    // Storefront queries are scoped to visible categories, so an uncategorised
+    // product would silently never appear. Refuse to create one.
+    if (!subCategoryId) {
+      setError("Pick a category and sub-category — products need one to appear on the site.");
+      return;
+    }
+
     setSaving(true);
 
     const { data, error: insertError } = await supabase
@@ -91,7 +104,7 @@ export default function AddProductModal({
         slug: form.slug,
         description: form.description || null,
         price_inr: Number(form.price_inr),
-        category_id: subCategoryId || null,
+        category_id: subCategoryId,
         fabric: form.fabric || null,
         colour: form.colour || null,
         stock_quantity: Number(form.stock_quantity) || 0,
@@ -171,6 +184,7 @@ export default function AddProductModal({
           <label className="block text-sm">
             <span className="font-medium text-ink/70">Category</span>
             <select
+              required
               value={parentId}
               onChange={(e) => {
                 setParentId(e.target.value);
@@ -189,6 +203,7 @@ export default function AddProductModal({
           <label className="block text-sm">
             <span className="font-medium text-ink/70">Sub-category</span>
             <select
+              required
               value={subCategoryId}
               onChange={(e) => setSubCategoryId(e.target.value)}
               disabled={!parentId}
@@ -200,11 +215,21 @@ export default function AddProductModal({
               {subCategories.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
+                  {c.is_visible ? "" : " (hidden)"}
                 </option>
               ))}
             </select>
           </label>
         </div>
+
+        {/* Filing a product under a hidden category is legitimate — staging it
+            ahead of launch — but it must not look like the product vanished. */}
+        {selectedSubCategory && !isPubliclyVisible(selectedSubCategory) && (
+          <p className="rounded-lg bg-linen/60 px-3 py-2 text-xs text-ink/70">
+            This category is currently hidden, so the product won&apos;t appear on
+            the site until you make it visible.
+          </p>
+        )}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field
