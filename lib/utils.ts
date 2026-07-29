@@ -24,3 +24,36 @@ export function formatINR(amount: number): string {
     maximumFractionDigits: 0,
   }).format(amount);
 }
+
+/**
+ * Turn a display name into a URL-safe slug: "Nehru Jackets" → "nehru-jackets".
+ * Strips accents so "Café Linen" → "cafe-linen" rather than dropping the é.
+ */
+export function slugify(input: string): string {
+  return input
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim()
+    // Drop apostrophes rather than turning them into separators, so
+    // "Men's Shirts" reads as "mens-shirts" not "men-s-shirts".
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * slugify, then suffix -2, -3… until it no longer collides with `taken`.
+ * Slugs are public URLs and unique in the database, so a clash is a hard error
+ * rather than something to discover on save.
+ */
+export function uniqueSlug(input: string, taken: string[]): string {
+  const base = slugify(input);
+  if (!base) return "";
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+
+  let n = 2;
+  while (used.has(`${base}-${n}`)) n += 1;
+  return `${base}-${n}`;
+}

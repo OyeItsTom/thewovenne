@@ -113,7 +113,19 @@ $$;
 revoke execute on function public.is_admin() from public;
 grant execute on function public.is_admin() to authenticated;
 
--- Give every new signup a profile row (defaulting to is_admin = false).
+-- Gives a new signup a profile row (defaulting to is_admin = false).
+--
+-- Deliberately NOT wired to a trigger. Creating one on auth.users requires
+-- ownership of that table, which this project's SQL-editor role may not have —
+-- and a failure there aborts the rest of this file, silently skipping every
+-- grant below. If you confirm you have the privilege, wire it with:
+--
+--   create trigger on_auth_user_created
+--     after insert on auth.users
+--     for each row execute function public.handle_new_user();
+--
+-- Until then, profile creation belongs in application code at signup, which is
+-- only needed once customer accounts ship.
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -128,17 +140,20 @@ begin
 end;
 $$;
 
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
-
 -- Backfill anyone who signed up before this table existed. Nobody is promoted
 -- automatically — see the note at the bottom of this file for how to grant
 -- yourself admin, which you MUST do or you will lock yourself out of /admin.
-insert into profiles (id, email)
-select u.id, u.email from auth.users u
-on conflict (id) do nothing;
+--
+-- Guarded: reading auth.users needs privileges this role may lack, and an
+-- unguarded failure here would abort every statement below it.
+do $$
+begin
+  insert into public.profiles (id, email)
+  select u.id, u.email from auth.users u
+  on conflict (id) do nothing;
+exception when insufficient_privilege or undefined_table then
+  raise notice 'Skipped auth.users backfill (%). Insert your admin profile row by hand.', sqlerrm;
+end $$;
 
 -- ── Row Level Security ───────────────────────
 alter table profiles enable row level security;
@@ -266,6 +281,21 @@ grant usage on schema public to anon, authenticated;
 grant select on categories, products, site_content, journal_posts to anon, authenticated;
 grant insert, update, delete on categories, products, site_content, journal_posts to authenticated;
 grant select on orders to authenticated;
+
+-- service_role is the trusted server-side key. It bypasses RLS, but privileges
+-- are still checked — and on this project the usual Supabase defaults were not
+-- in place, so every service_role query failed with 42501 "permission denied".
+-- That silently broke order recording: app/api/checkout/razorpay writes the
+-- order with this role after verifying the Razorpay signature, and
+-- lib/chat.ts looks orders up with it for the concierge.
+-- The default-privileges lines cover tables added later.
+grant usage on schema public to service_role;
+grant all privileges on all tables in schema public to service_role;
+grant all privileges on all sequences in schema public to service_role;
+grant all privileges on all functions in schema public to service_role;
+alter default privileges in schema public grant all on tables to service_role;
+alter default privileges in schema public grant all on sequences to service_role;
+alter default privileges in schema public grant all on functions to service_role;
 
 -- Profiles: readable/updatable per the policies above, BUT is_admin is granted
 -- at column level only. RLS cannot restrict individual columns, so without this
