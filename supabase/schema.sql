@@ -113,7 +113,19 @@ $$;
 revoke execute on function public.is_admin() from public;
 grant execute on function public.is_admin() to authenticated;
 
--- Give every new signup a profile row (defaulting to is_admin = false).
+-- Gives a new signup a profile row (defaulting to is_admin = false).
+--
+-- Deliberately NOT wired to a trigger. Creating one on auth.users requires
+-- ownership of that table, which this project's SQL-editor role may not have —
+-- and a failure there aborts the rest of this file, silently skipping every
+-- grant below. If you confirm you have the privilege, wire it with:
+--
+--   create trigger on_auth_user_created
+--     after insert on auth.users
+--     for each row execute function public.handle_new_user();
+--
+-- Until then, profile creation belongs in application code at signup, which is
+-- only needed once customer accounts ship.
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -128,17 +140,20 @@ begin
 end;
 $$;
 
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
-
 -- Backfill anyone who signed up before this table existed. Nobody is promoted
 -- automatically — see the note at the bottom of this file for how to grant
 -- yourself admin, which you MUST do or you will lock yourself out of /admin.
-insert into profiles (id, email)
-select u.id, u.email from auth.users u
-on conflict (id) do nothing;
+--
+-- Guarded: reading auth.users needs privileges this role may lack, and an
+-- unguarded failure here would abort every statement below it.
+do $$
+begin
+  insert into public.profiles (id, email)
+  select u.id, u.email from auth.users u
+  on conflict (id) do nothing;
+exception when insufficient_privilege or undefined_table then
+  raise notice 'Skipped auth.users backfill (%). Insert your admin profile row by hand.', sqlerrm;
+end $$;
 
 -- ── Row Level Security ───────────────────────
 alter table profiles enable row level security;

@@ -16,11 +16,12 @@ import type { Product } from "@/lib/types";
 import Button from "@/components/ui/Button";
 import ProductTable from "@/components/admin/ProductTable";
 import AddProductModal from "@/components/admin/AddProductModal";
+import CategoryManager from "@/components/admin/CategoryManager";
 import ContentEditor from "@/components/admin/ContentEditor";
 import JournalManager from "@/components/admin/JournalManager";
 import TestErrorButton from "@/components/admin/TestErrorButton";
 
-type Tab = "products" | "content" | "journal";
+type Tab = "products" | "categories" | "content" | "journal";
 
 export default function AdminDashboardPage() {
   const router = useRouter();
@@ -141,6 +142,7 @@ export default function AdminDashboardPage() {
       <div className="mt-10 flex gap-2 border-b border-ink/10">
         {([
           ["products", "Products & Stock"],
+          ["categories", "Categories"],
           ["content", "Homepage Content"],
           ["journal", "Journal"],
         ] as [Tab, string][]).map(([id, label]) => (
@@ -165,6 +167,7 @@ export default function AdminDashboardPage() {
           ) : (
             <ProductTable products={products} onUpdate={handleUpdate} />
           ))}
+        {tab === "categories" && <CategoryManager />}
         {tab === "content" && <ContentEditor />}
         {tab === "journal" && <JournalManager />}
       </div>
