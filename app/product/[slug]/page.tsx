@@ -41,7 +41,7 @@ export default async function ProductPage({
     notFound();
   }
 
-  const related = await getRelatedProducts(product.category, product.slug, 4);
+  const related = await getRelatedProducts(product.category_id, product.slug, 4);
 
   const images = [
     product.image_url,

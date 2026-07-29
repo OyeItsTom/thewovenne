@@ -1,10 +1,28 @@
 import { supabase } from "./supabase";
 import type { Product } from "./types";
 
+// Products join their category so callers get the category *name* for display
+// (product.category) alongside the relational category_id used for filtering.
+const PRODUCT_SELECT = "*, categories(name, slug)";
+
+type ProductRow = Omit<Product, "category" | "category_slug"> & {
+  categories: { name: string; slug: string } | null;
+};
+
+/** Flatten the joined categories row into product.category / category_slug. */
+function mapProduct(row: ProductRow): Product {
+  const { categories, ...rest } = row;
+  return {
+    ...rest,
+    category: categories?.name ?? null,
+    category_slug: categories?.slug ?? null,
+  };
+}
+
 export async function getFeaturedProducts(limit = 4): Promise<Product[]> {
   const { data, error } = await supabase
     .from("products")
-    .select("*")
+    .select(PRODUCT_SELECT)
     .eq("is_active", true)
     .gt("stock_quantity", 0)
     .order("created_at", { ascending: false })
@@ -14,13 +32,13 @@ export async function getFeaturedProducts(limit = 4): Promise<Product[]> {
     console.error("getFeaturedProducts:", error.message);
     return [];
   }
-  return data ?? [];
+  return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
 }
 
 export async function getAllProducts(): Promise<Product[]> {
   const { data, error } = await supabase
     .from("products")
-    .select("*")
+    .select(PRODUCT_SELECT)
     .eq("is_active", true)
     .order("created_at", { ascending: false });
 
@@ -28,13 +46,13 @@ export async function getAllProducts(): Promise<Product[]> {
     console.error("getAllProducts:", error.message);
     return [];
   }
-  return data ?? [];
+  return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
 }
 
 export async function getProductBySlug(slug: string): Promise<Product | null> {
   const { data, error } = await supabase
     .from("products")
-    .select("*")
+    .select(PRODUCT_SELECT)
     .eq("slug", slug)
     .eq("is_active", true)
     .maybeSingle();
@@ -43,21 +61,21 @@ export async function getProductBySlug(slug: string): Promise<Product | null> {
     console.error("getProductBySlug:", error.message);
     return null;
   }
-  return data;
+  return data ? mapProduct(data as ProductRow) : null;
 }
 
 export async function getRelatedProducts(
-  category: string | null,
+  categoryId: string | null,
   excludeSlug: string,
   limit = 4
 ): Promise<Product[]> {
-  if (!category) return [];
+  if (!categoryId) return [];
 
   const { data, error } = await supabase
     .from("products")
-    .select("*")
+    .select(PRODUCT_SELECT)
     .eq("is_active", true)
-    .eq("category", category)
+    .eq("category_id", categoryId)
     .neq("slug", excludeSlug)
     .limit(limit);
 
@@ -65,5 +83,5 @@ export async function getRelatedProducts(
     console.error("getRelatedProducts:", error.message);
     return [];
   }
-  return data ?? [];
+  return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
 }

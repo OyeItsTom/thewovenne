@@ -11,6 +11,21 @@
 -- The NEXT_PUBLIC_SUPABASE_URL / anon-key REST client used here is already
 -- pooled by Supabase; the port note applies if you add a direct Postgres client.
 
+-- ── Categories (relational: parent → sub-category) ──
+-- Two levels: top-level parents (Men / Women, parent_id = null) and their
+-- sub-categories (Sarees, Shirts…, parent_id = the parent's id). is_visible
+-- controls storefront visibility; a hidden parent hides all its children too
+-- (enforced in lib/categories.ts, which only walks visible parents).
+create table if not exists categories (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  slug text unique not null,
+  parent_id uuid references categories(id) on delete cascade,
+  is_visible boolean default true,
+  sort_order integer default 0,
+  created_at timestamptz default now()
+);
+
 -- ── Products ─────────────────────────────────
 create table if not exists products (
   id uuid primary key default gen_random_uuid(),
@@ -18,7 +33,7 @@ create table if not exists products (
   slug text unique not null,
   description text,
   price_inr numeric(10,2) not null,
-  category text,
+  category_id uuid references categories(id) on delete set null,
   fabric text,
   colour text,
   stock_quantity integer default 0,
@@ -26,6 +41,9 @@ create table if not exists products (
   is_active boolean default true,
   created_at timestamptz default now()
 );
+-- Migrate the old flat text column → relational category_id (safe to re-run).
+alter table products add column if not exists category_id uuid references categories(id) on delete set null;
+alter table products drop column if exists category;
 
 -- ── Orders ───────────────────────────────────
 -- Lightweight record; Razorpay handles the payment itself.
@@ -65,10 +83,28 @@ create table if not exists journal_posts (
 -- Admin users are handled entirely by Supabase Auth (no custom table needed).
 
 -- ── Row Level Security ───────────────────────
+alter table categories enable row level security;
 alter table products enable row level security;
 alter table orders enable row level security;
 alter table site_content enable row level security;
 alter table journal_posts enable row level security;
+
+-- Categories: public can read visible ones; admins read all + manage.
+drop policy if exists "Public can view visible categories" on categories;
+create policy "Public can view visible categories"
+  on categories for select using (is_visible = true);
+drop policy if exists "Authenticated can view all categories" on categories;
+create policy "Authenticated can view all categories"
+  on categories for select to authenticated using (true);
+drop policy if exists "Authenticated can insert categories" on categories;
+create policy "Authenticated can insert categories"
+  on categories for insert to authenticated with check (true);
+drop policy if exists "Authenticated can update categories" on categories;
+create policy "Authenticated can update categories"
+  on categories for update to authenticated using (true);
+drop policy if exists "Authenticated can delete categories" on categories;
+create policy "Authenticated can delete categories"
+  on categories for delete to authenticated using (true);
 
 -- Every policy is drop-then-create so this whole file re-runs cleanly on a
 -- database that already has the original policies (no "already exists" errors).
@@ -126,22 +162,65 @@ drop policy if exists "Authenticated can delete journal" on journal_posts;
 create policy "Authenticated can delete journal"
   on journal_posts for delete to authenticated using (true);
 
+-- ── Seed: categories (Men / Women → sub-categories) ─
+-- Only Women → Sarees is visible at launch; the rest are hidden until their
+-- product lines are ready. Toggle visibility later from the admin Category tab.
+insert into categories (name, slug, parent_id, is_visible, sort_order) values
+  ('Men', 'men', null, true, 1),
+  ('Women', 'women', null, true, 2)
+on conflict (slug) do nothing;
+
+insert into categories (name, slug, parent_id, is_visible, sort_order)
+select v.name, v.slug, p.id, v.is_visible, v.sort_order
+from (values
+  ('Shirts',        'shirts',        'men',   false, 1),
+  ('Kurtas',        'kurtas',        'men',   false, 2),
+  ('Trousers',      'trousers',      'men',   false, 3),
+  ('Nehru Jackets', 'nehru-jackets', 'men',   false, 4),
+  ('Sarees',        'sarees',        'women', true,  1),
+  ('Kurtis',        'kurtis',        'women', false, 2),
+  ('Dresses',       'dresses',       'women', false, 3),
+  ('Blouses',       'blouses',       'women', false, 4),
+  ('Sets',          'sets',          'women', false, 5),
+  ('Home',          'home',          'women', false, 6),
+  ('Accessories',   'accessories',   'women', false, 7)
+) as v(name, slug, parent_slug, is_visible, sort_order)
+join categories p on p.slug = v.parent_slug
+on conflict (slug) do nothing;
+
 -- ── Seed: 10 sample products (temporary placeholders) ─
 -- Prices in INR (₹) — launching in Kerala, India first. Images are placeholders;
 -- replace with real photos via the admin dashboard (Supabase Storage upload).
-insert into products (name, slug, description, price_inr, category, fabric, colour, stock_quantity, image_url, is_active)
+insert into products (name, slug, description, price_inr, fabric, colour, stock_quantity, image_url, is_active)
 values
-  ('Kochi Linen Shirt', 'kochi-linen-shirt', 'A breathable pure-linen shirt, hand-loomed on the Malabar coast. Relaxed collar, mother-of-pearl buttons, softens beautifully with every wash.', 1899, 'Shirts', 'Pure Linen', 'Natural', 14, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
-  ('Malabar Kurta', 'malabar-kurta', 'A straight-cut kurta in a soft linen-cotton blend — light enough for Kerala heat, elegant enough for evenings. Side slits, deep pockets.', 2299, 'Kurtas', 'Linen-Cotton', 'Off-White', 9, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
-  ('Varkala Linen Trousers', 'varkala-linen-trousers', 'Wide-leg trousers in heavyweight linen with an elasticated drawstring waist. Woven to move with you, from beach to table.', 1799, 'Trousers', 'Linen', 'Sand', 11, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
-  ('Onam Ivory Saree', 'onam-ivory-saree', 'A handwoven kasavu-inspired saree in ivory with a fine gold border — a quiet, ceremonial classic from the Kerala loom.', 3999, 'Sarees', 'Handloom Cotton', 'Ivory / Gold', 5, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
-  ('Kerala Handloom Throw', 'kerala-handloom-throw', 'A handwoven cotton throw in a natural stripe, finished with hand-tied tassels. Made on a traditional pit loom.', 1499, 'Home', 'Handloom Cotton', 'Natural / Indigo', 18, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
-  ('Backwater Linen Dress', 'backwater-linen-dress', 'An easy midi dress in washed linen — unstructured, pocketed, and endlessly wearable. Cut for airflow and grace.', 2599, 'Dresses', 'Washed Linen', 'Sage', 7, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
-  ('Fort Kochi Overshirt', 'fort-kochi-overshirt', 'An unstructured overshirt in undyed raw linen. Slubby texture, patch pockets — gets better with every wear.', 2199, 'Shirts', 'Raw Linen', 'Undyed', 0, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
-  ('Alleppey Lounge Set', 'alleppey-lounge-set', 'A matched linen shirt-and-shorts set for slow mornings. Breathable, soft, and quietly refined.', 2999, 'Sets', 'Linen', 'Clay', 6, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
-  ('Muslin Scarf', 'muslin-scarf', 'A featherlight handwoven muslin scarf — the finishing note. Folds to nothing, drapes like air.', 999, 'Accessories', 'Handloom Muslin', 'Ecru', 20, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
-  ('Coir & Linen Tote', 'coir-linen-tote', 'A sturdy market tote woven from coir and linen, with reinforced handles. Kerala craft, built for daily life.', 1199, 'Accessories', 'Coir / Linen', 'Natural', 13, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true)
+  ('Kochi Linen Shirt', 'kochi-linen-shirt', 'A breathable pure-linen shirt, hand-loomed on the Malabar coast. Relaxed collar, mother-of-pearl buttons, softens beautifully with every wash.', 1899, 'Pure Linen', 'Natural', 14, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
+  ('Malabar Kurta', 'malabar-kurta', 'A straight-cut kurta in a soft linen-cotton blend — light enough for Kerala heat, elegant enough for evenings. Side slits, deep pockets.', 2299, 'Linen-Cotton', 'Off-White', 9, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
+  ('Varkala Linen Trousers', 'varkala-linen-trousers', 'Wide-leg trousers in heavyweight linen with an elasticated drawstring waist. Woven to move with you, from beach to table.', 1799, 'Linen', 'Sand', 11, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
+  ('Onam Ivory Saree', 'onam-ivory-saree', 'A handwoven kasavu-inspired saree in ivory with a fine gold border — a quiet, ceremonial classic from the Kerala loom.', 3999, 'Handloom Cotton', 'Ivory / Gold', 5, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
+  ('Kerala Handloom Throw', 'kerala-handloom-throw', 'A handwoven cotton throw in a natural stripe, finished with hand-tied tassels. Made on a traditional pit loom.', 1499, 'Handloom Cotton', 'Natural / Indigo', 18, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
+  ('Backwater Linen Dress', 'backwater-linen-dress', 'An easy midi dress in washed linen — unstructured, pocketed, and endlessly wearable. Cut for airflow and grace.', 2599, 'Washed Linen', 'Sage', 7, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
+  ('Fort Kochi Overshirt', 'fort-kochi-overshirt', 'An unstructured overshirt in undyed raw linen. Slubby texture, patch pockets — gets better with every wear.', 2199, 'Raw Linen', 'Undyed', 0, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
+  ('Alleppey Lounge Set', 'alleppey-lounge-set', 'A matched linen shirt-and-shorts set for slow mornings. Breathable, soft, and quietly refined.', 2999, 'Linen', 'Clay', 6, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
+  ('Muslin Scarf', 'muslin-scarf', 'A featherlight handwoven muslin scarf — the finishing note. Folds to nothing, drapes like air.', 999, 'Handloom Muslin', 'Ecru', 20, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true),
+  ('Coir & Linen Tote', 'coir-linen-tote', 'A sturdy market tote woven from coir and linen, with reinforced handles. Kerala craft, built for daily life.', 1199, 'Coir / Linen', 'Natural', 13, 'https://placehold.co/900x1200/F0EAD6/1C1F3B?text=THE+WOVENNE', true)
 on conflict (slug) do nothing;
+
+-- Map the seed products onto the new relational categories (only where unset,
+-- so re-running never clobbers categories set later from the admin panel).
+update products p set category_id = c.id
+from categories c
+where p.category_id is null and c.slug = case p.slug
+  when 'kochi-linen-shirt'       then 'shirts'
+  when 'malabar-kurta'           then 'kurtas'
+  when 'varkala-linen-trousers'  then 'trousers'
+  when 'onam-ivory-saree'        then 'sarees'
+  when 'kerala-handloom-throw'   then 'home'
+  when 'backwater-linen-dress'   then 'dresses'
+  when 'fort-kochi-overshirt'    then 'shirts'
+  when 'alleppey-lounge-set'     then 'sets'
+  when 'muslin-scarf'            then 'accessories'
+  when 'coir-linen-tote'         then 'accessories'
+end;
 
 -- ── Seed: editable homepage content ──────────
 insert into site_content (key, value) values

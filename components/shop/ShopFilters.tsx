@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { SlidersHorizontal } from "lucide-react";
-import type { Product } from "@/lib/types";
+import type { CategoryNode, Product } from "@/lib/types";
 import FilterSidebar, {
   EMPTY_FILTERS,
   type FilterOptions,
@@ -13,34 +13,45 @@ import ProductGrid from "@/components/shop/ProductGrid";
 /**
  * Client-side filtering over a server-fetched product list. The list itself is
  * cached (revalidate) by the /shop server page, so the DB isn't hit per request.
+ * Category options come from the visible category tree (admin-managed), while
+ * fabric/colour options are still derived from the products on show.
  */
-export default function ShopFilters({ products }: { products: Product[] }) {
+export default function ShopFilters({
+  products,
+  categoryTree,
+}: {
+  products: Product[];
+  categoryTree: CategoryNode[];
+}) {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   const filterOptions: FilterOptions = useMemo(() => {
-    const categories = new Set<string>();
     const fabrics = new Set<string>();
     const colours = new Set<string>();
     products.forEach((p) => {
-      if (p.category) categories.add(p.category);
       if (p.fabric) fabrics.add(p.fabric);
       if (p.colour) colours.add(p.colour);
     });
     return {
-      categories: Array.from(categories).sort(),
+      categoryGroups: categoryTree.map((parent) => ({
+        name: parent.name,
+        children: parent.children.map((c) => ({ name: c.name, slug: c.slug })),
+      })),
       fabrics: Array.from(fabrics).sort(),
       colours: Array.from(colours).sort(),
     };
-  }, [products]);
+  }, [products, categoryTree]);
 
   const filteredProducts = useMemo(
     () =>
       products.filter((p) => {
-        if (filters.category && p.category !== filters.category) return false;
+        if (filters.category && p.category_slug !== filters.category)
+          return false;
         if (filters.fabric && p.fabric !== filters.fabric) return false;
         if (filters.colour && p.colour !== filters.colour) return false;
-        if (filters.maxPrice !== null && p.price_inr > filters.maxPrice) return false;
+        if (filters.maxPrice !== null && p.price_inr > filters.maxPrice)
+          return false;
         return true;
       }),
     [products, filters]

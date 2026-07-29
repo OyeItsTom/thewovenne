@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { getAllProducts } from "@/lib/products";
+import { getVisibleCategoryTree } from "@/lib/categories";
 import ShopFilters from "@/components/shop/ShopFilters";
 
 // Cache the catalogue for 60s so the DB isn't queried on every request.
@@ -17,7 +18,10 @@ export const metadata: Metadata = {
 };
 
 export default async function ShopPage() {
-  const products = await getAllProducts();
+  const [products, categoryTree] = await Promise.all([
+    getAllProducts(),
+    getVisibleCategoryTree(),
+  ]);
 
   return (
     <div className="container-wovenne section-padding">
@@ -27,7 +31,7 @@ export default async function ShopPage() {
           Shop All
         </h1>
       </div>
-      <ShopFilters products={products} />
+      <ShopFilters products={products} categoryTree={categoryTree} />
     </div>
   );
 }

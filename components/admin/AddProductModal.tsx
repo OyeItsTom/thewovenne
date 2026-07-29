@@ -5,21 +5,22 @@ import {
   FormEvent,
   InputHTMLAttributes,
   TextareaHTMLAttributes,
+  useEffect,
   useState,
 } from "react";
 import Image from "next/image";
 import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
 import { supabase } from "@/lib/supabase";
+import { getAllCategories } from "@/lib/categories";
 import { uploadImage } from "@/lib/storage";
-import type { Product } from "@/lib/types";
+import type { Category, Product } from "@/lib/types";
 
 const initialForm = {
   name: "",
   slug: "",
   description: "",
   price_inr: "",
-  category: "",
   fabric: "",
   colour: "",
   stock_quantity: "",
@@ -38,9 +39,19 @@ export default function AddProductModal({
   onCreated: (product: Product) => void;
 }) {
   const [form, setForm] = useState<FormState>(initialForm);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [parentId, setParentId] = useState("");
+  const [subCategoryId, setSubCategoryId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    getAllCategories().then(setCategories);
+  }, []);
+
+  const parents = categories.filter((c) => c.parent_id === null);
+  const subCategories = categories.filter((c) => c.parent_id === parentId);
 
   const update =
     (key: keyof FormState) =>
@@ -80,7 +91,7 @@ export default function AddProductModal({
         slug: form.slug,
         description: form.description || null,
         price_inr: Number(form.price_inr),
-        category: form.category || null,
+        category_id: subCategoryId || null,
         fabric: form.fabric || null,
         colour: form.colour || null,
         stock_quantity: Number(form.stock_quantity) || 0,
@@ -99,11 +110,15 @@ export default function AddProductModal({
 
     onCreated(data as Product);
     setForm(initialForm);
+    setParentId("");
+    setSubCategoryId("");
     onClose();
   };
 
   const handleClose = () => {
     setForm(initialForm);
+    setParentId("");
+    setSubCategoryId("");
     setError(null);
     onClose();
   };
@@ -134,7 +149,7 @@ export default function AddProductModal({
           onChange={update("description")}
         />
 
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field
             label="Price (₹ INR)"
             type="number"
@@ -145,17 +160,50 @@ export default function AddProductModal({
             onChange={update("price_inr")}
           />
           <Field
-            label="Category"
-            placeholder="Shirts"
-            value={form.category}
-            onChange={update("category")}
-          />
-          <Field
             label="Fabric"
             placeholder="Handloom Cotton-Linen"
             value={form.fabric}
             onChange={update("fabric")}
           />
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block text-sm">
+            <span className="font-medium text-ink/70">Category</span>
+            <select
+              value={parentId}
+              onChange={(e) => {
+                setParentId(e.target.value);
+                setSubCategoryId("");
+              }}
+              className="mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
+            >
+              <option value="">Select…</option>
+              {parents.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-sm">
+            <span className="font-medium text-ink/70">Sub-category</span>
+            <select
+              value={subCategoryId}
+              onChange={(e) => setSubCategoryId(e.target.value)}
+              disabled={!parentId}
+              className="mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none disabled:opacity-50"
+            >
+              <option value="">
+                {parentId ? "Select…" : "Pick a category first"}
+              </option>
+              {subCategories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">

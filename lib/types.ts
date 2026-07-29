@@ -1,10 +1,31 @@
+// A catalogue category. Two levels: parents (Men/Women, parent_id = null) and
+// sub-categories (Sarees, Shirts…, parent_id = the parent's id).
+export interface Category {
+  id: string;
+  name: string;
+  slug: string;
+  parent_id: string | null;
+  is_visible: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+// A visible parent with its visible children — used to render shop nav/filters.
+export interface CategoryNode extends Category {
+  children: Category[];
+}
+
 export interface Product {
   id: string;
   name: string;
   slug: string;
   description: string | null;
   price_inr: number;
+  category_id: string | null;
+  // Derived from the joined categories row (name/slug) — not stored on products.
+  // Kept so display code can show the category name without a second lookup.
   category: string | null;
+  category_slug: string | null;
   fabric: string | null;
   colour: string | null;
   stock_quantity: number;

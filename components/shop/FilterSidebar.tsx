@@ -12,8 +12,13 @@ export interface Filters {
   maxPrice: number | null;
 }
 
+export interface CategoryFilterGroup {
+  name: string;
+  children: { name: string; slug: string }[];
+}
+
 export interface FilterOptions {
-  categories: string[];
+  categoryGroups: CategoryFilterGroup[];
   fabrics: string[];
   colours: string[];
 }
@@ -51,9 +56,8 @@ export default function FilterSidebar({
 
   const content = (
     <div className="space-y-8">
-      <FilterGroup
-        title="Category"
-        options={options.categories}
+      <CategoryFilter
+        groups={options.categoryGroups}
         selected={filters.category}
         onSelect={(v) =>
           update({ category: filters.category === v ? null : v })
@@ -143,6 +147,49 @@ export default function FilterSidebar({
         )}
       </AnimatePresence>
     </>
+  );
+}
+
+function CategoryFilter({
+  groups,
+  selected,
+  onSelect,
+}: {
+  groups: CategoryFilterGroup[];
+  selected: string | null;
+  onSelect: (slug: string) => void;
+}) {
+  if (groups.length === 0) return null;
+
+  return (
+    <div>
+      <h3 className="font-heading text-lg text-ink">Category</h3>
+      <div className="mt-3 space-y-4">
+        {groups.map((group) => (
+          <div key={group.name}>
+            <p className="text-xs uppercase tracking-wider text-ink/50">
+              {group.name}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {group.children.map((child) => (
+                <button
+                  key={child.slug}
+                  onClick={() => onSelect(child.slug)}
+                  className={cn(
+                    "rounded-full border px-4 py-2 text-sm transition-colors",
+                    selected === child.slug
+                      ? "border-terracotta bg-terracotta text-cream"
+                      : "border-ink/15 text-ink hover:border-terracotta"
+                  )}
+                >
+                  {child.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

@@ -16,16 +16,17 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 async function getProductContext(): Promise<string> {
   const { data, error } = await supabase
     .from("products")
-    .select("name, price_inr, category, fabric, colour, stock_quantity")
+    .select("name, price_inr, categories(name), fabric, colour, stock_quantity")
     .eq("is_active", true);
 
   if (error || !data?.length) return "No product data available right now.";
 
   return data
-    .map(
-      (p) =>
-        `- ${p.name} — ₹${Number(p.price_inr).toLocaleString("en-IN")} · ${p.category ?? "—"} · ${p.fabric ?? "—"} · ${p.colour ?? "—"} · ${p.stock_quantity > 0 ? "in stock" : "out of stock"}`
-    )
+    .map((p) => {
+      const category =
+        (p.categories as unknown as { name: string } | null)?.name ?? "—";
+      return `- ${p.name} — ₹${Number(p.price_inr).toLocaleString("en-IN")} · ${category} · ${p.fabric ?? "—"} · ${p.colour ?? "—"} · ${p.stock_quantity > 0 ? "in stock" : "out of stock"}`;
+    })
     .join("\n");
 }
 
