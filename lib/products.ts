@@ -36,6 +36,26 @@ async function scopeToVisible(categoryIds?: string[]): Promise<string[]> {
   return categoryIds.filter((id) => allowed.has(id));
 }
 
+/**
+ * Every product, including inactive ones and those in hidden categories, with
+ * category names resolved. For the admin table only — deliberately skips the
+ * visibility scoping above, since the whole point of the dashboard is to see
+ * and manage what the storefront hides. RLS still gates it: the "Admins can
+ * view all products" policy requires is_admin().
+ */
+export async function getAdminProducts(): Promise<Product[]> {
+  const { data, error } = await supabase
+    .from("products")
+    .select(PRODUCT_SELECT)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("getAdminProducts:", error.message);
+    return [];
+  }
+  return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
+}
+
 export async function getFeaturedProducts(limit = 4): Promise<Product[]> {
   const visibleIds = await scopeToVisible();
   if (visibleIds.length === 0) return [];
