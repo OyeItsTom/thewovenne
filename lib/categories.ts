@@ -40,6 +40,31 @@ export async function getVisibleCategoryTree(): Promise<CategoryNode[]> {
 }
 
 /**
+ * Ids of every category a shopper is allowed to see: visible parents, plus
+ * visible children of visible parents. A hidden parent hides its children even
+ * when they are individually visible — the same rule the nav and shop filters
+ * apply, kept here so product queries can't drift from it.
+ *
+ * Unlike getVisibleCategoryTree this keeps parents that have no visible
+ * children, since a product can be filed directly against a parent.
+ */
+export async function getVisibleCategoryIds(): Promise<string[]> {
+  const all = await getAllCategories();
+
+  const visibleParents = new Set(
+    all.filter((c) => c.parent_id === null && c.is_visible).map((c) => c.id)
+  );
+
+  return all
+    .filter((c) =>
+      c.parent_id === null
+        ? c.is_visible
+        : c.is_visible && visibleParents.has(c.parent_id)
+    )
+    .map((c) => c.id);
+}
+
+/**
  * The nav-ready tree: the visible tree, narrowed to parents that have at least
  * one visible sub-category actually holding an active product. Keeps "Men" and
  * "Women" out of the nav until there is something to sell under them, and stays

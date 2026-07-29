@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { supabase, createServiceClient } from "./supabase";
+import { getVisibleCategoryIds } from "./categories";
 
 // Current Sonnet — strong English + Malayalam, Sonnet-tier latency/cost.
 // (The brief's "claude-sonnet-4-6" is the previous generation; this is current.)
@@ -14,10 +15,16 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 /** Compact catalogue context so the assistant can answer fabric/sizing/care/price questions. */
 async function getProductContext(): Promise<string> {
+  // Same visibility scope as the storefront — the concierge must never offer
+  // something a shopper can't actually reach.
+  const visibleIds = await getVisibleCategoryIds();
+  if (visibleIds.length === 0) return "No product data available right now.";
+
   const { data, error } = await supabase
     .from("products")
     .select("name, price_inr, categories(name), fabric, colour, stock_quantity")
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .in("category_id", visibleIds);
 
   if (error || !data?.length) return "No product data available right now.";
 
