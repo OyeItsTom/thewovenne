@@ -267,6 +267,21 @@ grant select on categories, products, site_content, journal_posts to anon, authe
 grant insert, update, delete on categories, products, site_content, journal_posts to authenticated;
 grant select on orders to authenticated;
 
+-- service_role is the trusted server-side key. It bypasses RLS, but privileges
+-- are still checked — and on this project the usual Supabase defaults were not
+-- in place, so every service_role query failed with 42501 "permission denied".
+-- That silently broke order recording: app/api/checkout/razorpay writes the
+-- order with this role after verifying the Razorpay signature, and
+-- lib/chat.ts looks orders up with it for the concierge.
+-- The default-privileges lines cover tables added later.
+grant usage on schema public to service_role;
+grant all privileges on all tables in schema public to service_role;
+grant all privileges on all sequences in schema public to service_role;
+grant all privileges on all functions in schema public to service_role;
+alter default privileges in schema public grant all on tables to service_role;
+alter default privileges in schema public grant all on sequences to service_role;
+alter default privileges in schema public grant all on functions to service_role;
+
 -- Profiles: readable/updatable per the policies above, BUT is_admin is granted
 -- at column level only. RLS cannot restrict individual columns, so without this
 -- a signed-in customer could run `update profiles set is_admin = true` against
