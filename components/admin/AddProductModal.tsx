@@ -14,6 +14,7 @@ import Button from "@/components/ui/Button";
 import { supabase } from "@/lib/supabase";
 import { getAllCategories } from "@/lib/categories";
 import { uploadImage } from "@/lib/storage";
+import { slugify, uniqueSlug } from "@/lib/utils";
 import type { Category, Product } from "@/lib/types";
 
 const initialForm = {
@@ -40,6 +41,10 @@ export default function AddProductModal({
 }) {
   const [form, setForm] = useState<FormState>(initialForm);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [takenSlugs, setTakenSlugs] = useState<string[]>([]);
+  // Once the slug is edited by hand it stops tracking the name, so a deliberate
+  // choice is never overwritten by later typing in the name field.
+  const [slugTouched, setSlugTouched] = useState(false);
   const [parentId, setParentId] = useState("");
   const [subCategoryId, setSubCategoryId] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +53,10 @@ export default function AddProductModal({
 
   useEffect(() => {
     getAllCategories().then(setCategories);
+    supabase
+      .from("products")
+      .select("slug")
+      .then(({ data }) => setTakenSlugs((data ?? []).map((p) => p.slug)));
   }, []);
 
   const parents = categories.filter((c) => c.parent_id === null);
@@ -64,6 +73,22 @@ export default function AddProductModal({
     (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       setForm((f) => ({ ...f, [key]: e.target.value }));
 
+  /** Typing the name fills the slug, until the slug is edited directly. */
+  const updateName = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const name = e.target.value;
+    setForm((f) => ({
+      ...f,
+      name,
+      slug: slugTouched ? f.slug : uniqueSlug(name, takenSlugs),
+    }));
+  };
+
+  /** The slug is a public URL — normalise whatever is typed into it. */
+  const updateSlug = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setSlugTouched(true);
+    setForm((f) => ({ ...f, slug: slugify(e.target.value) }));
+  };
+
   const handleFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -76,6 +101,9 @@ export default function AddProductModal({
       setError(err instanceof Error ? err.message : "Image upload failed.");
     } finally {
       setUploading(false);
+      // Let the same file be re-picked after a rejection, otherwise choosing
+      // it again fires no change event.
+      e.target.value = "";
     }
   };
 
@@ -144,15 +172,21 @@ export default function AddProductModal({
             label="Name"
             required
             value={form.name}
-            onChange={update("name")}
+            onChange={updateName}
           />
-          <Field
-            label="Slug"
-            required
-            placeholder="indigo-handloom-shirt"
-            value={form.slug}
-            onChange={update("slug")}
-          />
+          <div>
+            <Field
+              label="Slug (web address)"
+              required
+              placeholder="indigo-handloom-shirt"
+              value={form.slug}
+              onChange={updateSlug}
+            />
+            <p className="mt-1 text-xs text-ink/50">
+              /product/{form.slug || "…"} — filled in from the name; edit if you
+              want something different.
+            </p>
+          </div>
         </div>
 
         <Field
@@ -266,7 +300,9 @@ export default function AddProductModal({
               {uploading ? "Uploading…" : form.image_url ? "Change photo" : "Upload photo"}
               <input
                 type="file"
-                accept="image/*"
+                // Explicit list rather than image/* — on iOS this makes the
+                // picker hand over a JPEG instead of the original HEIC.
+                accept="image/jpeg,image/png,image/webp,image/avif,image/gif"
                 onChange={handleFile}
                 disabled={uploading}
                 className="hidden"
