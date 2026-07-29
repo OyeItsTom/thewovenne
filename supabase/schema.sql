@@ -80,31 +80,111 @@ create table if not exists journal_posts (
   created_at timestamptz default now()
 );
 
--- Admin users are handled entirely by Supabase Auth (no custom table needed).
+-- ── Admin identity ──────────────────────────
+-- Every auth user gets a profile row; only is_admin = true may manage the
+-- catalogue. Before this existed, ANY authenticated Supabase user was treated
+-- as an admin. That becomes acute the moment customer sign-up ships, because
+-- customers authenticate against this same project and would inherit full
+-- write access to products, categories, content and orders.
+create table if not exists profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text,
+  full_name text,
+  is_admin boolean not null default false,
+  created_at timestamptz default now()
+);
+
+-- SECURITY DEFINER so table policies can call this without recursing through
+-- the RLS on profiles itself (a policy on profiles that queried profiles would
+-- deadlock into infinite recursion).
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select coalesce(
+    (select p.is_admin from public.profiles p where p.id = auth.uid()),
+    false
+  );
+$$;
+
+revoke execute on function public.is_admin() from public;
+grant execute on function public.is_admin() to authenticated;
+
+-- Give every new signup a profile row (defaulting to is_admin = false).
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (id, email)
+  values (new.id, new.email)
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- Backfill anyone who signed up before this table existed. Nobody is promoted
+-- automatically — see the note at the bottom of this file for how to grant
+-- yourself admin, which you MUST do or you will lock yourself out of /admin.
+insert into profiles (id, email)
+select u.id, u.email from auth.users u
+on conflict (id) do nothing;
 
 -- ── Row Level Security ───────────────────────
+alter table profiles enable row level security;
 alter table categories enable row level security;
 alter table products enable row level security;
 alter table orders enable row level security;
 alter table site_content enable row level security;
 alter table journal_posts enable row level security;
 
+-- Profiles: you can see and edit your own; admins can see and edit anyone's.
+drop policy if exists "Users read own profile" on profiles;
+create policy "Users read own profile"
+  on profiles for select to authenticated using (id = auth.uid());
+drop policy if exists "Admins read all profiles" on profiles;
+create policy "Admins read all profiles"
+  on profiles for select to authenticated using (public.is_admin());
+drop policy if exists "Users update own profile" on profiles;
+create policy "Users update own profile"
+  on profiles for update to authenticated
+  using (id = auth.uid()) with check (id = auth.uid());
+drop policy if exists "Admins update any profile" on profiles;
+create policy "Admins update any profile"
+  on profiles for update to authenticated
+  using (public.is_admin()) with check (public.is_admin());
+
 -- Categories: public can read visible ones; admins read all + manage.
 drop policy if exists "Public can view visible categories" on categories;
 create policy "Public can view visible categories"
   on categories for select using (is_visible = true);
 drop policy if exists "Authenticated can view all categories" on categories;
-create policy "Authenticated can view all categories"
-  on categories for select to authenticated using (true);
+drop policy if exists "Admins can view all categories" on categories;
+create policy "Admins can view all categories"
+  on categories for select to authenticated using (public.is_admin());
 drop policy if exists "Authenticated can insert categories" on categories;
-create policy "Authenticated can insert categories"
-  on categories for insert to authenticated with check (true);
+drop policy if exists "Admins can insert categories" on categories;
+create policy "Admins can insert categories"
+  on categories for insert to authenticated with check (public.is_admin());
 drop policy if exists "Authenticated can update categories" on categories;
-create policy "Authenticated can update categories"
-  on categories for update to authenticated using (true);
+drop policy if exists "Admins can update categories" on categories;
+create policy "Admins can update categories"
+  on categories for update to authenticated
+  using (public.is_admin()) with check (public.is_admin());
 drop policy if exists "Authenticated can delete categories" on categories;
-create policy "Authenticated can delete categories"
-  on categories for delete to authenticated using (true);
+drop policy if exists "Admins can delete categories" on categories;
+create policy "Admins can delete categories"
+  on categories for delete to authenticated using (public.is_admin());
 
 -- Every policy is drop-then-create so this whole file re-runs cleanly on a
 -- database that already has the original policies (no "already exists" errors).
@@ -114,53 +194,68 @@ drop policy if exists "Public can view active products" on products;
 create policy "Public can view active products"
   on products for select using (is_active = true);
 drop policy if exists "Authenticated can view all products" on products;
-create policy "Authenticated can view all products"
-  on products for select to authenticated using (true);
+drop policy if exists "Admins can view all products" on products;
+create policy "Admins can view all products"
+  on products for select to authenticated using (public.is_admin());
 drop policy if exists "Authenticated can insert products" on products;
-create policy "Authenticated can insert products"
-  on products for insert to authenticated with check (true);
+drop policy if exists "Admins can insert products" on products;
+create policy "Admins can insert products"
+  on products for insert to authenticated with check (public.is_admin());
 drop policy if exists "Authenticated can update products" on products;
-create policy "Authenticated can update products"
-  on products for update to authenticated using (true);
+drop policy if exists "Admins can update products" on products;
+create policy "Admins can update products"
+  on products for update to authenticated
+  using (public.is_admin()) with check (public.is_admin());
 drop policy if exists "Authenticated can delete products" on products;
-create policy "Authenticated can delete products"
-  on products for delete to authenticated using (true);
+drop policy if exists "Admins can delete products" on products;
+create policy "Admins can delete products"
+  on products for delete to authenticated using (public.is_admin());
 
 -- Orders: written server-side via the service role (bypasses RLS); admins read.
 drop policy if exists "Authenticated can view orders" on orders;
-create policy "Authenticated can view orders"
-  on orders for select to authenticated using (true);
+drop policy if exists "Admins can view orders" on orders;
+create policy "Admins can view orders"
+  on orders for select to authenticated using (public.is_admin());
 
 -- Site content: public can read; admins can manage.
 drop policy if exists "Public can view site content" on site_content;
 create policy "Public can view site content"
   on site_content for select using (true);
 drop policy if exists "Authenticated can insert site content" on site_content;
-create policy "Authenticated can insert site content"
-  on site_content for insert to authenticated with check (true);
+drop policy if exists "Admins can insert site content" on site_content;
+create policy "Admins can insert site content"
+  on site_content for insert to authenticated with check (public.is_admin());
 drop policy if exists "Authenticated can update site content" on site_content;
-create policy "Authenticated can update site content"
-  on site_content for update to authenticated using (true);
+drop policy if exists "Admins can update site content" on site_content;
+create policy "Admins can update site content"
+  on site_content for update to authenticated
+  using (public.is_admin()) with check (public.is_admin());
 drop policy if exists "Authenticated can delete site content" on site_content;
-create policy "Authenticated can delete site content"
-  on site_content for delete to authenticated using (true);
+drop policy if exists "Admins can delete site content" on site_content;
+create policy "Admins can delete site content"
+  on site_content for delete to authenticated using (public.is_admin());
 
 -- Journal: public can read published; admins can read all + manage.
 drop policy if exists "Public can view published journal" on journal_posts;
 create policy "Public can view published journal"
   on journal_posts for select using (published = true);
 drop policy if exists "Authenticated can view all journal" on journal_posts;
-create policy "Authenticated can view all journal"
-  on journal_posts for select to authenticated using (true);
+drop policy if exists "Admins can view all journal" on journal_posts;
+create policy "Admins can view all journal"
+  on journal_posts for select to authenticated using (public.is_admin());
 drop policy if exists "Authenticated can insert journal" on journal_posts;
-create policy "Authenticated can insert journal"
-  on journal_posts for insert to authenticated with check (true);
+drop policy if exists "Admins can insert journal" on journal_posts;
+create policy "Admins can insert journal"
+  on journal_posts for insert to authenticated with check (public.is_admin());
 drop policy if exists "Authenticated can update journal" on journal_posts;
-create policy "Authenticated can update journal"
-  on journal_posts for update to authenticated using (true);
+drop policy if exists "Admins can update journal" on journal_posts;
+create policy "Admins can update journal"
+  on journal_posts for update to authenticated
+  using (public.is_admin()) with check (public.is_admin());
 drop policy if exists "Authenticated can delete journal" on journal_posts;
-create policy "Authenticated can delete journal"
-  on journal_posts for delete to authenticated using (true);
+drop policy if exists "Admins can delete journal" on journal_posts;
+create policy "Admins can delete journal"
+  on journal_posts for delete to authenticated using (public.is_admin());
 
 -- ── Table privileges for the API roles ──────
 -- RLS decides WHICH rows each role may see; the roles still need base table
@@ -171,6 +266,15 @@ grant usage on schema public to anon, authenticated;
 grant select on categories, products, site_content, journal_posts to anon, authenticated;
 grant insert, update, delete on categories, products, site_content, journal_posts to authenticated;
 grant select on orders to authenticated;
+
+-- Profiles: readable/updatable per the policies above, BUT is_admin is granted
+-- at column level only. RLS cannot restrict individual columns, so without this
+-- a signed-in customer could run `update profiles set is_admin = true` against
+-- their own row — the "Users update own profile" policy would happily allow it.
+-- Promotion therefore requires the SQL editor or the service role key.
+grant select on profiles to authenticated;
+revoke update on profiles from authenticated;
+grant update (email, full_name) on profiles to authenticated;
 
 -- ── Seed: categories (Men / Women → sub-categories) ─
 -- Only Women → Sarees is visible at launch; the rest are hidden until their
@@ -257,17 +361,28 @@ drop policy if exists "Public read product images" on storage.objects;
 create policy "Public read product images"
   on storage.objects for select using (bucket_id = 'product-images');
 
+-- Writes are admin-only: without the is_admin() check any signed-in customer
+-- could upload into, overwrite, or wipe the product image bucket.
 drop policy if exists "Admin upload product images" on storage.objects;
 create policy "Admin upload product images"
   on storage.objects for insert to authenticated
-  with check (bucket_id = 'product-images');
+  with check (bucket_id = 'product-images' and public.is_admin());
 
 drop policy if exists "Admin update product images" on storage.objects;
 create policy "Admin update product images"
   on storage.objects for update to authenticated
-  using (bucket_id = 'product-images');
+  using (bucket_id = 'product-images' and public.is_admin());
 
 drop policy if exists "Admin delete product images" on storage.objects;
 create policy "Admin delete product images"
   on storage.objects for delete to authenticated
-  using (bucket_id = 'product-images');
+  using (bucket_id = 'product-images' and public.is_admin());
+
+-- ── MANDATORY LAST STEP ─────────────────────
+-- Nothing above promotes anyone. Until you run this, /admin will let you sign
+-- in and then show an empty dashboard, because every admin policy returns false.
+-- Replace the address with the email of your Supabase Auth admin user:
+--
+--   update profiles set is_admin = true where email = 'you@example.com';
+--
+-- Verify with:  select email, is_admin from profiles;
