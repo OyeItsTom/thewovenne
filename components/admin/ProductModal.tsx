@@ -5,6 +5,7 @@ import {
   FormEvent,
   InputHTMLAttributes,
   TextareaHTMLAttributes,
+  useCallback,
   useEffect,
   useState,
 } from "react";
@@ -17,7 +18,7 @@ import { uploadImage } from "@/lib/storage";
 import { slugify, uniqueSlug } from "@/lib/utils";
 import type { Category, Product } from "@/lib/types";
 
-const initialForm = {
+const emptyForm = {
   name: "",
   slug: "",
   description: "",
@@ -28,22 +29,41 @@ const initialForm = {
   image_url: "",
 };
 
-type FormState = typeof initialForm;
+type FormState = typeof emptyForm;
 
-export default function AddProductModal({
+const formFromProduct = (p: Product): FormState => ({
+  name: p.name,
+  slug: p.slug,
+  description: p.description ?? "",
+  price_inr: String(p.price_inr),
+  fabric: p.fabric ?? "",
+  colour: p.colour ?? "",
+  stock_quantity: String(p.stock_quantity),
+  image_url: p.image_url ?? "",
+});
+
+/**
+ * Create or edit a product. One component for both, so the two can't drift —
+ * an edit form validating differently from the add form is how you end up with
+ * data only one of them could have produced.
+ */
+export default function ProductModal({
   isOpen,
   onClose,
-  onCreated,
+  product,
+  onSaved,
 }: {
   isOpen: boolean;
   onClose: () => void;
-  onCreated: (product: Product) => void;
+  /** Present = edit that product; absent/null = create a new one. */
+  product?: Product | null;
+  onSaved: (product: Product, isNew: boolean) => void;
 }) {
-  const [form, setForm] = useState<FormState>(initialForm);
+  const isEdit = !!product;
+
+  const [form, setForm] = useState<FormState>(emptyForm);
   const [categories, setCategories] = useState<Category[]>([]);
   const [takenSlugs, setTakenSlugs] = useState<string[]>([]);
-  // Once the slug is edited by hand it stops tracking the name, so a deliberate
-  // choice is never overwritten by later typing in the name field.
   const [slugTouched, setSlugTouched] = useState(false);
   const [parentId, setParentId] = useState("");
   const [subCategoryId, setSubCategoryId] = useState("");
@@ -51,13 +71,41 @@ export default function AddProductModal({
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
+  const loadCategories = useCallback(async () => {
+    const cats = await getAllCategories();
+    setCategories(cats);
+    return cats;
+  }, []);
+
+  // Re-seed whenever the modal opens, or opens on a different product.
   useEffect(() => {
-    getAllCategories().then(setCategories);
+    if (!isOpen) return;
+
+    setError(null);
+    // In edit mode the slug is already published, so it must never be silently
+    // rewritten by editing the name.
+    setSlugTouched(isEdit);
+    setForm(product ? formFromProduct(product) : emptyForm);
+
+    loadCategories().then((cats) => {
+      const current = product?.category_id
+        ? cats.find((c) => c.id === product.category_id)
+        : undefined;
+      setSubCategoryId(current?.id ?? "");
+      setParentId(current?.parent_id ?? "");
+    });
+
     supabase
       .from("products")
-      .select("slug")
-      .then(({ data }) => setTakenSlugs((data ?? []).map((p) => p.slug)));
-  }, []);
+      .select("id, slug")
+      .then(({ data }) =>
+        setTakenSlugs(
+          (data ?? [])
+            .filter((p) => p.id !== product?.id) // own slug isn't a collision
+            .map((p) => p.slug)
+        )
+      );
+  }, [isOpen, product, isEdit, loadCategories]);
 
   const parents = categories.filter((c) => c.parent_id === null);
   const subCategories = categories.filter((c) => c.parent_id === parentId);
@@ -115,65 +163,78 @@ export default function AddProductModal({
       setError("Name, slug and price are required.");
       return;
     }
-
     // Storefront queries are scoped to visible categories, so an uncategorised
-    // product would silently never appear. Refuse to create one.
+    // product would silently never appear. Refuse to save one.
     if (!subCategoryId) {
-      setError("Pick a category and sub-category — products need one to appear on the site.");
+      setError(
+        "Pick a category and sub-category — products need one to appear on the site."
+      );
       return;
     }
+
+    const payload = {
+      name: form.name,
+      slug: form.slug,
+      description: form.description || null,
+      price_inr: Number(form.price_inr),
+      category_id: subCategoryId,
+      fabric: form.fabric || null,
+      colour: form.colour || null,
+      stock_quantity: Number(form.stock_quantity) || 0,
+      image_url: form.image_url || null,
+    };
 
     setSaving(true);
-
-    const { data, error: insertError } = await supabase
-      .from("products")
-      .insert({
-        name: form.name,
-        slug: form.slug,
-        description: form.description || null,
-        price_inr: Number(form.price_inr),
-        category_id: subCategoryId,
-        fabric: form.fabric || null,
-        colour: form.colour || null,
-        stock_quantity: Number(form.stock_quantity) || 0,
-        image_url: form.image_url || null,
-        is_active: true,
-      })
-      .select()
-      .single();
-
+    const { data, error: saveError } = isEdit
+      ? await supabase
+          .from("products")
+          .update(payload)
+          .eq("id", product!.id)
+          .select("*, categories(name, slug)")
+          .single()
+      : await supabase
+          .from("products")
+          .insert({ ...payload, is_active: true })
+          .select("*, categories(name, slug)")
+          .single();
     setSaving(false);
 
-    if (insertError) {
-      setError(insertError.message);
+    if (saveError) {
+      setError(
+        saveError.code === "23505"
+          ? "That web address is already used by another product — change the slug."
+          : saveError.message
+      );
       return;
     }
 
-    onCreated(data as Product);
-    setForm(initialForm);
-    setParentId("");
-    setSubCategoryId("");
+    // Flatten the joined category the way lib/products does, so the table shows
+    // the category name immediately after saving.
+    const { categories: joined, ...rest } = data as Record<string, unknown> & {
+      categories: { name: string; slug: string } | null;
+    };
+    onSaved(
+      {
+        ...(rest as unknown as Product),
+        category: joined?.name ?? null,
+        category_slug: joined?.slug ?? null,
+      },
+      !isEdit
+    );
     onClose();
   };
 
-  const handleClose = () => {
-    setForm(initialForm);
-    setParentId("");
-    setSubCategoryId("");
-    setError(null);
-    onClose();
-  };
+  const slugChanged = isEdit && product!.slug !== form.slug;
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Add New Product">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={isEdit ? `Edit ${product!.name}` : "Add New Product"}
+    >
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label="Name"
-            required
-            value={form.name}
-            onChange={updateName}
-          />
+          <Field label="Name" required value={form.name} onChange={updateName} />
           <div>
             <Field
               label="Slug (web address)"
@@ -183,9 +244,16 @@ export default function AddProductModal({
               onChange={updateSlug}
             />
             <p className="mt-1 text-xs text-ink/50">
-              /product/{form.slug || "…"} — filled in from the name; edit if you
-              want something different.
+              /product/{form.slug || "…"}
+              {!isEdit &&
+                " — filled in from the name; edit if you want something different."}
             </p>
+            {slugChanged && (
+              <p className="mt-1 text-xs text-terracotta-dark">
+                Changing this breaks /product/{product!.slug} for anyone who
+                saved or shared it.
+              </p>
+            )}
           </div>
         </div>
 
@@ -297,7 +365,11 @@ export default function AddProductModal({
               )}
             </div>
             <label className="cursor-pointer rounded-full border border-ink/15 px-4 py-2 text-sm text-ink transition-colors hover:border-terracotta">
-              {uploading ? "Uploading…" : form.image_url ? "Change photo" : "Upload photo"}
+              {uploading
+                ? "Uploading…"
+                : form.image_url
+                  ? "Change photo"
+                  : "Upload photo"}
               <input
                 type="file"
                 // Explicit list rather than image/* — on iOS this makes the
@@ -310,7 +382,8 @@ export default function AddProductModal({
             </label>
           </div>
           <p className="mt-1 text-xs text-ink/50">
-            Uploads straight to storage — no links to paste.
+            Uploads straight to storage — no links to paste. Replacing a photo
+            leaves the old file in storage; it just stops being used.
           </p>
         </div>
 
@@ -322,7 +395,7 @@ export default function AddProductModal({
           size="lg"
           className="w-full"
         >
-          {saving ? "Saving…" : "Add Product"}
+          {saving ? "Saving…" : isEdit ? "Save Changes" : "Add Product"}
         </Button>
       </form>
     </Modal>

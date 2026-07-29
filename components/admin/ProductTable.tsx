@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Image from "next/image";
+import { Pencil, Trash2 } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { cn, formatINR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
@@ -9,19 +11,55 @@ import StockEditor from "./StockEditor";
 export default function ProductTable({
   products,
   onUpdate,
+  onEdit,
+  onDelete,
 }: {
   products: Product[];
   onUpdate: (product: Product) => void;
+  onEdit: (product: Product) => void;
+  onDelete: (id: string) => void;
 }) {
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
   const updateProduct = async (product: Product, patch: Partial<Product>) => {
-    const { data, error } = await supabase
+    const { data, error: updateError } = await supabase
       .from("products")
       .update(patch)
       .eq("id", product.id)
-      .select()
+      .select("*, categories(name, slug)")
       .single();
 
-    if (!error && data) onUpdate(data as Product);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    const { categories: joined, ...rest } = data as Record<string, unknown> & {
+      categories: { name: string; slug: string } | null;
+    };
+    onUpdate({
+      ...(rest as unknown as Product),
+      category: joined?.name ?? null,
+      category_slug: joined?.slug ?? null,
+    });
+  };
+
+  const remove = async (product: Product) => {
+    setBusyId(product.id);
+    setError(null);
+    const { error: deleteError } = await supabase
+      .from("products")
+      .delete()
+      .eq("id", product.id);
+    setBusyId(null);
+    setConfirmId(null);
+
+    if (deleteError) {
+      setError(deleteError.message);
+      return;
+    }
+    onDelete(product.id);
   };
 
   if (products.length === 0) {
@@ -33,80 +71,134 @@ export default function ProductTable({
   }
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-ink/10">
-      <table className="w-full min-w-[640px] text-left text-sm">
-        <thead className="bg-linen/60 text-xs uppercase tracking-wider text-ink/60">
-          <tr>
-            <th className="px-4 py-3">Product</th>
-            <th className="px-4 py-3">Category</th>
-            <th className="px-4 py-3">Price</th>
-            <th className="px-4 py-3">Stock</th>
-            <th className="px-4 py-3">Status</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-ink/10">
-          {products.map((product) => (
-            <tr key={product.id}>
-              <td className="px-4 py-3">
-                <div className="flex items-center gap-3">
-                  <div className="relative h-12 w-10 shrink-0 overflow-hidden rounded bg-linen">
-                    {product.image_url && (
-                      <Image
-                        src={product.image_url}
-                        alt={product.name}
-                        fill
-                        sizes="40px"
-                        className="object-cover"
-                      />
-                    )}
-                  </div>
-                  <span className="font-medium text-ink">{product.name}</span>
-                </div>
-              </td>
-              <td className="px-4 py-3 text-ink/70">
-                {product.category ?? "—"}
-              </td>
-              <td className="px-4 py-3 text-ink/70">
-                {formatINR(product.price_inr)}
-              </td>
-              <td className="px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <StockEditor
-                    value={product.stock_quantity}
-                    onSave={(value) =>
-                      updateProduct(product, { stock_quantity: value })
-                    }
-                  />
-                  {product.stock_quantity === 0 ? (
-                    <span className="rounded-full bg-ink/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ink/60">
-                      Out
-                    </span>
-                  ) : product.stock_quantity <= 5 ? (
-                    <span className="rounded-full bg-terracotta/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-terracotta-dark">
-                      Low
-                    </span>
-                  ) : null}
-                </div>
-              </td>
-              <td className="px-4 py-3">
-                <button
-                  onClick={() =>
-                    updateProduct(product, { is_active: !product.is_active })
-                  }
-                  className={cn(
-                    "rounded-full px-3 py-1 text-xs font-medium uppercase tracking-wider transition-colors",
-                    product.is_active
-                      ? "bg-gold/15 text-ink hover:bg-gold/25"
-                      : "bg-ink text-cream hover:bg-ink-light"
-                  )}
-                >
-                  {product.is_active ? "Active" : "Out of Stock"}
-                </button>
-              </td>
+    <div className="space-y-3">
+      {error && (
+        <p className="rounded-lg bg-terracotta/10 px-4 py-3 text-sm text-terracotta-dark">
+          {error}
+        </p>
+      )}
+
+      <div className="overflow-x-auto rounded-2xl border border-ink/10">
+        <table className="w-full min-w-[760px] text-left text-sm">
+          <thead className="bg-linen/60 text-xs uppercase tracking-wider text-ink/60">
+            <tr>
+              <th className="px-4 py-3">Product</th>
+              <th className="px-4 py-3">Category</th>
+              <th className="px-4 py-3">Price</th>
+              <th className="px-4 py-3">Stock</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3 text-right">Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-ink/10">
+            {products.map((product) => (
+              <tr key={product.id}>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="relative h-12 w-10 shrink-0 overflow-hidden rounded bg-linen">
+                      {product.image_url && (
+                        <Image
+                          src={product.image_url}
+                          alt={product.name}
+                          fill
+                          sizes="40px"
+                          className="object-cover"
+                        />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <span className="font-medium text-ink">{product.name}</span>
+                      <p className="text-xs text-ink/40">/{product.slug}</p>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-ink/70">{product.category ?? "—"}</td>
+                <td className="px-4 py-3 text-ink/70">
+                  {formatINR(product.price_inr)}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <StockEditor
+                      value={product.stock_quantity}
+                      onSave={(value) =>
+                        updateProduct(product, { stock_quantity: value })
+                      }
+                    />
+                    {product.stock_quantity === 0 ? (
+                      <span className="rounded-full bg-ink/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ink/60">
+                        Out
+                      </span>
+                    ) : product.stock_quantity <= 5 ? (
+                      <span className="rounded-full bg-terracotta/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-terracotta-dark">
+                        Low
+                      </span>
+                    ) : null}
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  <button
+                    onClick={() =>
+                      updateProduct(product, { is_active: !product.is_active })
+                    }
+                    className={cn(
+                      "rounded-full px-3 py-1 text-xs font-medium uppercase tracking-wider transition-colors",
+                      product.is_active
+                        ? "bg-gold/15 text-ink hover:bg-gold/25"
+                        : "bg-ink text-cream hover:bg-ink-light"
+                    )}
+                  >
+                    {product.is_active ? "Active" : "Hidden"}
+                  </button>
+                </td>
+                <td className="px-4 py-3">
+                  {confirmId === product.id ? (
+                    <div className="flex items-center justify-end gap-2 text-xs">
+                      <span className="text-terracotta-dark">
+                        Delete permanently?
+                      </span>
+                      <button
+                        onClick={() => remove(product)}
+                        disabled={busyId === product.id}
+                        className="rounded-full bg-terracotta px-3 py-1 font-medium text-cream disabled:opacity-50"
+                      >
+                        {busyId === product.id ? "Deleting…" : "Delete"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmId(null)}
+                        className="text-ink/50 hover:text-ink"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => onEdit(product)}
+                        aria-label={`Edit ${product.name}`}
+                        className="rounded p-1.5 text-ink/40 transition-colors hover:text-terracotta"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => setConfirmId(product.id)}
+                        aria-label={`Delete ${product.name}`}
+                        className="rounded p-1.5 text-ink/30 transition-colors hover:text-terracotta"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="text-xs text-ink/50">
+        Deleting a product is permanent. To take one off the site while keeping
+        its record, set it to Hidden instead.
+      </p>
     </div>
   );
 }

@@ -12,10 +12,11 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { isCurrentUserAdmin } from "@/lib/auth";
+import { getAdminProducts } from "@/lib/products";
 import type { Product } from "@/lib/types";
 import Button from "@/components/ui/Button";
 import ProductTable from "@/components/admin/ProductTable";
-import AddProductModal from "@/components/admin/AddProductModal";
+import ProductModal from "@/components/admin/ProductModal";
 import CategoryManager from "@/components/admin/CategoryManager";
 import ContentEditor from "@/components/admin/ContentEditor";
 import JournalManager from "@/components/admin/JournalManager";
@@ -29,6 +30,8 @@ export default function AdminDashboardPage() {
   const [products, setProducts] = useState<Product[] | null>(null);
   const [ordersThisWeek, setOrdersThisWeek] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
+  // null while adding; a product while editing that product.
+  const [editing, setEditing] = useState<Product | null>(null);
   const [tab, setTab] = useState<Tab>("products");
 
   useEffect(() => {
@@ -72,14 +75,7 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     if (checkingAuth) return;
-    supabase
-      .from("products")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .then(({ data, error }) => {
-        if (error) console.error("Admin products fetch:", error.message);
-        setProducts(data ?? []);
-      });
+    getAdminProducts().then(setProducts);
 
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     supabase
@@ -98,8 +94,25 @@ export default function AdminDashboardPage() {
     setProducts((prev) =>
       prev ? prev.map((p) => (p.id === updated.id ? updated : p)) : prev
     );
-  const handleCreate = (created: Product) =>
-    setProducts((prev) => (prev ? [created, ...prev] : [created]));
+
+  const handleSaved = (saved: Product, isNew: boolean) =>
+    setProducts((prev) => {
+      if (!prev) return [saved];
+      return isNew ? [saved, ...prev] : prev.map((p) => (p.id === saved.id ? saved : p));
+    });
+
+  const handleDelete = (id: string) =>
+    setProducts((prev) => (prev ? prev.filter((p) => p.id !== id) : prev));
+
+  const openAdd = () => {
+    setEditing(null);
+    setModalOpen(true);
+  };
+
+  const openEdit = (product: Product) => {
+    setEditing(product);
+    setModalOpen(true);
+  };
 
   if (checkingAuth) {
     return (
@@ -121,7 +134,7 @@ export default function AdminDashboardPage() {
         <h1 className="font-heading text-4xl text-ink sm:text-5xl">Dashboard</h1>
         <div className="flex flex-wrap gap-3">
           {tab === "products" && (
-            <Button onClick={() => setModalOpen(true)} size="md">
+            <Button onClick={openAdd} size="md">
               <PlusCircle className="h-4 w-4" /> Add New Product
             </Button>
           )}
@@ -165,7 +178,12 @@ export default function AdminDashboardPage() {
           (products === null ? (
             <p className="text-ink/60">Loading products…</p>
           ) : (
-            <ProductTable products={products} onUpdate={handleUpdate} />
+            <ProductTable
+              products={products}
+              onUpdate={handleUpdate}
+              onEdit={openEdit}
+              onDelete={handleDelete}
+            />
           ))}
         {tab === "categories" && <CategoryManager />}
         {tab === "content" && <ContentEditor />}
@@ -183,10 +201,11 @@ export default function AdminDashboardPage() {
         </span>
       </div>
 
-      <AddProductModal
+      <ProductModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        onCreated={handleCreate}
+        product={editing}
+        onSaved={handleSaved}
       />
     </div>
   );
