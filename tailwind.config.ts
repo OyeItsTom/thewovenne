@@ -19,7 +19,9 @@ const config: Config = {
           dark: "#A85D3F",
         },
         gold: "#C9A84C",
-        cream: "#FAF7F2",
+        // Page background. Pure white — the emblem and product photography sit
+        // directly on it, so any warmth here reads as a tint behind them.
+        cream: "#FFFFFF",
       },
       fontFamily: {
         heading: ["var(--font-heading)", "serif"],

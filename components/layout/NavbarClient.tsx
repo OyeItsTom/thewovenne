@@ -31,7 +31,15 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
           aria-label="THE WOVENNE — home"
           className="flex items-center gap-2 font-heading text-2xl tracking-wide text-ink sm:text-3xl"
         >
-          <Image src="/logo.svg" alt="" width={32} height={32} className="h-8 w-8" />
+          <Image
+            src="/logo_emblem_transparent.png"
+            alt=""
+            width={3096}
+            height={2792}
+            priority
+            sizes="40px"
+            className="h-8 w-auto"
+          />
           THE WOVENNE
         </Link>
 
