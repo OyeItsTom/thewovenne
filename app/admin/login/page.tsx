@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Lock } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -37,8 +38,21 @@ export default function AdminLoginPage() {
     <div className="container-wovenne section-padding flex min-h-[60vh] items-center justify-center">
       <div className="w-full max-w-sm rounded-2xl bg-linen/60 p-8 sm:p-10">
         <div className="flex flex-col items-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-ink text-cream">
-            <Lock className="h-5 w-5" strokeWidth={1.5} />
+          {/* Emblem + "Admin" label — deliberately plainer than the storefront,
+              so it reads as a functional back-office screen. */}
+          <div className="flex items-center gap-3">
+            <Image
+              src="/logo_emblem_transparent.png"
+              alt=""
+              width={3096}
+              height={2792}
+              priority
+              sizes="48px"
+              className="h-10 w-auto"
+            />
+            <span className="flex items-center gap-1.5 rounded-full bg-ink px-3 py-1 text-xs uppercase tracking-widest text-cream">
+              <Lock className="h-3 w-3" strokeWidth={2} /> Admin
+            </span>
           </div>
           <h1 className="mt-4 font-heading text-3xl text-ink">Admin Login</h1>
           <p className="mt-1 text-sm text-ink/60">

@@ -29,9 +29,19 @@ const script = Tiro_Devanagari_Hindi({
 });
 
 export const metadata: Metadata = {
+  // Resolves relative OG/icon URLs to absolute ones for social crawlers.
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL || "https://www.thewovenne.com"
+  ),
   title: "THE WOVENNE | Woven in India. Worn for life.",
   description:
     "Authentic handloom Indian linen, direct from the source. Premium, sustainable, body-friendly garments for the UK.",
+  openGraph: {
+    type: "website",
+    siteName: "THE WOVENNE",
+    // Square mark in a 1.91:1 slot — placeholder until a proper OG card exists.
+    images: ["/logo_illustrated.png"],
+  },
 };
 
 export default function RootLayout({

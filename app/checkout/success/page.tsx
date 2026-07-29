@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import { MessageCircle } from "lucide-react";
@@ -26,7 +27,23 @@ export default function CheckoutSuccessPage() {
         variants={container}
         className="flex flex-col items-center"
       >
+        {/* Full lockup — clean reproduction for a confirmation record. Sized by
+            width, not height: the asset is a square containing the wordmark and
+            contact line, so a small height renders them illegible. Its white
+            background is opaque, which is invisible on the white page. */}
         <motion.div variants={item}>
+          <Image
+            src="/logo_solid_black.png"
+            alt="THE WOVENNE"
+            width={2275}
+            height={2275}
+            priority
+            sizes="(max-width: 640px) 70vw, 240px"
+            className="h-auto w-[min(70vw,240px)]"
+          />
+        </motion.div>
+
+        <motion.div variants={item} className="mt-4">
           <WovenCheck />
         </motion.div>
 

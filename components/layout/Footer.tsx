@@ -16,7 +16,16 @@ export default function Footer() {
       <div className="container-wovenne section-padding relative grid gap-12 md:grid-cols-4">
         <div className="md:col-span-2">
           <Link href="/" className="flex items-center gap-2 font-heading text-3xl">
-            <Image src="/logo.svg" alt="" width={36} height={36} className="h-9 w-9" />
+            {/* The emblem is dark maroon on transparent, so it would vanish on
+                the ink footer — invert it to white to sit with the cream text. */}
+            <Image
+              src="/logo_emblem_transparent.png"
+              alt=""
+              width={3096}
+              height={2792}
+              sizes="44px"
+              className="h-9 w-auto brightness-0 invert"
+            />
             THE WOVENNE
           </Link>
           <p className="mt-4 max-w-sm text-sm leading-relaxed text-cream/70">
