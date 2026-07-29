@@ -49,6 +49,29 @@ export async function getAllProducts(): Promise<Product[]> {
   return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
 }
 
+/**
+ * Active products across a set of categories — used by the /men and /women
+ * landing pages, which pass in their visible sub-category ids.
+ */
+export async function getProductsByCategoryIds(
+  categoryIds: string[]
+): Promise<Product[]> {
+  if (categoryIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("products")
+    .select(PRODUCT_SELECT)
+    .eq("is_active", true)
+    .in("category_id", categoryIds)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("getProductsByCategoryIds:", error.message);
+    return [];
+  }
+  return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
+}
+
 export async function getProductBySlug(slug: string): Promise<Product | null> {
   const { data, error } = await supabase
     .from("products")

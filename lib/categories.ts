@@ -38,3 +38,39 @@ export async function getVisibleCategoryTree(): Promise<CategoryNode[]> {
     }))
     .filter((parent) => parent.children.length > 0);
 }
+
+/**
+ * The nav-ready tree: the visible tree, narrowed to parents that have at least
+ * one visible sub-category actually holding an active product. Keeps "Men" and
+ * "Women" out of the nav until there is something to sell under them, and stays
+ * in sync with whatever admin has configured.
+ *
+ * Stock level is deliberately ignored — an in-stock check would pull a whole
+ * section out of the nav the moment its last item sold out.
+ */
+export async function getNavCategoryTree(): Promise<CategoryNode[]> {
+  const tree = await getVisibleCategoryTree();
+  if (tree.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("products")
+    .select("category_id")
+    .eq("is_active", true);
+
+  // Fail closed: if we can't confirm a section has products, don't advertise it.
+  if (error) {
+    console.error("getNavCategoryTree:", error.message);
+    return [];
+  }
+
+  const stocked = new Set(
+    (data ?? []).map((row) => row.category_id).filter(Boolean) as string[]
+  );
+
+  return tree
+    .map((parent) => ({
+      ...parent,
+      children: parent.children.filter((child) => stocked.has(child.id)),
+    }))
+    .filter((parent) => parent.children.length > 0);
+}
