@@ -162,6 +162,16 @@ drop policy if exists "Authenticated can delete journal" on journal_posts;
 create policy "Authenticated can delete journal"
   on journal_posts for delete to authenticated using (true);
 
+-- ── Table privileges for the API roles ──────
+-- RLS decides WHICH rows each role may see; the roles still need base table
+-- privileges or PostgREST returns "permission denied" (42501) before RLS even
+-- runs. Supabase usually grants these via default privileges — add them
+-- explicitly so this schema is self-contained and reproducible. Safe to re-run.
+grant usage on schema public to anon, authenticated;
+grant select on categories, products, site_content, journal_posts to anon, authenticated;
+grant insert, update, delete on categories, products, site_content, journal_posts to authenticated;
+grant select on orders to authenticated;
+
 -- ── Seed: categories (Men / Women → sub-categories) ─
 -- Only Women → Sarees is visible at launch; the rest are hidden until their
 -- product lines are ready. Toggle visibility later from the admin Category tab.
