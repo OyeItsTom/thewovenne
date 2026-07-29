@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Lock } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { isCurrentUserAdmin } from "@/lib/auth";
 import Button from "@/components/ui/Button";
 
 export default function AdminLoginPage() {
@@ -24,13 +25,24 @@ export default function AdminLoginPage() {
       password,
     });
 
-    setLoading(false);
-
     if (signInError) {
+      setLoading(false);
       setError(signInError.message);
       return;
     }
 
+    // Authenticating is not the same as being an admin — customers sign in to
+    // the same Supabase project. Reject non-admins here instead of handing
+    // them a dashboard that RLS would render empty.
+    const admin = await isCurrentUserAdmin();
+    if (!admin) {
+      await supabase.auth.signOut();
+      setLoading(false);
+      setError("This account doesn't have admin access.");
+      return;
+    }
+
+    setLoading(false);
     router.push("/admin/dashboard");
   };
 

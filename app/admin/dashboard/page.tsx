@@ -11,6 +11,7 @@ import {
   ShoppingBag,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { isCurrentUserAdmin } from "@/lib/auth";
 import type { Product } from "@/lib/types";
 import Button from "@/components/ui/Button";
 import ProductTable from "@/components/admin/ProductTable";
@@ -31,14 +32,34 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     let active = true;
-    supabase.auth.getSession().then(({ data }) => {
+
+    // A session alone is not enough — customers authenticate against the same
+    // Supabase project. Admin access is decided by profiles.is_admin.
+    const verify = async () => {
+      const { data } = await supabase.auth.getSession();
       if (!active) return;
+
       if (!data.session) {
         router.replace("/admin/login");
         return;
       }
+
+      const admin = await isCurrentUserAdmin();
+      if (!active) return;
+
+      if (!admin) {
+        // Signed in but not an admin: end the session rather than leave them
+        // staring at a dashboard that RLS will render empty anyway.
+        await supabase.auth.signOut();
+        router.replace("/admin/login");
+        return;
+      }
+
       setCheckingAuth(false);
-    });
+    };
+
+    verify();
+
     const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
       if (!session) router.replace("/admin/login");
     });
