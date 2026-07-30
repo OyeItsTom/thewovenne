@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { getProductBySlug, getRelatedProducts } from "@/lib/products";
+import {
+  getProductBySlug,
+  getProductImages,
+  getRelatedProducts,
+} from "@/lib/products";
 import { formatINR } from "@/lib/utils";
 import ImageGallery from "@/components/product/ImageGallery";
 import ProductOptions from "@/components/product/ProductOptions";
@@ -41,13 +45,16 @@ export default async function ProductPage({
     notFound();
   }
 
-  const related = await getRelatedProducts(product.category_id, product.slug, 4);
+  const [related, gallery] = await Promise.all([
+    getRelatedProducts(product.category_id, product.slug, 4),
+    getProductImages(product.id),
+  ]);
 
-  const images = [
-    product.image_url,
-    `https://placehold.co/800x1000/1C1F3B/FAF7F2?text=${encodeURIComponent(product.name)}`,
-    `https://placehold.co/800x1000/C2714F/FAF7F2?text=Detail`,
-  ].filter((src): src is string => Boolean(src));
+  // Fall back to the cover image if the gallery is empty, so a product with one
+  // photo still renders while its extra shots are being added.
+  const images = (gallery.length ? gallery : [product.image_url]).filter(
+    (src): src is string => Boolean(src)
+  );
 
   return (
     <div className="container-wovenne section-padding pb-28 lg:pb-24">

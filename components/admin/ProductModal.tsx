@@ -10,10 +10,12 @@ import {
   useState,
 } from "react";
 import Image from "next/image";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
 import { supabase } from "@/lib/supabase";
 import { getAllCategories } from "@/lib/categories";
+import { getProductImages } from "@/lib/products";
 import { uploadImage } from "@/lib/storage";
 import { slugify, uniqueSlug } from "@/lib/utils";
 import type { Category, Product } from "@/lib/types";
@@ -26,10 +28,32 @@ const emptyForm = {
   fabric: "",
   colour: "",
   stock_quantity: "",
-  image_url: "",
 };
 
 type FormState = typeof emptyForm;
+
+/**
+ * Replace a product's gallery with `urls`, in order. Delete-then-insert rather
+ * than diffing: the row count is tiny and this can't leave stale ordering.
+ * Returns an error message, or null on success.
+ */
+async function replaceGallery(
+  productId: string,
+  urls: string[]
+): Promise<{ error: string | null }> {
+  const { error: clearError } = await supabase
+    .from("product_images")
+    .delete()
+    .eq("product_id", productId);
+  if (clearError) return { error: clearError.message };
+
+  if (urls.length === 0) return { error: null };
+
+  const { error: insertError } = await supabase.from("product_images").insert(
+    urls.map((url, i) => ({ product_id: productId, url, sort_order: i }))
+  );
+  return { error: insertError?.message ?? null };
+}
 
 const formFromProduct = (p: Product): FormState => ({
   name: p.name,
@@ -39,7 +63,6 @@ const formFromProduct = (p: Product): FormState => ({
   fabric: p.fabric ?? "",
   colour: p.colour ?? "",
   stock_quantity: String(p.stock_quantity),
-  image_url: p.image_url ?? "",
 });
 
 /**
@@ -70,6 +93,9 @@ export default function ProductModal({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // Gallery is edited locally and written on save, so cancelling leaves the
+  // existing gallery untouched.
+  const [images, setImages] = useState<string[]>([]);
 
   const loadCategories = useCallback(async () => {
     const cats = await getAllCategories();
@@ -105,6 +131,16 @@ export default function ProductModal({
             .map((p) => p.slug)
         )
       );
+
+    if (product) {
+      getProductImages(product.id).then((urls) =>
+        // Fall back to the cover column if the gallery hasn't been populated,
+        // so an existing product never opens looking photo-less.
+        setImages(urls.length ? urls : product.image_url ? [product.image_url] : [])
+      );
+    } else {
+      setImages([]);
+    }
   }, [isOpen, product, isEdit, loadCategories]);
 
   const parents = categories.filter((c) => c.parent_id === null);
@@ -138,22 +174,46 @@ export default function ProductModal({
   };
 
   const handleFile = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+
     setError(null);
     setUploading(true);
-    try {
-      const url = await uploadImage(file, "products");
-      setForm((f) => ({ ...f, image_url: url }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Image upload failed.");
-    } finally {
-      setUploading(false);
-      // Let the same file be re-picked after a rejection, otherwise choosing
-      // it again fires no change event.
-      e.target.value = "";
+
+    // Upload sequentially so one rejected file doesn't discard the others, and
+    // report the failures rather than dropping them silently.
+    const uploaded: string[] = [];
+    const failures: string[] = [];
+    for (const file of files) {
+      try {
+        uploaded.push(await uploadImage(file, "products"));
+      } catch (err) {
+        failures.push(
+          `${file.name}: ${err instanceof Error ? err.message : "upload failed"}`
+        );
+      }
     }
+
+    if (uploaded.length) setImages((prev) => [...prev, ...uploaded]);
+    if (failures.length) setError(failures.join("\n"));
+
+    setUploading(false);
+    // Let the same file be re-picked after a rejection, otherwise choosing it
+    // again fires no change event.
+    e.target.value = "";
   };
+
+  const moveImage = (index: number, direction: -1 | 1) =>
+    setImages((prev) => {
+      const next = [...prev];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+
+  const removeImage = (index: number) =>
+    setImages((prev) => prev.filter((_, i) => i !== index));
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -181,7 +241,9 @@ export default function ProductModal({
       fabric: form.fabric || null,
       colour: form.colour || null,
       stock_quantity: Number(form.stock_quantity) || 0,
-      image_url: form.image_url || null,
+      // Cover image stays denormalised on the product so listings, cart and the
+      // concierge keep reading one column instead of joining the gallery.
+      image_url: images[0] ?? null,
     };
 
     setSaving(true);
@@ -197,13 +259,27 @@ export default function ProductModal({
           .insert({ ...payload, is_active: true })
           .select("*, categories(name, slug)")
           .single();
-    setSaving(false);
 
     if (saveError) {
+      setSaving(false);
       setError(
         saveError.code === "23505"
           ? "That web address is already used by another product — change the slug."
           : saveError.message
+      );
+      return;
+    }
+
+    // Rewrite the gallery wholesale: simpler than diffing, and the row count is
+    // small. Runs after the product exists so a new product has an id to hang
+    // the images off.
+    const savedId = (data as { id: string }).id;
+    const { error: galleryError } = await replaceGallery(savedId, images);
+    setSaving(false);
+
+    if (galleryError) {
+      setError(
+        `Product saved, but its photos didn't: ${galleryError}. Reopen and try the photos again.`
       );
       return;
     }
@@ -351,39 +427,84 @@ export default function ProductModal({
         </div>
 
         <div>
-          <span className="text-sm font-medium text-ink/70">Product photo</span>
-          <div className="mt-1 flex items-center gap-4">
-            <div className="relative h-20 w-16 shrink-0 overflow-hidden rounded-lg bg-linen">
-              {form.image_url && (
-                <Image
-                  src={form.image_url}
-                  alt="Product preview"
-                  fill
-                  sizes="64px"
-                  className="object-cover"
-                />
-              )}
-            </div>
-            <label className="cursor-pointer rounded-full border border-ink/15 px-4 py-2 text-sm text-ink transition-colors hover:border-terracotta">
-              {uploading
-                ? "Uploading…"
-                : form.image_url
-                  ? "Change photo"
-                  : "Upload photo"}
-              <input
-                type="file"
-                // Explicit list rather than image/* — on iOS this makes the
-                // picker hand over a JPEG instead of the original HEIC.
-                accept="image/jpeg,image/png,image/webp,image/avif,image/gif"
-                onChange={handleFile}
-                disabled={uploading}
-                className="hidden"
-              />
-            </label>
+          <div className="flex items-baseline justify-between">
+            <span className="text-sm font-medium text-ink/70">Photos</span>
+            <span className="text-xs text-ink/40">
+              {images.length} added{images.length > 1 && " · first is the cover"}
+            </span>
           </div>
+
+          {images.length > 0 && (
+            <div className="mt-2 grid grid-cols-4 gap-3 sm:grid-cols-5">
+              {images.map((url, i) => (
+                <div key={url} className="group relative">
+                  <div className="relative aspect-[4/5] overflow-hidden rounded-lg bg-linen">
+                    <Image
+                      src={url}
+                      alt={`Photo ${i + 1}`}
+                      fill
+                      sizes="120px"
+                      className="object-cover"
+                    />
+                    {i === 0 && (
+                      <span className="absolute left-1 top-1 rounded bg-ink/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-cream">
+                        Cover
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 flex items-center justify-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => moveImage(i, -1)}
+                      disabled={i === 0}
+                      aria-label={`Move photo ${i + 1} earlier`}
+                      className="rounded p-0.5 text-ink/40 hover:text-ink disabled:opacity-25"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeImage(i)}
+                      aria-label={`Remove photo ${i + 1}`}
+                      className="rounded p-0.5 text-ink/40 hover:text-terracotta"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveImage(i, 1)}
+                      disabled={i === images.length - 1}
+                      aria-label={`Move photo ${i + 1} later`}
+                      className="rounded p-0.5 text-ink/40 hover:text-ink disabled:opacity-25"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <label className="mt-3 inline-block cursor-pointer rounded-full border border-ink/15 px-4 py-2 text-sm text-ink transition-colors hover:border-terracotta">
+            {uploading
+              ? "Uploading…"
+              : images.length
+                ? "Add more photos"
+                : "Upload photos"}
+            <input
+              type="file"
+              multiple
+              // Explicit list rather than image/* — on iOS this makes the
+              // picker hand over a JPEG instead of the original HEIC.
+              accept="image/jpeg,image/png,image/webp,image/avif,image/gif"
+              onChange={handleFile}
+              disabled={uploading}
+              className="hidden"
+            />
+          </label>
           <p className="mt-1 text-xs text-ink/50">
-            Uploads straight to storage — no links to paste. Replacing a photo
-            leaves the old file in storage; it just stops being used.
+            The first photo is used everywhere the product is listed. Removing a
+            photo here leaves the file in storage; it just stops being used.
           </p>
         </div>
 

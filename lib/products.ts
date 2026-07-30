@@ -37,6 +37,25 @@ async function scopeToVisible(categoryIds?: string[]): Promise<string[]> {
 }
 
 /**
+ * A product's gallery, in order. Returns [] rather than throwing if the
+ * product_images table isn't there yet, so the product page falls back to the
+ * single image_url instead of the whole route erroring.
+ */
+export async function getProductImages(productId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("product_images")
+    .select("url")
+    .eq("product_id", productId)
+    .order("sort_order", { ascending: true });
+
+  if (error) {
+    console.error("getProductImages:", error.message);
+    return [];
+  }
+  return (data ?? []).map((row) => row.url as string);
+}
+
+/**
  * Every product, including inactive ones and those in hidden categories, with
  * category names resolved. For the admin table only — deliberately skips the
  * visibility scoping above, since the whole point of the dashboard is to see

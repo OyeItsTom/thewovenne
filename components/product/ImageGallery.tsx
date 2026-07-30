@@ -21,6 +21,16 @@ export default function ImageGallery({
   const go = (dir: number) =>
     setActive((i) => (i + dir + images.length) % images.length);
 
+  // A product can legitimately have no photo yet — render the frame rather
+  // than passing undefined to next/image.
+  if (images.length === 0) {
+    return (
+      <div className="flex aspect-[4/5] w-full items-center justify-center rounded-2xl bg-linen text-sm text-ink/40">
+        Photography coming soon
+      </div>
+    );
+  }
+
   return (
     <div>
       <div

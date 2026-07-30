@@ -34,6 +34,19 @@ export interface Product {
   created_at: string;
 }
 
+/**
+ * A photo in a product's gallery. products.image_url stays in sync with the
+ * lowest sort_order (the cover) so listings, cart and chat keep working from
+ * one column without joining this table.
+ */
+export interface ProductImage {
+  id: string;
+  product_id: string;
+  url: string;
+  sort_order: number;
+  created_at: string;
+}
+
 export interface OrderItem {
   id: string;
   name: string;
