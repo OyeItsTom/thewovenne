@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { getAllProducts } from "@/lib/products";
 import { getVisibleCategoryTree } from "@/lib/categories";
 import ShopFilters from "@/components/shop/ShopFilters";
+import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 // Cache the catalogue for 60s so the DB isn't queried on every request.
 export const revalidate = 60;
@@ -14,6 +15,7 @@ export const metadata: Metadata = {
     title: "Shop All | THE WOVENNE",
     description:
       "Authentic handloom linen from Kerala — shirts, kurtas, sarees, and home.",
+    images: [DEFAULT_OG_IMAGE],
   },
 };
 
