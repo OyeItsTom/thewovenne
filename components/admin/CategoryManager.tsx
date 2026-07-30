@@ -10,7 +10,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { getBrowserSupabase } from "@/lib/supabase";
 import { getAllCategories } from "@/lib/categories";
 import { cn, uniqueSlug } from "@/lib/utils";
 import type { Category } from "@/lib/types";
@@ -31,8 +31,8 @@ export default function CategoryManager() {
 
   const load = useCallback(async () => {
     const [cats, { data: products }] = await Promise.all([
-      getAllCategories(),
-      supabase.from("products").select("category_id"),
+      getAllCategories(getBrowserSupabase()),
+      getBrowserSupabase().from("products").select("category_id"),
     ]);
 
     const tally: Record<string, number> = {};
@@ -70,7 +70,7 @@ export default function CategoryManager() {
 
   const toggleVisible = (cat: Category) =>
     run(cat.id, async () =>
-      supabase
+      getBrowserSupabase()
         .from("categories")
         .update({ is_visible: !cat.is_visible })
         .eq("id", cat.id)
@@ -78,7 +78,7 @@ export default function CategoryManager() {
 
   const rename = (cat: Category, name: string) =>
     run(cat.id, async () =>
-      supabase.from("categories").update({ name }).eq("id", cat.id)
+      getBrowserSupabase().from("categories").update({ name }).eq("id", cat.id)
     );
 
   /** Swap sort_order with the adjacent sibling so ordering is stable. */
@@ -89,12 +89,12 @@ export default function CategoryManager() {
     if (!swapWith) return;
 
     return run(cat.id, async () => {
-      const a = await supabase
+      const a = await getBrowserSupabase()
         .from("categories")
         .update({ sort_order: swapWith.sort_order })
         .eq("id", cat.id);
       if (a.error) return a;
-      return supabase
+      return getBrowserSupabase()
         .from("categories")
         .update({ sort_order: cat.sort_order })
         .eq("id", swapWith.id);
@@ -104,7 +104,7 @@ export default function CategoryManager() {
   const remove = (cat: Category) =>
     run(cat.id, async () => {
       setConfirmDelete(null);
-      return supabase.from("categories").delete().eq("id", cat.id);
+      return getBrowserSupabase().from("categories").delete().eq("id", cat.id);
     });
 
   const addCategory = async (name: string, parentId: string | null) => {
@@ -119,7 +119,7 @@ export default function CategoryManager() {
       : 1;
 
     await run("new", async () =>
-      supabase.from("categories").insert({
+      getBrowserSupabase().from("categories").insert({
         name: name.trim(),
         slug,
         parent_id: parentId,

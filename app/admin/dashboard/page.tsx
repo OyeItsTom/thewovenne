@@ -10,7 +10,7 @@ import {
   PlusCircle,
   ShoppingBag,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { getBrowserSupabase } from "@/lib/supabase";
 import { isCurrentUserAdmin } from "@/lib/auth";
 import { getAdminProducts } from "@/lib/products";
 import type { Product } from "@/lib/types";
@@ -40,7 +40,7 @@ export default function AdminDashboardPage() {
     // A session alone is not enough — customers authenticate against the same
     // Supabase project. Admin access is decided by profiles.is_admin.
     const verify = async () => {
-      const { data } = await supabase.auth.getSession();
+      const { data } = await getBrowserSupabase().auth.getSession();
       if (!active) return;
 
       if (!data.session) {
@@ -54,7 +54,7 @@ export default function AdminDashboardPage() {
       if (!admin) {
         // Signed in but not an admin: end the session rather than leave them
         // staring at a dashboard that RLS will render empty anyway.
-        await supabase.auth.signOut();
+        await getBrowserSupabase().auth.signOut();
         router.replace("/admin/login");
         return;
       }
@@ -64,7 +64,7 @@ export default function AdminDashboardPage() {
 
     verify();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
+    const { data: listener } = getBrowserSupabase().auth.onAuthStateChange((_e, session) => {
       if (!session) router.replace("/admin/login");
     });
     return () => {
@@ -75,10 +75,10 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     if (checkingAuth) return;
-    getAdminProducts().then(setProducts);
+    getAdminProducts(getBrowserSupabase()).then(setProducts);
 
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    supabase
+    getBrowserSupabase()
       .from("orders")
       .select("*", { count: "exact", head: true })
       .gte("created_at", weekAgo)
@@ -86,7 +86,7 @@ export default function AdminDashboardPage() {
   }, [checkingAuth]);
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    await getBrowserSupabase().auth.signOut();
     router.replace("/admin/login");
   };
 

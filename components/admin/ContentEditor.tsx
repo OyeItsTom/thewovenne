@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { getBrowserSupabase } from "@/lib/supabase";
 import { DEFAULT_CONTENT } from "@/lib/content";
 import type { SiteContentMap } from "@/lib/types";
 
@@ -18,7 +18,7 @@ export default function ContentEditor() {
   const [save, setSave] = useState<Record<string, SaveState>>({});
 
   useEffect(() => {
-    supabase
+    getBrowserSupabase()
       .from("site_content")
       .select("key, value")
       .then(({ data }) => {
@@ -36,7 +36,7 @@ export default function ContentEditor() {
 
   async function saveBlock<K extends keyof SiteContentMap>(key: K) {
     setSave((s) => ({ ...s, [key]: "saving" }));
-    const { error } = await supabase
+    const { error } = await getBrowserSupabase()
       .from("site_content")
       .upsert(
         { key, value: content[key], updated_at: new Date().toISOString() },

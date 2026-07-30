@@ -1,12 +1,19 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import type { Category, CategoryNode } from "./types";
 
 /**
  * All categories, unfiltered — for the admin Category manager (which needs to
  * see hidden ones too). Ordered parent-friendly by sort_order.
+ *
+ * Pass the authenticated browser client from admin screens: the default anon
+ * client only satisfies the "visible categories" policy, so hidden rows would
+ * silently be missing.
  */
-export async function getAllCategories(): Promise<Category[]> {
-  const { data, error } = await supabase
+export async function getAllCategories(
+  client: SupabaseClient = supabase
+): Promise<Category[]> {
+  const { data, error } = await client
     .from("categories")
     .select("*")
     .order("sort_order", { ascending: true });

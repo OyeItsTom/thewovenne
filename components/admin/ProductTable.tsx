@@ -5,7 +5,7 @@ import Image from "next/image";
 import { Pencil, Trash2 } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { cn, formatINR } from "@/lib/utils";
-import { supabase } from "@/lib/supabase";
+import { getBrowserSupabase } from "@/lib/supabase";
 import StockEditor from "./StockEditor";
 
 export default function ProductTable({
@@ -24,7 +24,7 @@ export default function ProductTable({
   const [error, setError] = useState<string | null>(null);
 
   const updateProduct = async (product: Product, patch: Partial<Product>) => {
-    const { data, error: updateError } = await supabase
+    const { data, error: updateError } = await getBrowserSupabase()
       .from("products")
       .update(patch)
       .eq("id", product.id)
@@ -48,7 +48,7 @@ export default function ProductTable({
   const remove = async (product: Product) => {
     setBusyId(product.id);
     setError(null);
-    const { error: deleteError } = await supabase
+    const { error: deleteError } = await getBrowserSupabase()
       .from("products")
       .delete()
       .eq("id", product.id);

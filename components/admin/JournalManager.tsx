@@ -3,7 +3,7 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import Image from "next/image";
 import { Pencil, Plus, Trash2 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { getBrowserSupabase } from "@/lib/supabase";
 import { uploadImage } from "@/lib/storage";
 import type { JournalPost } from "@/lib/types";
 
@@ -29,7 +29,7 @@ export default function JournalManager() {
   const [error, setError] = useState<string | null>(null);
 
   const load = () =>
-    supabase
+    getBrowserSupabase()
       .from("journal_posts")
       .select("*")
       .order("created_at", { ascending: false })
@@ -67,8 +67,8 @@ export default function JournalManager() {
     };
 
     const query = draft.id
-      ? supabase.from("journal_posts").update(row).eq("id", draft.id)
-      : supabase.from("journal_posts").insert(row);
+      ? getBrowserSupabase().from("journal_posts").update(row).eq("id", draft.id)
+      : getBrowserSupabase().from("journal_posts").insert(row);
 
     const { error: err } = await query;
     if (err) return setError(err.message);
@@ -78,12 +78,12 @@ export default function JournalManager() {
   }
 
   async function remove(id: string) {
-    await supabase.from("journal_posts").delete().eq("id", id);
+    await getBrowserSupabase().from("journal_posts").delete().eq("id", id);
     load();
   }
 
   async function togglePublished(post: JournalPost) {
-    await supabase
+    await getBrowserSupabase()
       .from("journal_posts")
       .update({ published: !post.published })
       .eq("id", post.id);
