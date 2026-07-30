@@ -47,6 +47,25 @@ export interface ProductImage {
   created_at: string;
 }
 
+/**
+ * One recorded admin action. Written by the log_admin_action() trigger, never
+ * by the app — see supabase/migrations/0009.
+ */
+export interface AuditEntry {
+  id: string;
+  actor_id: string | null;
+  /** Kept even if the auth user is later deleted. */
+  actor_email: string | null;
+  action: "insert" | "update" | "delete";
+  table_name: string;
+  record_id: string | null;
+  /** name/title/key as it was, so deleted records still read sensibly. */
+  record_label: string | null;
+  /** update: { column: { from, to } } · insert/delete: the whole row. */
+  changes: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface OrderItem {
   id: string;
   name: string;

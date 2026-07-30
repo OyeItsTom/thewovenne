@@ -19,12 +19,13 @@ import type { Product } from "@/lib/types";
 import Button, { buttonClassName } from "@/components/ui/Button";
 import ProductTable from "@/components/admin/ProductTable";
 import ProductModal from "@/components/admin/ProductModal";
+import AuditLog from "@/components/admin/AuditLog";
 import CategoryManager from "@/components/admin/CategoryManager";
 import ContentEditor from "@/components/admin/ContentEditor";
 import JournalManager from "@/components/admin/JournalManager";
 import TestErrorButton from "@/components/admin/TestErrorButton";
 
-type Tab = "products" | "categories" | "content" | "journal";
+type Tab = "products" | "categories" | "content" | "journal" | "activity";
 
 export default function AdminDashboardPage() {
   const router = useRouter();
@@ -163,6 +164,7 @@ export default function AdminDashboardPage() {
           ["categories", "Categories"],
           ["content", "Homepage Content"],
           ["journal", "Journal"],
+          ["activity", "Activity"],
         ] as [Tab, string][]).map(([id, label]) => (
           <button
             key={id}
@@ -193,6 +195,7 @@ export default function AdminDashboardPage() {
         {tab === "categories" && <CategoryManager />}
         {tab === "content" && <ContentEditor />}
         {tab === "journal" && <JournalManager />}
+        {tab === "activity" && <AuditLog />}
       </div>
 
       {/* Sentry verification */}
