@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { getBrowserSupabase } from "./supabase";
 
 /**
  * Whether the signed-in user is an admin, per profiles.is_admin.
@@ -9,7 +9,7 @@ import { supabase } from "./supabase";
  * their way onto an admin screen still can't read or write anything.
  */
 export async function isCurrentUserAdmin(): Promise<boolean> {
-  const { data, error } = await supabase.rpc("is_admin");
+  const { data, error } = await getBrowserSupabase().rpc("is_admin");
 
   if (error) {
     // Fail closed: an unreachable or not-yet-migrated database is not an admin.

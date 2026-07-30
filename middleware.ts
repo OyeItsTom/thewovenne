@@ -1,0 +1,91 @@
+import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
+
+const SUPABASE_URL =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
+const SUPABASE_ANON_KEY =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key";
+
+/** Reachable without a session — everything else under /admin is gated. */
+const PUBLIC_ADMIN_PATHS = ["/admin/login"];
+
+/**
+ * Gates /admin on the server, before any HTML is sent.
+ *
+ * Previously the guard was client-side only: /admin/dashboard returned 200 to
+ * anyone, shipped its markup, then redirected once React hydrated. RLS meant no
+ * data leaked, but the page shell did — and a guard that runs in the visitor's
+ * browser is a guard the visitor controls.
+ *
+ * This also refreshes the auth cookie on every request, which is what keeps a
+ * server-rendered session from silently expiring mid-visit.
+ */
+export async function middleware(request: NextRequest) {
+  let response = NextResponse.next({ request });
+
+  const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value }) =>
+          request.cookies.set(name, value)
+        );
+        response = NextResponse.next({ request });
+        cookiesToSet.forEach(({ name, value, options }) =>
+          response.cookies.set(name, value, options)
+        );
+      },
+    },
+  });
+
+  // getUser() revalidates against Supabase rather than trusting the cookie's
+  // contents. getSession() would read the cookie as-is, which is forgeable.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const { pathname } = request.nextUrl;
+  const isAdminArea = pathname.startsWith("/admin");
+  const isPublicAdminPath = PUBLIC_ADMIN_PATHS.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`)
+  );
+
+  if (isAdminArea && !isPublicAdminPath) {
+    if (!user) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/admin/login";
+      return NextResponse.redirect(url);
+    }
+
+    // Authenticated is not the same as admin — customers will authenticate
+    // against this same project. Ask the database, don't infer.
+    const { data: isAdmin, error } = await supabase.rpc("is_admin");
+    if (error || isAdmin !== true) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/admin/login";
+      url.searchParams.set("denied", "1");
+      return NextResponse.redirect(url);
+    }
+  }
+
+  // A signed-in admin landing on the login page goes straight to the dashboard.
+  if (pathname === "/admin/login" && user) {
+    const { data: isAdmin } = await supabase.rpc("is_admin");
+    if (isAdmin === true) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/admin/dashboard";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+  }
+
+  return response;
+}
+
+export const config = {
+  // Only /admin needs gating. Keeping the matcher tight means the storefront
+  // pays no middleware cost, and static assets are never intercepted.
+  matcher: ["/admin/:path*"],
+};

@@ -13,7 +13,7 @@ import Image from "next/image";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
-import { supabase } from "@/lib/supabase";
+import { getBrowserSupabase } from "@/lib/supabase";
 import { getAllCategories } from "@/lib/categories";
 import { getProductImages } from "@/lib/products";
 import { uploadImage } from "@/lib/storage";
@@ -41,7 +41,7 @@ async function replaceGallery(
   productId: string,
   urls: string[]
 ): Promise<{ error: string | null }> {
-  const { error: clearError } = await supabase
+  const { error: clearError } = await getBrowserSupabase()
     .from("product_images")
     .delete()
     .eq("product_id", productId);
@@ -49,7 +49,7 @@ async function replaceGallery(
 
   if (urls.length === 0) return { error: null };
 
-  const { error: insertError } = await supabase.from("product_images").insert(
+  const { error: insertError } = await getBrowserSupabase().from("product_images").insert(
     urls.map((url, i) => ({ product_id: productId, url, sort_order: i }))
   );
   return { error: insertError?.message ?? null };
@@ -98,7 +98,7 @@ export default function ProductModal({
   const [images, setImages] = useState<string[]>([]);
 
   const loadCategories = useCallback(async () => {
-    const cats = await getAllCategories();
+    const cats = await getAllCategories(getBrowserSupabase());
     setCategories(cats);
     return cats;
   }, []);
@@ -121,7 +121,7 @@ export default function ProductModal({
       setParentId(current?.parent_id ?? "");
     });
 
-    supabase
+    getBrowserSupabase()
       .from("products")
       .select("id, slug")
       .then(({ data }) =>
@@ -133,7 +133,7 @@ export default function ProductModal({
       );
 
     if (product) {
-      getProductImages(product.id).then((urls) =>
+      getProductImages(product.id, getBrowserSupabase()).then((urls) =>
         // Fall back to the cover column if the gallery hasn't been populated,
         // so an existing product never opens looking photo-less.
         setImages(urls.length ? urls : product.image_url ? [product.image_url] : [])
@@ -248,13 +248,13 @@ export default function ProductModal({
 
     setSaving(true);
     const { data, error: saveError } = isEdit
-      ? await supabase
+      ? await getBrowserSupabase()
           .from("products")
           .update(payload)
           .eq("id", product!.id)
           .select("*, categories(name, slug)")
           .single()
-      : await supabase
+      : await getBrowserSupabase()
           .from("products")
           .insert({ ...payload, is_active: true })
           .select("*, categories(name, slug)")

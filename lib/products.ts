@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import { getVisibleCategoryIds } from "./categories";
 import type { Product } from "./types";
@@ -41,8 +42,11 @@ async function scopeToVisible(categoryIds?: string[]): Promise<string[]> {
  * product_images table isn't there yet, so the product page falls back to the
  * single image_url instead of the whole route erroring.
  */
-export async function getProductImages(productId: string): Promise<string[]> {
-  const { data, error } = await supabase
+export async function getProductImages(
+  productId: string,
+  client: SupabaseClient = supabase
+): Promise<string[]> {
+  const { data, error } = await client
     .from("product_images")
     .select("url")
     .eq("product_id", productId)
@@ -62,8 +66,10 @@ export async function getProductImages(productId: string): Promise<string[]> {
  * and manage what the storefront hides. RLS still gates it: the "Admins can
  * view all products" policy requires is_admin().
  */
-export async function getAdminProducts(): Promise<Product[]> {
-  const { data, error } = await supabase
+export async function getAdminProducts(
+  client: SupabaseClient = supabase
+): Promise<Product[]> {
+  const { data, error } = await client
     .from("products")
     .select(PRODUCT_SELECT)
     .order("created_at", { ascending: false });

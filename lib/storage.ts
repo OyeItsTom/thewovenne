@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { getBrowserSupabase } from "./supabase";
 
 const BUCKET = "product-images";
 
@@ -40,12 +40,12 @@ export async function uploadImage(file: File, folder = "products"): Promise<stri
 
   const path = `${folder}/${crypto.randomUUID()}.${ext}`;
 
-  const { error } = await supabase.storage
+  const { error } = await getBrowserSupabase().storage
     .from(BUCKET)
     .upload(path, file, { cacheControl: "3600", upsert: false });
 
   if (error) throw error;
 
-  const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+  const { data } = getBrowserSupabase().storage.from(BUCKET).getPublicUrl(path);
   return data.publicUrl;
 }
