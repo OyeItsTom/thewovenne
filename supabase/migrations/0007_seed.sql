@@ -1,6 +1,18 @@
 -- 0007 — Seed data
 -- Categories, placeholder products, homepage content, journal posts.
--- All idempotent; safe to skip entirely on a database that already has data.
+--
+-- ⚠️ DO NOT RE-RUN THIS ON THE PRODUCTION DATABASE.
+--
+-- The ten placeholder products below were deleted from production on
+-- 2026-07-30 once real products existed. "on conflict (slug) do nothing" only
+-- protects rows that are still present — their slugs are now free, so running
+-- this file again would resurrect all ten, complete with placehold.co cover
+-- images that Next's optimizer rejects (SVG), i.e. ten broken products back on
+-- the live shop.
+--
+-- The categories and site_content blocks ARE safe to re-run. If you need those
+-- on a fresh database, run this whole file there; on production, run only the
+-- specific block you need.
 
 -- ── Seed: categories (Men / Women → sub-categories) ─
 -- Only Women → Sarees is visible at launch; the rest are hidden until their
