@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, KeyRound } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, KeyRound } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import {
   SUPABASE_ANON_KEY,
@@ -59,7 +59,12 @@ export default function AdminAccountPage() {
       email,
       password: current,
     });
-    await verifier.auth.signOut();
+
+    // scope: "local" is load-bearing. signOut() defaults to "global", which
+    // revokes every session for this user — including the live one in this
+    // browser — and the update that follows then fails with "Auth session
+    // missing!". Local only discards this throwaway client's own state.
+    await verifier.auth.signOut({ scope: "local" });
 
     if (wrongPassword) {
       setBusy(false);
@@ -156,17 +161,36 @@ function Field({
   onChange: (v: string) => void;
   autoComplete: string;
 }) {
+  const [visible, setVisible] = useState(false);
+
   return (
-    <label className="block text-sm">
-      <span className="font-medium text-ink/70">{label}</span>
-      <input
-        type="password"
-        required
-        autoComplete={autoComplete}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
-      />
-    </label>
+    <div className="text-sm">
+      <label className="block">
+        <span className="font-medium text-ink/70">{label}</span>
+        <div className="relative mt-1">
+          <input
+            type={visible ? "text" : "password"}
+            required
+            autoComplete={autoComplete}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className="w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 pr-10 text-sm text-ink focus:border-terracotta focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => setVisible((v) => !v)}
+            aria-label={visible ? `Hide ${label}` : `Show ${label}`}
+            aria-pressed={visible}
+            className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-ink/40 transition-colors hover:text-ink"
+          >
+            {visible ? (
+              <EyeOff className="h-4 w-4" />
+            ) : (
+              <Eye className="h-4 w-4" />
+            )}
+          </button>
+        </div>
+      </label>
+    </div>
   );
 }
