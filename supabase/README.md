@@ -14,6 +14,7 @@ Ordered migrations. Run them **in number order** in the Supabase SQL editor
 | `0007_seed.sql` | Categories, placeholder products, homepage copy, journal posts — **do not re-run on production**, see below |
 | `0008_promote_admin.sql` | **Manual.** Makes you an admin — edit the email first |
 | `0009_admin_audit_log.sql` | Records who changed what, via database triggers |
+| `0010_site_content_drafts.sql` | Draft/publish for homepage copy |
 
 Every file is idempotent: `create … if not exists`, `drop policy if exists`
 before each policy, `on conflict do nothing` on every seed. Re-running any of

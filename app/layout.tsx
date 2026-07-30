@@ -1,11 +1,6 @@
 import type { Metadata } from "next";
 import { Cormorant_Garamond, DM_Sans, Tiro_Devanagari_Hindi } from "next/font/google";
 import "./globals.css";
-import Navbar from "@/components/layout/Navbar";
-import Footer from "@/components/layout/Footer";
-import WhatsAppButton from "@/components/layout/WhatsAppButton";
-import CartDrawer from "@/components/cart/CartDrawer";
-import AskWovenne from "@/components/chat/AskWovenne";
 
 const heading = Cormorant_Garamond({
   subsets: ["latin"],
@@ -54,14 +49,10 @@ export default function RootLayout({
       lang="en"
       className={`${heading.variable} ${body.variable} ${script.variable}`}
     >
-      <body className="flex min-h-screen flex-col">
-        <Navbar />
-        <main className="flex-1">{children}</main>
-        <Footer />
-        <WhatsAppButton />
-        <AskWovenne />
-        <CartDrawer />
-      </body>
+      {/* Chrome lives in the route-group layouts: the storefront gets the
+          navbar/footer/chat, the admin gets its own header. Putting it here
+          meant /admin shipped the customer-facing nav, cart and chat widget. */}
+      <body className="flex min-h-screen flex-col">{children}</body>
     </html>
   );
 }
