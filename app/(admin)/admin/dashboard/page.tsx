@@ -19,12 +19,13 @@ import type { Product } from "@/lib/types";
 import Button, { buttonClassName } from "@/components/ui/Button";
 import ProductTable from "@/components/admin/ProductTable";
 import ProductModal from "@/components/admin/ProductModal";
+import AuditLog from "@/components/admin/AuditLog";
 import CategoryManager from "@/components/admin/CategoryManager";
 import ContentEditor from "@/components/admin/ContentEditor";
 import JournalManager from "@/components/admin/JournalManager";
 import TestErrorButton from "@/components/admin/TestErrorButton";
 
-type Tab = "products" | "categories" | "content" | "journal";
+type Tab = "products" | "categories" | "content" | "journal" | "activity";
 
 export default function AdminDashboardPage() {
   const router = useRouter();
@@ -125,7 +126,9 @@ export default function AdminDashboardPage() {
   }
 
   const total = products?.length ?? 0;
-  const inStock = products?.filter((p) => p.stock_quantity > 0).length ?? 0;
+  // Sum of units, not a row count. Counting rows made "In Stock" equal
+  // "Products" whenever nothing was out of stock — a stat that says nothing.
+  const inStock = products?.reduce((sum, p) => sum + p.stock_quantity, 0) ?? 0;
   const lowStock =
     products?.filter((p) => p.stock_quantity > 0 && p.stock_quantity <= 5)
       .length ?? 0;
@@ -140,18 +143,12 @@ export default function AdminDashboardPage() {
               <PlusCircle className="h-4 w-4" /> Add New Product
             </Button>
           )}
-          <Link href="/admin/account" className={buttonClassName("outline", "md")}>
-            <KeyRound className="h-4 w-4" /> Account
-          </Link>
-          <Button onClick={handleSignOut} variant="outline" size="md">
-            <LogOut className="h-4 w-4" /> Sign Out
-          </Button>
         </div>
       </div>
 
       <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard icon={Package} label="Total Products" value={total} />
-        <StatCard icon={Boxes} label="Total In-Stock" value={inStock} />
+        <StatCard icon={Package} label="Products" value={total} />
+        <StatCard icon={Boxes} label="Units in Stock" value={inStock} />
         <StatCard icon={AlertTriangle} label="Low Stock (≤ 5)" value={lowStock} />
         <StatCard icon={ShoppingBag} label="Orders This Week" value={ordersThisWeek} />
       </div>
@@ -163,6 +160,7 @@ export default function AdminDashboardPage() {
           ["categories", "Categories"],
           ["content", "Homepage Content"],
           ["journal", "Journal"],
+          ["activity", "Activity"],
         ] as [Tab, string][]).map(([id, label]) => (
           <button
             key={id}
@@ -193,6 +191,7 @@ export default function AdminDashboardPage() {
         {tab === "categories" && <CategoryManager />}
         {tab === "content" && <ContentEditor />}
         {tab === "journal" && <JournalManager />}
+        {tab === "activity" && <AuditLog />}
       </div>
 
       {/* Sentry verification */}
