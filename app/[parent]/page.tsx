@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getVisibleCategoryTree } from "@/lib/categories";
 import { getProductsByCategoryIds } from "@/lib/products";
 import ProductGrid from "@/components/shop/ProductGrid";
+import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 // Root-level dynamic segment for parent categories (/men, /women, …). Next
 // resolves static routes first, so /shop, /cart, /journal, /admin, /product/*
@@ -31,7 +32,11 @@ export async function generateMetadata({
   const title = `${parent.name} | THE WOVENNE`;
   const description = `Handloom linen for ${parent.name.toLowerCase()} — woven in Kerala, sent direct from the loom.`;
 
-  return { title, description, openGraph: { title, description } };
+  return {
+    title,
+    description,
+    openGraph: { title, description, images: [DEFAULT_OG_IMAGE] },
+  };
 }
 
 export default async function CategoryLandingPage({

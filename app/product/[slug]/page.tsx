@@ -10,6 +10,7 @@ import ImageGallery from "@/components/product/ImageGallery";
 import ProductOptions from "@/components/product/ProductOptions";
 import CareAccordion from "@/components/product/CareAccordion";
 import ProductGrid from "@/components/shop/ProductGrid";
+import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 export const revalidate = 60;
 
@@ -29,7 +30,7 @@ export async function generateMetadata({
     openGraph: {
       title: product.name,
       description,
-      images: product.image_url ? [product.image_url] : undefined,
+      images: [product.image_url ?? DEFAULT_OG_IMAGE],
     },
   };
 }

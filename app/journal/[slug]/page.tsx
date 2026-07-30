@@ -3,6 +3,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getPostBySlug, getPublishedPosts } from "@/lib/journal";
+import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 export const revalidate = 60;
 
@@ -25,7 +26,7 @@ export async function generateMetadata({
     openGraph: {
       title: post.title,
       description,
-      images: post.image_url ? [post.image_url] : undefined,
+      images: [post.image_url ?? DEFAULT_OG_IMAGE],
     },
   };
 }
