@@ -11,7 +11,7 @@ Ordered migrations. Run them **in number order** in the Supabase SQL editor
 | `0004_grants.sql` | Base privileges for `anon`, `authenticated`, `service_role` |
 | `0005_storage.sql` | `product-images` bucket + policies |
 | `0006_product_images.sql` | Multi-photo galleries |
-| `0007_seed.sql` | Categories, placeholder products, homepage copy, journal posts |
+| `0007_seed.sql` | Categories, placeholder products, homepage copy, journal posts — **do not re-run on production**, see below |
 | `0008_promote_admin.sql` | **Manual.** Makes you an admin — edit the email first |
 
 Every file is idempotent: `create … if not exists`, `drop policy if exists`
@@ -42,6 +42,13 @@ handle profile creation in application code when customer signup ships.
 **`0008` is not optional.** Nothing else promotes anyone. Skip it and `/admin`
 lets you sign in, then shows an empty dashboard, because every admin policy
 returns false and `lib/auth.ts` fails closed.
+
+**`0007` is no longer safe on production.** Its ten placeholder products were
+deleted on 2026-07-30 once real products existed. `on conflict do nothing` only
+protects rows that still exist — those slugs are free again, so re-running the
+file would resurrect all ten with `placehold.co` covers that Next's optimizer
+rejects, putting ten broken products back on the live shop. The categories and
+`site_content` blocks in that file are still safe to re-run.
 
 **`service_role` grants in `0004` matter more than they look.** Supabase's
 defaults were not in place on this project, so every `service_role` query
