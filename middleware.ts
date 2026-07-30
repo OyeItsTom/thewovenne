@@ -10,6 +10,12 @@ const SUPABASE_ANON_KEY =
 const PUBLIC_ADMIN_PATHS = ["/admin/login"];
 
 /**
+ * Requires a signed-in admin but is exempt from the aal2 requirement — it is
+ * the page that grants aal2, so gating it on aal2 would be a closed loop.
+ */
+const MFA_PATH = "/admin/mfa";
+
+/**
  * Gates /admin on the server, before any HTML is sent.
  *
  * Previously the guard was client-side only: /admin/dashboard returned 200 to
@@ -66,6 +72,30 @@ export async function middleware(request: NextRequest) {
       const url = request.nextUrl.clone();
       url.pathname = "/admin/login";
       url.searchParams.set("denied", "1");
+      return NextResponse.redirect(url);
+    }
+
+    // Two-factor is mandatory. getUser() above already validated this token
+    // against Supabase, so its assurance-level claim is authentic.
+    //
+    //   nextLevel aal2 + currentLevel aal1 → enrolled, needs this session verified
+    //   nextLevel aal1                     → no factor at all, needs enrolment
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    const needsMfa =
+      aal?.nextLevel === "aal2" ? aal.currentLevel !== "aal2" : true;
+
+    if (needsMfa && pathname !== MFA_PATH) {
+      const url = request.nextUrl.clone();
+      url.pathname = MFA_PATH;
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+
+    // Fully verified admins have no reason to sit on the MFA page.
+    if (!needsMfa && pathname === MFA_PATH) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/admin/dashboard";
+      url.search = "";
       return NextResponse.redirect(url);
     }
   }
