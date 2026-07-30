@@ -47,21 +47,26 @@ npm install
 ### 2. Set up Supabase
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor → New query**, paste the contents of
-   [`supabase/schema.sql`](supabase/schema.sql), and run it. This creates the
-   `products`, `orders`, `site_content`, and `journal_posts` tables, sets up Row
-   Level Security, creates the public **`product-images`** Storage bucket (for
-   admin image uploads) with its policies, and seeds 10 sample products plus
-   default homepage/journal content.
+2. Open **SQL Editor → New query** and run the migrations in
+   [`supabase/migrations/`](supabase/migrations) **in number order**, one file
+   at a time — `0001` through `0007`. See
+   [`supabase/README.md`](supabase/README.md) for what each does. Together they
+   create the tables, admin identity, Row Level Security, role grants, the
+   public **`product-images`** Storage bucket, product galleries, and seed data.
 3. **Authentication → Users → Add user** — create your admin (email + password).
    This is the account you log in with at `/admin`.
-4. **Project Settings → API** — copy:
+4. Run [`0008_promote_admin.sql`](supabase/migrations/0008_promote_admin.sql)
+   with that user's email. **This is not optional** — without it `/admin` signs
+   you in and then shows an empty dashboard, because every admin policy returns
+   false.
+5. **Project Settings → API** — copy:
    - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
    - `anon` `public` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `service_role` key → `SUPABASE_SERVICE_ROLE_KEY` (server-side only — keep secret)
 
-> Re-running `schema.sql` later is safe — it uses `if not exists` /
-> `on conflict do nothing` and drop-then-create for Storage policies.
+> Every migration is idempotent — `if not exists`, `on conflict do nothing`,
+> and drop-then-create for policies — so re-running one is safe. Run them in
+> order: `0003` and `0005` depend on `is_admin()` from `0002`.
 
 ### 3. Set up Razorpay (checkout)
 
@@ -155,8 +160,9 @@ add every key below, then redeploy. **New keys introduced by this upgrade are ma
 | `WHATSAPP_VERIFY_TOKEN` | ★ Only needed when connecting a WhatsApp provider |
 | `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN` | ★ Optional — enables source-map upload on build |
 
-> **Also do once in production Supabase:** run `supabase/schema.sql` against the
-> production database and create your admin user. **PayPal is intentionally
+> **Also do once in production Supabase:** run the `supabase/migrations/` files
+> in order against the production database, create your admin user, then run
+> `0008_promote_admin.sql`. **PayPal is intentionally
 > disabled** — its keys are commented out in `.env.local.example` for a future
 > UK launch (see below); no PayPal vars are needed now.
 
@@ -188,7 +194,7 @@ components/
 lib/                    Supabase/Razorpay clients, chat core, cart store, content
                         + journal + storage helpers, motion variants, types, utils
 
-supabase/schema.sql     Tables, RLS, Storage bucket + policies, seed data
+supabase/migrations/    Ordered SQL migrations (see supabase/README.md)
 sentry.*.config.ts      Sentry client/server/edge init
 ```
 

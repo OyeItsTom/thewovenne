@@ -1,6 +1,7 @@
--- THE WOVENNE — product_images (multi-photo galleries)
--- Standalone and idempotent. Open this file, Select All, paste into the
--- Supabase SQL editor, Run. Requires profiles + is_admin() to exist already.
+-- 0006 — Product image galleries
+-- products.image_url stays as the denormalised cover (kept in sync with the
+-- first row here) so listings, cart and the concierge read one column instead
+-- of joining. Requires is_admin() from 0002 and products from 0001.
 
 create table if not exists product_images (
   id uuid primary key default gen_random_uuid(),

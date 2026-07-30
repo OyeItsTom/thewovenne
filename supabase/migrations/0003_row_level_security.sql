@@ -1,9 +1,12 @@
--- THE WOVENNE — admin policy blocks (C + D)
--- Standalone, idempotent. Open this file, Select All, paste into the
--- Supabase SQL editor, Run. Requires profiles + is_admin() to exist
--- already (Block B).
+-- 0003 — Row Level Security
+-- Public read policies plus admin-only writes. Requires is_admin() from 0002.
 
--- ── Block C: write policies require is_admin() ──
+alter table categories enable row level security;
+alter table products enable row level security;
+alter table orders enable row level security;
+alter table site_content enable row level security;
+alter table journal_posts enable row level security;
+
 -- Categories: public can read visible ones; admins read all + manage.
 drop policy if exists "Public can view visible categories" on categories;
 create policy "Public can view visible categories"
@@ -25,7 +28,6 @@ drop policy if exists "Authenticated can delete categories" on categories;
 drop policy if exists "Admins can delete categories" on categories;
 create policy "Admins can delete categories"
   on categories for delete to authenticated using (public.is_admin());
-
 
 -- Products: public can view active; admins can view/manage all.
 drop policy if exists "Public can view active products" on products;
@@ -94,26 +96,3 @@ drop policy if exists "Authenticated can delete journal" on journal_posts;
 drop policy if exists "Admins can delete journal" on journal_posts;
 create policy "Admins can delete journal"
   on journal_posts for delete to authenticated using (public.is_admin());
-
--- ── Block D: product-images bucket ──
-drop policy if exists "Public read product images" on storage.objects;
-create policy "Public read product images"
-  on storage.objects for select using (bucket_id = 'product-images');
-
--- Writes are admin-only: without the is_admin() check any signed-in customer
--- could upload into, overwrite, or wipe the product image bucket.
-drop policy if exists "Admin upload product images" on storage.objects;
-create policy "Admin upload product images"
-  on storage.objects for insert to authenticated
-  with check (bucket_id = 'product-images' and public.is_admin());
-
-drop policy if exists "Admin update product images" on storage.objects;
-create policy "Admin update product images"
-  on storage.objects for update to authenticated
-  using (bucket_id = 'product-images' and public.is_admin());
-
-drop policy if exists "Admin delete product images" on storage.objects;
-create policy "Admin delete product images"
-  on storage.objects for delete to authenticated
-  using (bucket_id = 'product-images' and public.is_admin());
-

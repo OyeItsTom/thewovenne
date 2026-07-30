@@ -2,7 +2,7 @@ import { supabase } from "./supabase";
 import type { SiteContentMap } from "./types";
 
 /**
- * Default homepage content — mirrors the seed in schema.sql. Used as a graceful
+ * Default homepage content — mirrors the seed in supabase/migrations/0007_seed.sql. Used as a graceful
  * fallback so pages always render, even before Supabase is configured/seeded or
  * if a key has been deleted from the admin.
  */
