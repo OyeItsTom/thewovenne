@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -9,12 +10,13 @@ import {
   Package,
   PlusCircle,
   ShoppingBag,
+  KeyRound,
 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { isCurrentUserAdmin } from "@/lib/auth";
 import { getAdminProducts } from "@/lib/products";
 import type { Product } from "@/lib/types";
-import Button from "@/components/ui/Button";
+import Button, { buttonClassName } from "@/components/ui/Button";
 import ProductTable from "@/components/admin/ProductTable";
 import ProductModal from "@/components/admin/ProductModal";
 import CategoryManager from "@/components/admin/CategoryManager";
@@ -138,6 +140,9 @@ export default function AdminDashboardPage() {
               <PlusCircle className="h-4 w-4" /> Add New Product
             </Button>
           )}
+          <Link href="/admin/account" className={buttonClassName("outline", "md")}>
+            <KeyRound className="h-4 w-4" /> Account
+          </Link>
           <Button onClick={handleSignOut} variant="outline" size="md">
             <LogOut className="h-4 w-4" /> Sign Out
           </Button>
