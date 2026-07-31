@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { getAllCategories } from "@/lib/categories";
+import { categoryDraftId, markPendingDelete, newCategoryDraft } from "@/lib/drafts";
 import { cn, uniqueSlug } from "@/lib/utils";
 import type { Category } from "@/lib/types";
 import Button from "@/components/ui/Button";
@@ -31,8 +32,11 @@ export default function CategoryManager() {
 
   const load = useCallback(async () => {
     const [cats, { data: products }] = await Promise.all([
-      getAllCategories(getBrowserSupabase()),
-      getBrowserSupabase().from("products").select("category_id"),
+      getAllCategories(getBrowserSupabase(), { drafts: true }),
+      getBrowserSupabase()
+        .from("product_versions")
+        .select("category_id")
+        .in("state", ["published", "draft"]),
     ]);
 
     const tally: Record<string, number> = {};
@@ -68,18 +72,24 @@ export default function CategoryManager() {
     setBusy(null);
   };
 
+  /** Resolve the draft version for a category, then apply a patch to it. */
+  const patchDraft = async (
+    cat: Category,
+    patch: Record<string, unknown>
+  ): Promise<{ error: unknown }> => {
+    const client = getBrowserSupabase();
+    const { id: versionId, error } = await categoryDraftId(client, cat.id);
+    if (error || !versionId) {
+      return { error: { message: error ?? "Could not start a draft." } };
+    }
+    return client.from("category_versions").update(patch).eq("id", versionId);
+  };
+
   const toggleVisible = (cat: Category) =>
-    run(cat.id, async () =>
-      getBrowserSupabase()
-        .from("categories")
-        .update({ is_visible: !cat.is_visible })
-        .eq("id", cat.id)
-    );
+    run(cat.id, () => patchDraft(cat, { is_visible: !cat.is_visible }));
 
   const rename = (cat: Category, name: string) =>
-    run(cat.id, async () =>
-      getBrowserSupabase().from("categories").update({ name }).eq("id", cat.id)
-    );
+    run(cat.id, () => patchDraft(cat, { name }));
 
   /** Swap sort_order with the adjacent sibling so ordering is stable. */
   const move = (cat: Category, direction: -1 | 1) => {
@@ -89,22 +99,23 @@ export default function CategoryManager() {
     if (!swapWith) return;
 
     return run(cat.id, async () => {
-      const a = await getBrowserSupabase()
-        .from("categories")
-        .update({ sort_order: swapWith.sort_order })
-        .eq("id", cat.id);
+      const a = await patchDraft(cat, { sort_order: swapWith.sort_order });
       if (a.error) return a;
-      return getBrowserSupabase()
-        .from("categories")
-        .update({ sort_order: cat.sort_order })
-        .eq("id", swapWith.id);
+      return patchDraft(swapWith, { sort_order: cat.sort_order });
     });
   };
 
+  // Staged, not immediate: the section stays live until the next publish.
   const remove = (cat: Category) =>
     run(cat.id, async () => {
       setConfirmDelete(null);
-      return getBrowserSupabase().from("categories").delete().eq("id", cat.id);
+      const client = getBrowserSupabase();
+      const { id: versionId, error } = await categoryDraftId(client, cat.id);
+      if (error || !versionId) {
+        return { error: { message: error ?? "Could not stage this deletion." } };
+      }
+      const message = await markPendingDelete(client, "category_versions", versionId);
+      return { error: message ? { message } : null };
     });
 
   const addCategory = async (name: string, parentId: string | null) => {
@@ -118,17 +129,18 @@ export default function CategoryManager() {
       ? Math.max(...siblings.map((c) => c.sort_order)) + 1
       : 1;
 
-    await run("new", async () =>
-      getBrowserSupabase().from("categories").insert({
-        name: name.trim(),
+    await run("new", async () => {
+      // New sections start hidden AND unpublished — two independent gates, so a
+      // half-built section cannot reach the site by either route.
+      const { error } = await newCategoryDraft(
+        getBrowserSupabase(),
+        name.trim(),
         slug,
-        parent_id: parentId,
-        // New sections start hidden — nothing appears on the storefront until
-        // you have products in it and deliberately make it visible.
-        is_visible: false,
-        sort_order,
-      })
-    );
+        parentId,
+        sort_order
+      );
+      return { error: error ? { message: error } : null };
+    });
   };
 
   const handleAddParent = (e: FormEvent) => {

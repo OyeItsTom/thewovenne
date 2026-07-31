@@ -4,6 +4,8 @@ import { ChangeEvent, useEffect, useState } from "react";
 import Image from "next/image";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
+import { getAdminPosts } from "@/lib/journal";
+import { journalDraftId, markPendingDelete, newJournalDraft } from "@/lib/drafts";
 import { uploadImage } from "@/lib/storage";
 import type { JournalPost } from "@/lib/types";
 
@@ -28,12 +30,7 @@ export default function JournalManager() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () =>
-    getBrowserSupabase()
-      .from("journal_posts")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .then(({ data }) => setPosts((data as JournalPost[]) ?? []));
+  const load = () => getAdminPosts(getBrowserSupabase()).then(setPosts);
 
   useEffect(() => {
     load();
@@ -66,27 +63,49 @@ export default function JournalManager() {
       published: draft.published,
     };
 
-    const query = draft.id
-      ? getBrowserSupabase().from("journal_posts").update(row).eq("id", draft.id)
-      : getBrowserSupabase().from("journal_posts").insert(row);
+    // Writes land on the draft version; the post on the site is untouched
+    // until publish.
+    const client = getBrowserSupabase();
+    const { id: versionId, error: draftError } = draft.id
+      ? await journalDraftId(client, draft.id)
+      : await newJournalDraft(client);
 
-    const { error: err } = await query;
+    if (draftError || !versionId) {
+      return setError(draftError ?? "Could not start a draft for this post.");
+    }
+
+    const { error: err } = await client
+      .from("journal_versions")
+      .update(row)
+      .eq("id", versionId);
     if (err) return setError(err.message);
     setDraft(null);
     setError(null);
     load();
   }
 
+  // Staged: the post stays live until the next publish.
   async function remove(id: string) {
-    await getBrowserSupabase().from("journal_posts").delete().eq("id", id);
+    const client = getBrowserSupabase();
+    const { id: versionId, error } = await journalDraftId(client, id);
+    if (error || !versionId) {
+      return setError(error ?? "Could not stage this deletion.");
+    }
+    const message = await markPendingDelete(client, "journal_versions", versionId);
+    if (message) return setError(message);
     load();
   }
 
   async function togglePublished(post: JournalPost) {
-    await getBrowserSupabase()
-      .from("journal_posts")
+    const client = getBrowserSupabase();
+    const { id: versionId, error } = await journalDraftId(client, post.id);
+    if (error || !versionId) {
+      return setError(error ?? "Could not start a draft for this post.");
+    }
+    await client
+      .from("journal_versions")
       .update({ published: !post.published })
-      .eq("id", post.id);
+      .eq("id", versionId);
     load();
   }
 

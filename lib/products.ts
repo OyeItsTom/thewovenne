@@ -113,15 +113,66 @@ export async function getAdminProducts(
   const cats = await categoryMap(client);
   const { data, error } = await client
     .from("product_versions")
-    .select(PRODUCT_SELECT)
-    .eq("state", "published")
+    .select(`${PRODUCT_SELECT}, state, pending_delete`)
+    .in("state", ["published", "draft"])
     .order("created_at", { ascending: false });
 
   if (error) {
     console.error("getAdminProducts:", error.message);
     return [];
   }
-  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
+
+  // A draft supersedes the published version of the same product, so the admin
+  // always sees what it will look like once published.
+  const rows =
+    (data as unknown as (ProductVersionRow & { state: string; pending_delete: boolean })[]) ?? [];
+  const byProduct = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) {
+    const seen = byProduct.get(row.product_id);
+    if (!seen || row.state === "draft") byProduct.set(row.product_id, row);
+  }
+
+  // A product whose only draft deletes it is still live, so it stays listed —
+  // marked, not hidden. Hiding it would make the pending deletion invisible.
+  return [...byProduct.values()].map((r) => mapProduct(r, cats));
+}
+
+/** Product ids with unpublished changes — for "not yet live" markers. */
+export async function getDraftProductIds(
+  client: SupabaseClient = supabase
+): Promise<Set<string>> {
+  const { data } = await client
+    .from("product_versions")
+    .select("product_id")
+    .eq("state", "draft");
+  return new Set((data ?? []).map((r) => r.product_id as string));
+}
+
+/**
+ * The draft version's gallery, for the admin editor. Falls back to the
+ * published gallery when no draft exists yet.
+ */
+export async function getDraftProductImages(
+  productId: string,
+  client: SupabaseClient = supabase
+): Promise<string[]> {
+  const { data, error } = await client
+    .from("product_images")
+    .select("url, sort_order, product_versions!inner(product_id, state)")
+    .eq("product_versions.product_id", productId)
+    .in("product_versions.state", ["draft", "published"])
+    .order("sort_order", { ascending: true });
+
+  if (error) {
+    console.error("getDraftProductImages:", error.message);
+    return [];
+  }
+  const rows = (data ?? []) as unknown as {
+    url: string;
+    product_versions: { state: string };
+  }[];
+  const draft = rows.filter((r) => r.product_versions.state === "draft");
+  return (draft.length ? draft : rows).map((r) => r.url);
 }
 
 export async function getFeaturedProducts(limit = 4): Promise<Product[]> {
