@@ -182,7 +182,12 @@ export default function AdminDashboardPage() {
         ] as [Tab, string][]).map(([id, label]) => (
           <button
             key={id}
-            onClick={() => setTab(id)}
+            onClick={() => {
+              setTab(id);
+              // Safety net: re-read the pending count on every tab switch, so a
+              // missed callback surfaces on navigation instead of never.
+              noteEdit();
+            }}
             className={
               tab === id
                 ? "border-b-2 border-terracotta px-4 py-3 text-sm font-medium text-ink"
@@ -207,9 +212,9 @@ export default function AdminDashboardPage() {
               draftIds={draftIds}
             />
           ))}
-        {tab === "categories" && <CategoryManager />}
-        {tab === "content" && <ContentEditor />}
-        {tab === "journal" && <JournalManager />}
+        {tab === "categories" && <CategoryManager onChange={noteEdit} />}
+        {tab === "content" && <ContentEditor onChange={noteEdit} />}
+        {tab === "journal" && <JournalManager onChange={noteEdit} />}
         {tab === "activity" && <AuditLog />}
       </div>
 

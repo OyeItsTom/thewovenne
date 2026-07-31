@@ -12,7 +12,7 @@ type SaveState = "idle" | "saving" | "saved" | "error";
  * brand_story). Loads current values, merges over the built-in defaults, and
  * upserts each block by key. No code editing required to change site wording.
  */
-export default function ContentEditor() {
+export default function ContentEditor({ onChange }: { onChange?: () => void }) {
   const [content, setContent] = useState<SiteContentMap>(DEFAULT_CONTENT);
   const [loading, setLoading] = useState(true);
   const [save, setSave] = useState<Record<string, SaveState>>({});
@@ -53,7 +53,10 @@ export default function ContentEditor() {
       })
       .eq("key", key);
     setSave((s) => ({ ...s, [key]: error ? "error" : "saved" }));
-    if (!error) setTimeout(() => setSave((s) => ({ ...s, [key]: "idle" })), 2000);
+    if (!error) {
+      onChange?.();
+      setTimeout(() => setSave((s) => ({ ...s, [key]: "idle" })), 2000);
+    }
   }
 
   if (loading) return <p className="text-ink/60">Loading content…</p>;

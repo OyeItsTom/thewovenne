@@ -43,7 +43,14 @@ export default function PublishBar({ refreshKey = 0 }: { refreshKey?: number }) 
   const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const refresh = useCallback(async () => {
-    setPending(await getPendingChanges(getBrowserSupabase()));
+    const next = await getPendingChanges(getBrowserSupabase());
+    setPending(next);
+    // Once new work is waiting, the previous "Successfully published" is stale
+    // and would otherwise keep rendering in place of the pending count.
+    if (next.total > 0) {
+      setMessage(null);
+      setState((s) => (s === "published" ? "idle" : s));
+    }
   }, []);
 
   useEffect(() => {
