@@ -15,7 +15,8 @@ import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { getAllCategories } from "@/lib/categories";
-import { getProductImages } from "@/lib/products";
+import { getDraftProductImages } from "@/lib/products";
+import { newProductDraft, productDraftId } from "@/lib/drafts";
 import { uploadImage } from "@/lib/storage";
 import { slugify, uniqueSlug } from "@/lib/utils";
 import type { Category, Product } from "@/lib/types";
@@ -38,19 +39,26 @@ type FormState = typeof emptyForm;
  * Returns an error message, or null on success.
  */
 async function replaceGallery(
+  versionId: string,
   productId: string,
   urls: string[]
 ): Promise<{ error: string | null }> {
+  // Scoped to the DRAFT version, so the live gallery is untouched until publish.
   const { error: clearError } = await getBrowserSupabase()
     .from("product_images")
     .delete()
-    .eq("product_id", productId);
+    .eq("product_version_id", versionId);
   if (clearError) return { error: clearError.message };
 
   if (urls.length === 0) return { error: null };
 
   const { error: insertError } = await getBrowserSupabase().from("product_images").insert(
-    urls.map((url, i) => ({ product_id: productId, url, sort_order: i }))
+    urls.map((url, i) => ({
+      product_version_id: versionId,
+      product_id: productId,
+      url,
+      sort_order: i,
+    }))
   );
   return { error: insertError?.message ?? null };
 }
@@ -98,7 +106,7 @@ export default function ProductModal({
   const [images, setImages] = useState<string[]>([]);
 
   const loadCategories = useCallback(async () => {
-    const cats = await getAllCategories(getBrowserSupabase());
+    const cats = await getAllCategories(getBrowserSupabase(), { drafts: true });
     setCategories(cats);
     return cats;
   }, []);
@@ -121,19 +129,23 @@ export default function ProductModal({
       setParentId(current?.parent_id ?? "");
     });
 
+    // Slugs must be unique among published AND draft versions — a draft slug
+    // is claimed even though it is not live yet, or two drafts could collide at
+    // publish time.
     getBrowserSupabase()
-      .from("products")
-      .select("id, slug")
+      .from("product_versions")
+      .select("product_id, slug")
+      .in("state", ["published", "draft"])
       .then(({ data }) =>
         setTakenSlugs(
           (data ?? [])
-            .filter((p) => p.id !== product?.id) // own slug isn't a collision
+            .filter((p) => p.product_id !== product?.id) // own slug isn't a collision
             .map((p) => p.slug)
         )
       );
 
     if (product) {
-      getProductImages(product.id, getBrowserSupabase()).then((urls) =>
+      getDraftProductImages(product.id, getBrowserSupabase()).then((urls) =>
         // Fall back to the cover column if the gallery hasn't been populated,
         // so an existing product never opens looking photo-less.
         setImages(urls.length ? urls : product.image_url ? [product.image_url] : [])
@@ -247,18 +259,25 @@ export default function ProductModal({
     };
 
     setSaving(true);
-    const { data, error: saveError } = isEdit
-      ? await getBrowserSupabase()
-          .from("products")
-          .update(payload)
-          .eq("id", product!.id)
-          .select("*, categories(name, slug)")
-          .single()
-      : await getBrowserSupabase()
-          .from("products")
-          .insert({ ...payload, is_active: true })
-          .select("*, categories(name, slug)")
-          .single();
+    const client = getBrowserSupabase();
+
+    // Never write to a published version: get or fork the draft, edit that.
+    const { id: versionId, error: draftError } = isEdit
+      ? await productDraftId(client, product!.id)
+      : await newProductDraft(client);
+
+    if (draftError || !versionId) {
+      setSaving(false);
+      setError(draftError ?? "Could not start a draft for this product.");
+      return;
+    }
+
+    const { data, error: saveError } = await client
+      .from("product_versions")
+      .update(isEdit ? payload : { ...payload, is_active: true })
+      .eq("id", versionId)
+      .select("product_id, name, slug, description, price_inr, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at")
+      .single();
 
     if (saveError) {
       setSaving(false);
@@ -273,8 +292,12 @@ export default function ProductModal({
     // Rewrite the gallery wholesale: simpler than diffing, and the row count is
     // small. Runs after the product exists so a new product has an id to hang
     // the images off.
-    const savedId = (data as { id: string }).id;
-    const { error: galleryError } = await replaceGallery(savedId, images);
+    const savedProductId = (data as { product_id: string }).product_id;
+    const { error: galleryError } = await replaceGallery(
+      versionId,
+      savedProductId,
+      images
+    );
     setSaving(false);
 
     if (galleryError) {
@@ -284,16 +307,16 @@ export default function ProductModal({
       return;
     }
 
-    // Flatten the joined category the way lib/products does, so the table shows
-    // the category name immediately after saving.
-    const { categories: joined, ...rest } = data as Record<string, unknown> & {
-      categories: { name: string; slug: string } | null;
-    };
+    // Version rows carry product_id; the table wants the Product shape keyed by
+    // the stable id, with the category name resolved locally.
+    const row = data as unknown as Record<string, unknown> & { product_id: string };
+    const cat = categories.find((c) => c.id === subCategoryId);
     onSaved(
       {
-        ...(rest as unknown as Product),
-        category: joined?.name ?? null,
-        category_slug: joined?.slug ?? null,
+        ...(row as unknown as Product),
+        id: row.product_id,
+        category: cat?.name ?? null,
+        category_slug: cat?.slug ?? null,
       },
       !isEdit
     );

@@ -6,57 +6,81 @@ import { Pencil, Trash2 } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { cn, formatINR } from "@/lib/utils";
 import { getBrowserSupabase } from "@/lib/supabase";
+import { markPendingDelete, productDraftId } from "@/lib/drafts";
 import StockEditor from "./StockEditor";
+import DraftBadge from "./DraftBadge";
 
 export default function ProductTable({
   products,
   onUpdate,
   onEdit,
   onDelete,
+  draftIds,
 }: {
   products: Product[];
   onUpdate: (product: Product) => void;
   onEdit: (product: Product) => void;
   onDelete: (id: string) => void;
+  draftIds?: Set<string>;
 }) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Stock and the active toggle are edits like any other: they go to the draft
+  // and stay off the site until publish. Stock especially — see the note below
+  // the table.
   const updateProduct = async (product: Product, patch: Partial<Product>) => {
-    const { data, error: updateError } = await getBrowserSupabase()
-      .from("products")
+    setError(null);
+    const client = getBrowserSupabase();
+
+    const { id: versionId, error: draftError } = await productDraftId(
+      client,
+      product.id
+    );
+    if (draftError || !versionId) {
+      setError(draftError ?? "Could not start a draft for this product.");
+      return;
+    }
+
+    const { error: updateError } = await client
+      .from("product_versions")
       .update(patch)
-      .eq("id", product.id)
-      .select("*, categories(name, slug)")
-      .single();
+      .eq("id", versionId);
 
     if (updateError) {
       setError(updateError.message);
       return;
     }
-    const { categories: joined, ...rest } = data as Record<string, unknown> & {
-      categories: { name: string; slug: string } | null;
-    };
-    onUpdate({
-      ...(rest as unknown as Product),
-      category: joined?.name ?? null,
-      category_slug: joined?.slug ?? null,
-    });
+    // The row already reflects the draft-merged view, so patch it locally
+    // rather than re-reading.
+    onUpdate({ ...product, ...patch });
   };
 
+  // Deletion is staged like everything else: the product stays live until the
+  // next publish, so it is marked rather than removed.
   const remove = async (product: Product) => {
     setBusyId(product.id);
     setError(null);
-    const { error: deleteError } = await getBrowserSupabase()
-      .from("products")
-      .delete()
-      .eq("id", product.id);
+    const client = getBrowserSupabase();
+
+    const { id: versionId, error: draftError } = await productDraftId(
+      client,
+      product.id
+    );
+    if (draftError || !versionId) {
+      setBusyId(null);
+      setConfirmId(null);
+      setError(draftError ?? "Could not stage this deletion.");
+      return;
+    }
+
+    const markError = await markPendingDelete(client, "product_versions", versionId);
     setBusyId(null);
     setConfirmId(null);
 
-    if (deleteError) {
-      setError(deleteError.message);
+    if (markError) {
+      setError(markError);
       return;
     }
     onDelete(product.id);
@@ -108,6 +132,11 @@ export default function ProductTable({
                     </div>
                     <div className="min-w-0">
                       <span className="font-medium text-ink">{product.name}</span>
+                      {draftIds?.has(product.id) && (
+                        <span className="ml-2 align-middle">
+                          <DraftBadge />
+                        </span>
+                      )}
                       <p className="text-xs text-ink/40">/{product.slug}</p>
                     </div>
                   </div>
@@ -154,7 +183,7 @@ export default function ProductTable({
                   {confirmId === product.id ? (
                     <div className="flex items-center justify-end gap-2 text-xs">
                       <span className="text-terracotta-dark">
-                        Delete permanently?
+Delete at next publish?
                       </span>
                       <button
                         onClick={() => remove(product)}
@@ -195,9 +224,10 @@ export default function ProductTable({
         </table>
       </div>
 
-      <p className="text-xs text-ink/50">
-        Deleting a product is permanent. To take one off the site while keeping
-        its record, set it to Hidden instead.
+      <p className="max-w-prose text-xs text-ink/50">
+        Everything here is a draft until you publish — including stock. If you
+        reduce stock after an offline sale, the shop keeps showing the old
+        number until you publish, so publish stock changes promptly.
       </p>
     </div>
   );

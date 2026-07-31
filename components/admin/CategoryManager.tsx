@@ -11,11 +11,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
-import { getAllCategories } from "@/lib/categories";
+import { getAllCategories, getDraftCategoryIds } from "@/lib/categories";
+import { categoryDraftId, markPendingDelete, newCategoryDraft } from "@/lib/drafts";
 import { cn, uniqueSlug } from "@/lib/utils";
 import type { Category } from "@/lib/types";
 import Button from "@/components/ui/Button";
 import NameEditor from "./NameEditor";
+import DraftBadge from "./DraftBadge";
 
 export default function CategoryManager() {
   const [categories, setCategories] = useState<Category[] | null>(null);
@@ -23,6 +25,7 @@ export default function CategoryManager() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [draftIds, setDraftIds] = useState<Set<string>>(new Set());
   const [newParentName, setNewParentName] = useState("");
   const [newChild, setNewChild] = useState<{ parentId: string; name: string }>({
     parentId: "",
@@ -31,8 +34,11 @@ export default function CategoryManager() {
 
   const load = useCallback(async () => {
     const [cats, { data: products }] = await Promise.all([
-      getAllCategories(getBrowserSupabase()),
-      getBrowserSupabase().from("products").select("category_id"),
+      getAllCategories(getBrowserSupabase(), { drafts: true }),
+      getBrowserSupabase()
+        .from("product_versions")
+        .select("category_id")
+        .in("state", ["published", "draft"]),
     ]);
 
     const tally: Record<string, number> = {};
@@ -41,6 +47,7 @@ export default function CategoryManager() {
     }
     setCounts(tally);
     setCategories(cats);
+    setDraftIds(await getDraftCategoryIds(getBrowserSupabase()));
   }, []);
 
   useEffect(() => {
@@ -68,18 +75,24 @@ export default function CategoryManager() {
     setBusy(null);
   };
 
+  /** Resolve the draft version for a category, then apply a patch to it. */
+  const patchDraft = async (
+    cat: Category,
+    patch: Record<string, unknown>
+  ): Promise<{ error: unknown }> => {
+    const client = getBrowserSupabase();
+    const { id: versionId, error } = await categoryDraftId(client, cat.id);
+    if (error || !versionId) {
+      return { error: { message: error ?? "Could not start a draft." } };
+    }
+    return client.from("category_versions").update(patch).eq("id", versionId);
+  };
+
   const toggleVisible = (cat: Category) =>
-    run(cat.id, async () =>
-      getBrowserSupabase()
-        .from("categories")
-        .update({ is_visible: !cat.is_visible })
-        .eq("id", cat.id)
-    );
+    run(cat.id, () => patchDraft(cat, { is_visible: !cat.is_visible }));
 
   const rename = (cat: Category, name: string) =>
-    run(cat.id, async () =>
-      getBrowserSupabase().from("categories").update({ name }).eq("id", cat.id)
-    );
+    run(cat.id, () => patchDraft(cat, { name }));
 
   /** Swap sort_order with the adjacent sibling so ordering is stable. */
   const move = (cat: Category, direction: -1 | 1) => {
@@ -89,22 +102,23 @@ export default function CategoryManager() {
     if (!swapWith) return;
 
     return run(cat.id, async () => {
-      const a = await getBrowserSupabase()
-        .from("categories")
-        .update({ sort_order: swapWith.sort_order })
-        .eq("id", cat.id);
+      const a = await patchDraft(cat, { sort_order: swapWith.sort_order });
       if (a.error) return a;
-      return getBrowserSupabase()
-        .from("categories")
-        .update({ sort_order: cat.sort_order })
-        .eq("id", swapWith.id);
+      return patchDraft(swapWith, { sort_order: cat.sort_order });
     });
   };
 
+  // Staged, not immediate: the section stays live until the next publish.
   const remove = (cat: Category) =>
     run(cat.id, async () => {
       setConfirmDelete(null);
-      return getBrowserSupabase().from("categories").delete().eq("id", cat.id);
+      const client = getBrowserSupabase();
+      const { id: versionId, error } = await categoryDraftId(client, cat.id);
+      if (error || !versionId) {
+        return { error: { message: error ?? "Could not stage this deletion." } };
+      }
+      const message = await markPendingDelete(client, "category_versions", versionId);
+      return { error: message ? { message } : null };
     });
 
   const addCategory = async (name: string, parentId: string | null) => {
@@ -118,17 +132,18 @@ export default function CategoryManager() {
       ? Math.max(...siblings.map((c) => c.sort_order)) + 1
       : 1;
 
-    await run("new", async () =>
-      getBrowserSupabase().from("categories").insert({
-        name: name.trim(),
+    await run("new", async () => {
+      // New sections start hidden AND unpublished — two independent gates, so a
+      // half-built section cannot reach the site by either route.
+      const { error } = await newCategoryDraft(
+        getBrowserSupabase(),
+        name.trim(),
         slug,
-        parent_id: parentId,
-        // New sections start hidden — nothing appears on the storefront until
-        // you have products in it and deliberately make it visible.
-        is_visible: false,
-        sort_order,
-      })
-    );
+        parentId,
+        sort_order
+      );
+      return { error: error ? { message: error } : null };
+    });
   };
 
   const handleAddParent = (e: FormEvent) => {
@@ -173,6 +188,7 @@ export default function CategoryManager() {
             >
               <Row
                 cat={parent}
+                isDraft={draftIds.has(parent.id)}
                 productCount={counts[parent.id] ?? 0}
                 effectivelyVisible={parent.is_visible}
                 isParent
@@ -194,6 +210,7 @@ export default function CategoryManager() {
                   <Row
                     key={child.id}
                     cat={child}
+                    isDraft={draftIds.has(child.id)}
                     productCount={counts[child.id] ?? 0}
                     effectivelyVisible={child.is_visible && parent.is_visible}
                     parentHidden={!parent.is_visible}
@@ -258,6 +275,7 @@ export default function CategoryManager() {
 
 function Row({
   cat,
+  isDraft = false,
   productCount,
   effectivelyVisible,
   parentHidden = false,
@@ -275,6 +293,7 @@ function Row({
   onConfirmDelete,
 }: {
   cat: Category;
+  isDraft?: boolean;
   productCount: number;
   effectivelyVisible: boolean;
   parentHidden?: boolean;
@@ -304,6 +323,11 @@ function Row({
           onSave={onRename}
           className={isParent ? "font-heading text-lg" : "text-sm"}
         />
+        {isDraft && (
+          <span className="ml-2 align-middle">
+            <DraftBadge />
+          </span>
+        )}
         <p className="mt-0.5 text-xs text-ink/40">
           /{cat.slug} · {productCount} {productCount === 1 ? "product" : "products"}
           {parentHidden && cat.is_visible && " · parent hidden, so still not public"}
