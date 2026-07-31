@@ -8,17 +8,20 @@ import { cn, formatINR } from "@/lib/utils";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { markPendingDelete, productDraftId } from "@/lib/drafts";
 import StockEditor from "./StockEditor";
+import DraftBadge from "./DraftBadge";
 
 export default function ProductTable({
   products,
   onUpdate,
   onEdit,
   onDelete,
+  draftIds,
 }: {
   products: Product[];
   onUpdate: (product: Product) => void;
   onEdit: (product: Product) => void;
   onDelete: (id: string) => void;
+  draftIds?: Set<string>;
 }) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -129,6 +132,11 @@ export default function ProductTable({
                     </div>
                     <div className="min-w-0">
                       <span className="font-medium text-ink">{product.name}</span>
+                      {draftIds?.has(product.id) && (
+                        <span className="ml-2 align-middle">
+                          <DraftBadge />
+                        </span>
+                      )}
                       <p className="text-xs text-ink/40">/{product.slug}</p>
                     </div>
                   </div>

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { isCurrentUserAdmin } from "@/lib/auth";
-import { getAdminProducts } from "@/lib/products";
+import { getAdminProducts, getDraftProductIds } from "@/lib/products";
 import type { Product } from "@/lib/types";
 import Button, { buttonClassName } from "@/components/ui/Button";
 import ProductTable from "@/components/admin/ProductTable";
@@ -40,6 +40,7 @@ export default function AdminDashboardPage() {
   // Bumped whenever an edit lands, so the pending count re-reads without a
   // page refresh.
   const [publishKey, setPublishKey] = useState(0);
+  const [draftIds, setDraftIds] = useState<Set<string>>(new Set());
   const noteEdit = () => setPublishKey((k) => k + 1);
 
   useEffect(() => {
@@ -84,6 +85,7 @@ export default function AdminDashboardPage() {
   useEffect(() => {
     if (checkingAuth) return;
     getAdminProducts(getBrowserSupabase()).then(setProducts);
+    getDraftProductIds(getBrowserSupabase()).then(setDraftIds);
 
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     getBrowserSupabase()
@@ -91,7 +93,7 @@ export default function AdminDashboardPage() {
       .select("*", { count: "exact", head: true })
       .gte("created_at", weekAgo)
       .then(({ count }) => setOrdersThisWeek(count ?? 0));
-  }, [checkingAuth]);
+  }, [checkingAuth, publishKey]);
 
   const handleSignOut = async () => {
     await getBrowserSupabase().auth.signOut();
@@ -202,6 +204,7 @@ export default function AdminDashboardPage() {
               onUpdate={handleUpdate}
               onEdit={openEdit}
               onDelete={handleDelete}
+              draftIds={draftIds}
             />
           ))}
         {tab === "categories" && <CategoryManager />}

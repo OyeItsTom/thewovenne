@@ -11,12 +11,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
-import { getAllCategories } from "@/lib/categories";
+import { getAllCategories, getDraftCategoryIds } from "@/lib/categories";
 import { categoryDraftId, markPendingDelete, newCategoryDraft } from "@/lib/drafts";
 import { cn, uniqueSlug } from "@/lib/utils";
 import type { Category } from "@/lib/types";
 import Button from "@/components/ui/Button";
 import NameEditor from "./NameEditor";
+import DraftBadge from "./DraftBadge";
 
 export default function CategoryManager() {
   const [categories, setCategories] = useState<Category[] | null>(null);
@@ -24,6 +25,7 @@ export default function CategoryManager() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [draftIds, setDraftIds] = useState<Set<string>>(new Set());
   const [newParentName, setNewParentName] = useState("");
   const [newChild, setNewChild] = useState<{ parentId: string; name: string }>({
     parentId: "",
@@ -45,6 +47,7 @@ export default function CategoryManager() {
     }
     setCounts(tally);
     setCategories(cats);
+    setDraftIds(await getDraftCategoryIds(getBrowserSupabase()));
   }, []);
 
   useEffect(() => {
@@ -185,6 +188,7 @@ export default function CategoryManager() {
             >
               <Row
                 cat={parent}
+                isDraft={draftIds.has(parent.id)}
                 productCount={counts[parent.id] ?? 0}
                 effectivelyVisible={parent.is_visible}
                 isParent
@@ -206,6 +210,7 @@ export default function CategoryManager() {
                   <Row
                     key={child.id}
                     cat={child}
+                    isDraft={draftIds.has(child.id)}
                     productCount={counts[child.id] ?? 0}
                     effectivelyVisible={child.is_visible && parent.is_visible}
                     parentHidden={!parent.is_visible}
@@ -270,6 +275,7 @@ export default function CategoryManager() {
 
 function Row({
   cat,
+  isDraft = false,
   productCount,
   effectivelyVisible,
   parentHidden = false,
@@ -287,6 +293,7 @@ function Row({
   onConfirmDelete,
 }: {
   cat: Category;
+  isDraft?: boolean;
   productCount: number;
   effectivelyVisible: boolean;
   parentHidden?: boolean;
@@ -316,6 +323,11 @@ function Row({
           onSave={onRename}
           className={isParent ? "font-heading text-lg" : "text-sm"}
         />
+        {isDraft && (
+          <span className="ml-2 align-middle">
+            <DraftBadge />
+          </span>
+        )}
         <p className="mt-0.5 text-xs text-ink/40">
           /{cat.slug} · {productCount} {productCount === 1 ? "product" : "products"}
           {parentHidden && cat.is_visible && " · parent hidden, so still not public"}

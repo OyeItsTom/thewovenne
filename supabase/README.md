@@ -18,6 +18,7 @@ Ordered migrations. Run them **in number order** in the Supabase SQL editor
 | `0011_versioning_schema.sql` | Draft/published versions for products, categories, journal |
 | `0012_draft_helpers.sql` | Copy-on-write draft creation + pending count |
 | `0013_publish.sql` | `publish_all()` / `discard_drafts()` |
+| `0014_audit_versions.sql` | Moves the audit triggers onto the version tables |
 
 Every file is idempotent: `create … if not exists`, `drop policy if exists`
 before each policy, `on conflict do nothing` on every seed. Re-running any of
