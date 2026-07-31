@@ -246,6 +246,12 @@ export default function CategoryManager() {
           <Plus className="h-4 w-4" /> Add Section
         </Button>
       </form>
+
+      <p className="max-w-prose text-xs text-ink/50">
+        Sub-categories appear on the site within a minute. A brand-new
+        <em> top-level section</em> needs a deploy before its page (e.g.
+        /kids) exists — its address is baked in at build time.
+      </p>
     </div>
   );
 }

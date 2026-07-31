@@ -11,6 +11,11 @@ import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 // and /api/* are unaffected; anything else unmatched lands here and 404s.
 export const revalidate = 60;
 
+// Only slugs returned by generateStaticParams are served. Anything else 404s
+// through the app's normal not-found path instead of this route's notFound(),
+// which renders an empty server body.
+export const dynamicParams = false;
+
 export async function generateStaticParams() {
   const tree = await getVisibleCategoryTree();
   return tree.map((parent) => ({ parent: parent.slug }));
