@@ -19,7 +19,7 @@ import Button from "@/components/ui/Button";
 import NameEditor from "./NameEditor";
 import DraftBadge from "./DraftBadge";
 
-export default function CategoryManager() {
+export default function CategoryManager({ onChange }: { onChange?: () => void }) {
   const [categories, setCategories] = useState<Category[] | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +73,8 @@ export default function CategoryManager() {
     }
     await load();
     setBusy(null);
+    // Tell the dashboard an edit landed so the publish count re-reads.
+    if (!opError) onChange?.();
   };
 
   /** Resolve the draft version for a category, then apply a patch to it. */

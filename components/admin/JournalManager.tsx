@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
@@ -24,17 +24,22 @@ const slugify = (s: string) =>
   s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 /** Create / edit / delete journal posts (journal_posts), with image upload. */
-export default function JournalManager() {
+export default function JournalManager({ onChange }: { onChange?: () => void }) {
   const [posts, setPosts] = useState<JournalPost[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () => getAdminPosts(getBrowserSupabase()).then(setPosts);
+  // Every successful mutation ends in load(), so reporting the edit here
+  // covers save, delete and the published toggle without three call sites.
+  const load = useCallback(async () => {
+    setPosts(await getAdminPosts(getBrowserSupabase()));
+    onChange?.();
+  }, [onChange]);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   const handleFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
