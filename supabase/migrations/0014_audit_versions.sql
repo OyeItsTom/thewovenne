@@ -19,14 +19,17 @@ drop trigger if exists audit_journal_posts on journal_posts;
 -- site_content keeps its 0009 trigger: it has no version table, and its
 -- draft_value/value pair means the trigger already sees both edit and publish.
 
+drop trigger if exists audit_product_versions on product_versions;
 create trigger audit_product_versions
   after insert or update or delete on product_versions
   for each row execute function public.log_admin_action();
 
+drop trigger if exists audit_category_versions on category_versions;
 create trigger audit_category_versions
   after insert or update or delete on category_versions
   for each row execute function public.log_admin_action();
 
+drop trigger if exists audit_journal_versions on journal_versions;
 create trigger audit_journal_versions
   after insert or update or delete on journal_versions
   for each row execute function public.log_admin_action();
