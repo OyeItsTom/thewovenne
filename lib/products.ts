@@ -1,24 +1,63 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
-import { getVisibleCategoryIds } from "./categories";
-import type { Product } from "./types";
+import { getAllCategories, getVisibleCategoryIds } from "./categories";
+import type { Category, Product } from "./types";
 
-// Products join their category so callers get the category *name* for display
-// (product.category) alongside the relational category_id used for filtering.
-const PRODUCT_SELECT = "*, categories(name, slug)";
+// Storefront reads come from PUBLISHED versions, never the identity tables.
+// RLS only exposes state = 'published' to anon, so a mistake here cannot leak
+// draft work — the policy is the guarantee, this is just the query.
+const PRODUCT_SELECT =
+  "product_id, name, slug, description, price_inr, category_id, fabric, colour, " +
+  "stock_quantity, image_url, is_active, created_at";
 
-type ProductRow = Omit<Product, "category" | "category_slug"> & {
-  categories: { name: string; slug: string } | null;
+type ProductVersionRow = {
+  product_id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  price_inr: number;
+  category_id: string | null;
+  fabric: string | null;
+  colour: string | null;
+  stock_quantity: number;
+  image_url: string | null;
+  is_active: boolean;
+  created_at: string;
 };
 
-/** Flatten the joined categories row into product.category / category_slug. */
-function mapProduct(row: ProductRow): Product {
-  const { categories, ...rest } = row;
+/**
+ * Flatten a version row to the Product shape callers expect: the stable
+ * product id, plus the category NAME resolved from the published category
+ * versions rather than joined.
+ *
+ * Resolved from a map rather than a PostgREST embed because the name lives on
+ * category_versions, not the categories identity row — embedding would give
+ * whatever the identity table happens to hold.
+ */
+function mapProduct(row: ProductVersionRow, categories: Map<string, Category>): Product {
+  const category = row.category_id ? categories.get(row.category_id) : undefined;
   return {
-    ...rest,
-    category: categories?.name ?? null,
-    category_slug: categories?.slug ?? null,
+    id: row.product_id,
+    name: row.name,
+    slug: row.slug,
+    description: row.description,
+    price_inr: row.price_inr,
+    category_id: row.category_id,
+    fabric: row.fabric,
+    colour: row.colour,
+    stock_quantity: row.stock_quantity,
+    image_url: row.image_url,
+    is_active: row.is_active,
+    created_at: row.created_at,
+    category: category?.name ?? null,
+    category_slug: category?.slug ?? null,
   };
+}
+
+/** category id -> published category, for resolving display names. */
+async function categoryMap(client: SupabaseClient = supabase) {
+  const all = await getAllCategories(client);
+  return new Map(all.map((c) => [c.id, c]));
 }
 
 /**
@@ -46,10 +85,12 @@ export async function getProductImages(
   productId: string,
   client: SupabaseClient = supabase
 ): Promise<string[]> {
+  // Galleries hang off the version, so read the published version's images.
   const { data, error } = await client
     .from("product_images")
-    .select("url")
-    .eq("product_id", productId)
+    .select("url, product_versions!inner(product_id, state)")
+    .eq("product_versions.product_id", productId)
+    .eq("product_versions.state", "published")
     .order("sort_order", { ascending: true });
 
   if (error) {
@@ -69,25 +110,28 @@ export async function getProductImages(
 export async function getAdminProducts(
   client: SupabaseClient = supabase
 ): Promise<Product[]> {
+  const cats = await categoryMap(client);
   const { data, error } = await client
-    .from("products")
+    .from("product_versions")
     .select(PRODUCT_SELECT)
+    .eq("state", "published")
     .order("created_at", { ascending: false });
 
   if (error) {
     console.error("getAdminProducts:", error.message);
     return [];
   }
-  return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
+  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
 }
 
 export async function getFeaturedProducts(limit = 4): Promise<Product[]> {
-  const visibleIds = await scopeToVisible();
+  const [visibleIds, cats] = await Promise.all([scopeToVisible(), categoryMap()]);
   if (visibleIds.length === 0) return [];
 
   const { data, error } = await supabase
-    .from("products")
+    .from("product_versions")
     .select(PRODUCT_SELECT)
+    .eq("state", "published")
     .eq("is_active", true)
     .in("category_id", visibleIds)
     .gt("stock_quantity", 0)
@@ -98,16 +142,17 @@ export async function getFeaturedProducts(limit = 4): Promise<Product[]> {
     console.error("getFeaturedProducts:", error.message);
     return [];
   }
-  return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
+  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
 }
 
 export async function getAllProducts(): Promise<Product[]> {
-  const visibleIds = await scopeToVisible();
+  const [visibleIds, cats] = await Promise.all([scopeToVisible(), categoryMap()]);
   if (visibleIds.length === 0) return [];
 
   const { data, error } = await supabase
-    .from("products")
+    .from("product_versions")
     .select(PRODUCT_SELECT)
+    .eq("state", "published")
     .eq("is_active", true)
     .in("category_id", visibleIds)
     .order("created_at", { ascending: false });
@@ -116,7 +161,7 @@ export async function getAllProducts(): Promise<Product[]> {
     console.error("getAllProducts:", error.message);
     return [];
   }
-  return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
+  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
 }
 
 /**
@@ -128,12 +173,13 @@ export async function getProductsByCategoryIds(
 ): Promise<Product[]> {
   if (categoryIds.length === 0) return [];
 
-  const scoped = await scopeToVisible(categoryIds);
+  const [scoped, cats] = await Promise.all([scopeToVisible(categoryIds), categoryMap()]);
   if (scoped.length === 0) return [];
 
   const { data, error } = await supabase
-    .from("products")
+    .from("product_versions")
     .select(PRODUCT_SELECT)
+    .eq("state", "published")
     .eq("is_active", true)
     .in("category_id", scoped)
     .order("created_at", { ascending: false });
@@ -142,16 +188,17 @@ export async function getProductsByCategoryIds(
     console.error("getProductsByCategoryIds:", error.message);
     return [];
   }
-  return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
+  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
 }
 
 export async function getProductBySlug(slug: string): Promise<Product | null> {
-  const visibleIds = await scopeToVisible();
+  const [visibleIds, cats] = await Promise.all([scopeToVisible(), categoryMap()]);
   if (visibleIds.length === 0) return null;
 
   const { data, error } = await supabase
-    .from("products")
+    .from("product_versions")
     .select(PRODUCT_SELECT)
+    .eq("state", "published")
     .eq("slug", slug)
     .eq("is_active", true)
     .in("category_id", visibleIds)
@@ -161,7 +208,7 @@ export async function getProductBySlug(slug: string): Promise<Product | null> {
     console.error("getProductBySlug:", error.message);
     return null;
   }
-  return data ? mapProduct(data as ProductRow) : null;
+  return data ? mapProduct(data as unknown as ProductVersionRow, cats) : null;
 }
 
 export async function getRelatedProducts(
@@ -171,12 +218,13 @@ export async function getRelatedProducts(
 ): Promise<Product[]> {
   if (!categoryId) return [];
 
-  const scoped = await scopeToVisible([categoryId]);
+  const [scoped, cats] = await Promise.all([scopeToVisible([categoryId]), categoryMap()]);
   if (scoped.length === 0) return [];
 
   const { data, error } = await supabase
-    .from("products")
+    .from("product_versions")
     .select(PRODUCT_SELECT)
+    .eq("state", "published")
     .eq("is_active", true)
     .eq("category_id", categoryId)
     .neq("slug", excludeSlug)
@@ -186,5 +234,5 @@ export async function getRelatedProducts(
     console.error("getRelatedProducts:", error.message);
     return [];
   }
-  return (data as ProductRow[] | null)?.map(mapProduct) ?? [];
+  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
 }
