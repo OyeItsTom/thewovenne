@@ -41,19 +41,43 @@ function mapCategoryVersion(row: CategoryVersionRow): Category {
  * missing.
  */
 export async function getAllCategories(
-  client: SupabaseClient = supabase
+  client: SupabaseClient = supabase,
+  { drafts = false }: { drafts?: boolean } = {}
 ): Promise<Category[]> {
   const { data, error } = await client
     .from("category_versions")
-    .select("category_id, name, slug, parent_id, is_visible, sort_order, created_at")
-    .eq("state", "published")
+    .select("category_id, state, name, slug, parent_id, is_visible, sort_order, created_at")
+    .in("state", drafts ? ["published", "draft"] : ["published"])
     .order("sort_order", { ascending: true });
 
   if (error) {
     console.error("getAllCategories:", error.message);
     return [];
   }
-  return ((data as CategoryVersionRow[] | null) ?? []).map(mapCategoryVersion);
+
+  const rows = (data as (CategoryVersionRow & { state: string })[] | null) ?? [];
+  if (!drafts) return rows.map(mapCategoryVersion);
+
+  // Admin view: a draft supersedes the published version of the same category.
+  const byCategory = new Map<string, CategoryVersionRow & { state: string }>();
+  for (const row of rows) {
+    const seen = byCategory.get(row.category_id);
+    if (!seen || row.state === "draft") byCategory.set(row.category_id, row);
+  }
+  return [...byCategory.values()]
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map(mapCategoryVersion);
+}
+
+/** Category ids with unpublished changes — for "not yet live" markers. */
+export async function getDraftCategoryIds(
+  client: SupabaseClient = supabase
+): Promise<Set<string>> {
+  const { data } = await client
+    .from("category_versions")
+    .select("category_id")
+    .eq("state", "draft");
+  return new Set((data ?? []).map((r) => r.category_id as string));
 }
 
 /**
@@ -116,8 +140,9 @@ export async function getNavCategoryTree(): Promise<CategoryNode[]> {
   if (tree.length === 0) return [];
 
   const { data, error } = await supabase
-    .from("products")
+    .from("product_versions")
     .select("category_id")
+    .eq("state", "published")
     .eq("is_active", true);
 
   // Fail closed: if we can't confirm a section has products, don't advertise it.

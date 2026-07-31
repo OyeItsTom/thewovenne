@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { supabase, createServiceClient } from "./supabase";
-import { getVisibleCategoryIds } from "./categories";
+import { getAllCategories, getVisibleCategoryIds } from "./categories";
 
 // Current Sonnet — strong English + Malayalam, Sonnet-tier latency/cost.
 // (The brief's "claude-sonnet-4-6" is the previous generation; this is current.)
@@ -20,18 +20,24 @@ async function getProductContext(): Promise<string> {
   const visibleIds = await getVisibleCategoryIds();
   if (visibleIds.length === 0) return "No product data available right now.";
 
+  // Published versions only — the concierge must describe the live shop, not
+  // whatever is sitting in drafts.
   const { data, error } = await supabase
-    .from("products")
-    .select("name, price_inr, categories(name), fabric, colour, stock_quantity")
+    .from("product_versions")
+    .select("name, price_inr, category_id, fabric, colour, stock_quantity")
+    .eq("state", "published")
     .eq("is_active", true)
     .in("category_id", visibleIds);
 
   if (error || !data?.length) return "No product data available right now.";
 
+  const categoryNames = new Map(
+    (await getAllCategories()).map((c) => [c.id, c.name])
+  );
+
   return data
     .map((p) => {
-      const category =
-        (p.categories as unknown as { name: string } | null)?.name ?? "—";
+      const category = categoryNames.get(p.category_id as string) ?? "—";
       return `- ${p.name} — ₹${Number(p.price_inr).toLocaleString("en-IN")} · ${category} · ${p.fabric ?? "—"} · ${p.colour ?? "—"} · ${p.stock_quantity > 0 ? "in stock" : "out of stock"}`;
     })
     .join("\n");
