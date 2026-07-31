@@ -16,11 +16,6 @@ export default function ContentEditor() {
   const [content, setContent] = useState<SiteContentMap>(DEFAULT_CONTENT);
   const [loading, setLoading] = useState(true);
   const [save, setSave] = useState<Record<string, SaveState>>({});
-  const [pending, setPending] = useState(false);
-  const [publishState, setPublishState] = useState<
-    "idle" | "publishing" | "published" | "error"
-  >("idle");
-  const [publishError, setPublishError] = useState<string | null>(null);
 
   useEffect(() => {
     getBrowserSupabase()
@@ -35,12 +30,6 @@ export default function ContentEditor() {
             r.draft_value ?? r.value,
           ])
         );
-        setPending(
-          (data ?? []).some(
-            (r: { draft_value: unknown; value: unknown }) =>
-              JSON.stringify(r.draft_value) !== JSON.stringify(r.value)
-          )
-        );
         setContent({
           home_hero: { ...DEFAULT_CONTENT.home_hero, ...((rows.get("home_hero") as object) ?? {}) },
           why_linen: { ...DEFAULT_CONTENT.why_linen, ...((rows.get("why_linen") as object) ?? {}) },
@@ -52,36 +41,19 @@ export default function ContentEditor() {
 
   async function saveBlock<K extends keyof SiteContentMap>(key: K) {
     setSave((s) => ({ ...s, [key]: "saving" }));
+    // Writes the DRAFT only. Setting `value` here would put homepage copy live
+    // the moment it saved, which is exactly what this system exists to prevent.
+    // The three blocks are seeded by migration 0007, so a row always exists to
+    // update — nothing here creates new keys.
     const { error } = await getBrowserSupabase()
       .from("site_content")
-      .upsert(
-        {
-          key,
-          draft_value: content[key],
-          // A brand-new block needs a published value too, or the storefront
-          // has nothing to read until the first publish.
-          value: content[key],
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "key" }
-      );
+      .update({
+        draft_value: content[key],
+        updated_at: new Date().toISOString(),
+      })
+      .eq("key", key);
     setSave((s) => ({ ...s, [key]: error ? "error" : "saved" }));
-    if (!error) setPending(true);
     if (!error) setTimeout(() => setSave((s) => ({ ...s, [key]: "idle" })), 2000);
-  }
-
-  async function publish() {
-    setPublishState("publishing");
-    setPublishError(null);
-    const { error } = await getBrowserSupabase().rpc("publish_site_content");
-    if (error) {
-      setPublishState("error");
-      setPublishError(error.message);
-      return;
-    }
-    setPending(false);
-    setPublishState("published");
-    setTimeout(() => setPublishState("idle"), 5000);
   }
 
   if (loading) return <p className="text-ink/60">Loading content…</p>;
@@ -92,12 +64,6 @@ export default function ContentEditor() {
 
   return (
     <div className="space-y-8">
-      <PublishBar
-        pending={pending}
-        state={publishState}
-        error={publishError}
-        onPublish={publish}
-      />
 
       {/* Hero */}
       <Block title="Homepage hero" onSave={() => saveBlock("home_hero")} state={save.home_hero}>
@@ -195,54 +161,3 @@ function Text({
   );
 }
 
-/**
- * Sits above the blocks so the state of the site is visible before you start
- * editing: whether anything is waiting to go live, and one button to send it.
- */
-function PublishBar({
-  pending,
-  state,
-  error,
-  onPublish,
-}: {
-  pending: boolean;
-  state: "idle" | "publishing" | "published" | "error";
-  error: string | null;
-  onPublish: () => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-ink/10 bg-linen/50 px-5 py-4">
-      <div className="text-sm">
-        {state === "published" ? (
-          <span className="font-medium text-ink">
-            Successfully published — the homepage is live with your changes.
-          </span>
-        ) : pending ? (
-          <>
-            <span className="font-medium text-ink">Unpublished changes</span>
-            <span className="text-ink/60">
-              {" "}
-              — saved here, not yet visible on the site.
-            </span>
-          </>
-        ) : (
-          <span className="text-ink/60">
-            Everything here is live. Saving edits keeps them as drafts until you
-            publish.
-          </span>
-        )}
-        {state === "error" && error && (
-          <p className="mt-1 text-terracotta-dark">{error}</p>
-        )}
-      </div>
-
-      <button
-        onClick={onPublish}
-        disabled={!pending || state === "publishing"}
-        className="rounded-full bg-ink px-6 py-2.5 text-sm font-medium text-cream transition-colors hover:bg-ink-light disabled:opacity-40"
-      >
-        {state === "publishing" ? "Publishing…" : "Publish to site"}
-      </button>
-    </div>
-  );
-}

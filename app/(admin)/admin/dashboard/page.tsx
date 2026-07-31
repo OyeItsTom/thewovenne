@@ -20,6 +20,7 @@ import Button, { buttonClassName } from "@/components/ui/Button";
 import ProductTable from "@/components/admin/ProductTable";
 import ProductModal from "@/components/admin/ProductModal";
 import AuditLog from "@/components/admin/AuditLog";
+import PublishBar from "@/components/admin/PublishBar";
 import CategoryManager from "@/components/admin/CategoryManager";
 import ContentEditor from "@/components/admin/ContentEditor";
 import JournalManager from "@/components/admin/JournalManager";
@@ -36,6 +37,10 @@ export default function AdminDashboardPage() {
   // null while adding; a product while editing that product.
   const [editing, setEditing] = useState<Product | null>(null);
   const [tab, setTab] = useState<Tab>("products");
+  // Bumped whenever an edit lands, so the pending count re-reads without a
+  // page refresh.
+  const [publishKey, setPublishKey] = useState(0);
+  const noteEdit = () => setPublishKey((k) => k + 1);
 
   useEffect(() => {
     let active = true;
@@ -93,19 +98,25 @@ export default function AdminDashboardPage() {
     router.replace("/admin/login");
   };
 
-  const handleUpdate = (updated: Product) =>
+  const handleUpdate = (updated: Product) => {
+    noteEdit();
     setProducts((prev) =>
       prev ? prev.map((p) => (p.id === updated.id ? updated : p)) : prev
     );
+  };
 
-  const handleSaved = (saved: Product, isNew: boolean) =>
-    setProducts((prev) => {
+  const handleSaved = (saved: Product, isNew: boolean) => {
+    noteEdit();
+    return setProducts((prev) => {
       if (!prev) return [saved];
       return isNew ? [saved, ...prev] : prev.map((p) => (p.id === saved.id ? saved : p));
     });
+  };
 
-  const handleDelete = (id: string) =>
+  const handleDelete = (id: string) => {
+    noteEdit();
     setProducts((prev) => (prev ? prev.filter((p) => p.id !== id) : prev));
+  };
 
   const openAdd = () => {
     setEditing(null);
@@ -151,6 +162,11 @@ export default function AdminDashboardPage() {
         <StatCard icon={Boxes} label="Units in Stock" value={inStock} />
         <StatCard icon={AlertTriangle} label="Low Stock (≤ 5)" value={lowStock} />
         <StatCard icon={ShoppingBag} label="Orders This Week" value={ordersThisWeek} />
+      </div>
+
+      {/* Pending changes span every tab, so this sits above all of them. */}
+      <div className="mt-8">
+        <PublishBar refreshKey={publishKey} />
       </div>
 
       {/* Tabs */}
