@@ -8,6 +8,7 @@ import { Plus } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
+import { productHref } from "@/lib/urls";
 import { fadeUp } from "@/lib/motion";
 import { useCartStore } from "@/lib/store";
 import Badge from "@/components/ui/Badge";
@@ -45,7 +46,7 @@ export default function ProductCard({ product }: { product: Product }) {
       viewport={{ once: true, margin: "-50px" }}
       className="group"
     >
-      <Link href={`/product/${product.slug}`} className="block">
+      <Link href={productHref(product)} className="block">
         <div className="relative aspect-[4/5] overflow-hidden rounded-xl bg-linen">
           {product.image_url && (
             <Image

@@ -119,6 +119,19 @@ export default function ProductModal({
 
   // Shows the admin the actual outcome before saving, using the same function
   // the storefront renders with, so the preview cannot disagree with the site.
+  // Shows the real address the product will live at, built the same way the
+  // storefront builds its links.
+  const previewPath = (() => {
+    const child = categories.find((c) => c.id === subCategoryId);
+    const parent = child?.parent_id
+      ? categories.find((c) => c.id === child.parent_id)
+      : null;
+    const slug = form.slug || "…";
+    return parent && child
+      ? `/${parent.slug}/${child.slug}/${slug}`
+      : `/product/${slug}`;
+  })();
+
   const discountPreview = (() => {
     const base = Number(form.price_inr);
     const value = Number(form.discount_value);
@@ -405,14 +418,14 @@ export default function ProductModal({
               onChange={updateSlug}
             />
             <p className="mt-1 text-xs text-ink/50">
-              /product/{form.slug || "…"}
+              {previewPath}
               {!isEdit &&
                 " — filled in from the name; edit if you want something different."}
             </p>
             {slugChanged && (
-              <p className="mt-1 text-xs text-terracotta-dark">
-                Changing this breaks /product/{product!.slug} for anyone who
-                saved or shared it.
+              <p className="mt-1 text-xs text-ink/60">
+                The old address keeps working — it will redirect here
+                automatically, so anything already shared or saved is safe.
               </p>
             )}
           </div>

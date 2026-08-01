@@ -83,6 +83,9 @@ function mapProduct(row: ProductVersionRow, categories: Map<string, Category>): 
     created_at: row.created_at,
     category: category?.name ?? null,
     category_slug: category?.slug ?? null,
+    category_parent_slug:
+      (category?.parent_id ? categories.get(category.parent_id)?.slug : null) ??
+      null,
     collection: row.collection,
     discount_type: row.discount_type,
     discount_value: row.discount_value,
