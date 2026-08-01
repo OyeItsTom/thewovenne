@@ -4,7 +4,7 @@ import { buttonClassName } from "@/components/ui/Button";
 
 /**
  * Shared 404 body. Two boundaries need it: the storefront group's not-found
- * (which most misses reach, via the /[parent] catch-all) and the root
+ * (which most misses reach, via the /[slug] catch-all) and the root
  * not-found (which catches multi-segment paths that match no segment at all).
  */
 export default function NotFoundContent() {

@@ -1,15 +1,17 @@
 import type { MetadataRoute } from "next";
 import { getAllProducts } from "@/lib/products";
 import { getPublishedPosts } from "@/lib/journal";
+import { getPublishedPages } from "@/lib/pages";
 
 const base = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
 export const revalidate = 3600;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const [products, posts] = await Promise.all([
+  const [products, posts, pages] = await Promise.all([
     getAllProducts(),
     getPublishedPosts(),
+    getPublishedPages(),
   ]);
 
   const staticRoutes: MetadataRoute.Sitemap = [
@@ -38,5 +40,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.4,
   }));
 
-  return [...staticRoutes, ...productRoutes, ...journalRoutes];
+  // Content pages are real URLs and belong in the sitemap like anything else.
+  const pageRoutes: MetadataRoute.Sitemap = pages.map((page) => ({
+    url: `${base}/${page.slug}`,
+    lastModified: new Date(),
+    changeFrequency: "monthly",
+    priority: 0.5,
+  }));
+
+  return [...staticRoutes, ...pageRoutes, ...productRoutes, ...journalRoutes];
 }

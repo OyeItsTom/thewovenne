@@ -74,13 +74,39 @@ export async function newJournalDraft(
   return { id: (data as string) ?? null, error: error?.message ?? null };
 }
 
+export async function pageDraftId(
+  client: SupabaseClient,
+  pageId: string
+): Promise<{ id: string | null; error: string | null }> {
+  const { data, error } = await client.rpc("ensure_page_draft", {
+    p_page_id: pageId,
+  });
+  return { id: (data as string) ?? null, error: error?.message ?? null };
+}
+
+export async function newPageDraft(
+  client: SupabaseClient,
+  title: string,
+  slug: string
+): Promise<{ id: string | null; error: string | null }> {
+  const { data, error } = await client.rpc("create_page_draft", {
+    p_title: title,
+    p_slug: slug,
+  });
+  return { id: (data as string) ?? null, error: error?.message ?? null };
+}
+
 /**
  * Mark an entity for deletion at the next publish. It stays live until then,
  * which is what "nothing changes until I publish" has to mean for deletes.
  */
 export async function markPendingDelete(
   client: SupabaseClient,
-  table: "product_versions" | "category_versions" | "journal_versions",
+  table:
+    | "product_versions"
+    | "category_versions"
+    | "journal_versions"
+    | "site_page_versions",
   draftVersionId: string
 ): Promise<string | null> {
   const { error } = await client
@@ -95,6 +121,7 @@ export interface PendingChanges {
   categories: number;
   journal: number;
   content: number;
+  pages: number;
   total: number;
 }
 
@@ -108,11 +135,15 @@ export async function getPendingChanges(
     | undefined;
 
   if (error || !row) {
-    return { products: 0, categories: 0, journal: 0, content: 0, total: 0 };
+    return { products: 0, categories: 0, journal: 0, content: 0, pages: 0, total: 0 };
   }
   return {
     ...row,
-    total: row.products + row.categories + row.journal + row.content,
+    // pages is absent until migration 0015 runs; treat it as zero rather than
+    // letting NaN propagate into the count.
+    pages: row.pages ?? 0,
+    total:
+      row.products + row.categories + row.journal + row.content + (row.pages ?? 0),
   };
 }
 

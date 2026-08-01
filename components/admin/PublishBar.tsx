@@ -17,6 +17,7 @@ const LABELS: [keyof PendingChanges, string, string][] = [
   ["categories", "category", "categories"],
   ["journal", "journal post", "journal posts"],
   ["content", "content block", "content blocks"],
+  ["pages", "page", "pages"],
 ];
 
 function summarise(p: PendingChanges): string {
