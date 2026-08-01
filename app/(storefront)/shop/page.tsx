@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { getAllProducts } from "@/lib/products";
-import { getVisibleCategoryTree } from "@/lib/categories";
+import { getAllProducts } from "@/lib/storefront";
+import { getVisibleCategoryTree } from "@/lib/storefront";
 import ShopFilters from "@/components/shop/ShopFilters";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 

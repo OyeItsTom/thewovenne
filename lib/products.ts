@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import { getAllCategories, getVisibleCategoryIds } from "./categories";
+import { ANON_CTX, preferDraft, statesFor, type ReadCtx } from "./readCtx";
 import type { Category, Product } from "./types";
 
 // Storefront reads come from PUBLISHED versions, never the identity tables.
@@ -10,6 +11,31 @@ const PRODUCT_SELECT =
   "product_id, name, slug, description, price_inr, category_id, fabric, colour, " +
   "stock_quantity, image_url, is_active, created_at, collection, " +
   "discount_type, discount_value, discount_starts_at, discount_ends_at";
+
+/**
+ * Base query for every storefront listing.
+ *
+ * In preview it also pulls draft rows (and the columns needed to collapse
+ * them), so an admin sees the site as publishing would leave it. Normally it is
+ * exactly the published-only query it always was.
+ */
+function storefrontQuery(ctx: ReadCtx) {
+  return ctx.client
+    .from("product_versions")
+    .select(
+      ctx.preview ? `${PRODUCT_SELECT}, state, pending_delete` : PRODUCT_SELECT
+    )
+    .in("state", statesFor(ctx));
+}
+
+/** Collapse to one row per product and map. A no-op outside preview. */
+function finish(data: unknown, cats: Map<string, Category>): Product[] {
+  const rows = (data as (ProductVersionRow & {
+    state?: string;
+    pending_delete?: boolean;
+  })[] | null) ?? [];
+  return preferDraft(rows, (r) => r.product_id).map((r) => mapProduct(r, cats));
+}
 
 type ProductVersionRow = {
   product_id: string;
@@ -66,8 +92,8 @@ function mapProduct(row: ProductVersionRow, categories: Map<string, Category>): 
 }
 
 /** category id -> published category, for resolving display names. */
-async function categoryMap(client: SupabaseClient = supabase) {
-  const all = await getAllCategories(client);
+async function categoryMap(client?: SupabaseClient, ctx?: ReadCtx) {
+  const all = await getAllCategories(client, { drafts: ctx?.preview });
   return new Map(all.map((c) => [c.id, c]));
 }
 
@@ -79,8 +105,11 @@ async function categoryMap(client: SupabaseClient = supabase) {
  * product has not been placed anywhere, so it stays off the storefront until
  * it is filed. Admin queries don't go through this module and are unaffected.
  */
-async function scopeToVisible(categoryIds?: string[]): Promise<string[]> {
-  const visible = await getVisibleCategoryIds();
+async function scopeToVisible(
+  categoryIds: string[] | undefined,
+  ctx: ReadCtx
+): Promise<string[]> {
+  const visible = await getVisibleCategoryIds(ctx);
   if (!categoryIds) return visible;
 
   const allowed = new Set(visible);
@@ -186,14 +215,14 @@ export async function getDraftProductImages(
   return (draft.length ? draft : rows).map((r) => r.url);
 }
 
-export async function getFeaturedProducts(limit = 4): Promise<Product[]> {
-  const [visibleIds, cats] = await Promise.all([scopeToVisible(), categoryMap()]);
+export async function getFeaturedProducts(
+  limit = 4,
+  ctx: ReadCtx = ANON_CTX
+): Promise<Product[]> {
+  const [visibleIds, cats] = await Promise.all([scopeToVisible(undefined, ctx), categoryMap(ctx.client, ctx)]);
   if (visibleIds.length === 0) return [];
 
-  const { data, error } = await supabase
-    .from("product_versions")
-    .select(PRODUCT_SELECT)
-    .eq("state", "published")
+  const { data, error } = await storefrontQuery(ctx)
     .eq("is_active", true)
     .in("category_id", visibleIds)
     .gt("stock_quantity", 0)
@@ -204,17 +233,14 @@ export async function getFeaturedProducts(limit = 4): Promise<Product[]> {
     console.error("getFeaturedProducts:", error.message);
     return [];
   }
-  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
+  return finish(data, cats);
 }
 
-export async function getAllProducts(): Promise<Product[]> {
-  const [visibleIds, cats] = await Promise.all([scopeToVisible(), categoryMap()]);
+export async function getAllProducts(ctx: ReadCtx = ANON_CTX): Promise<Product[]> {
+  const [visibleIds, cats] = await Promise.all([scopeToVisible(undefined, ctx), categoryMap(ctx.client, ctx)]);
   if (visibleIds.length === 0) return [];
 
-  const { data, error } = await supabase
-    .from("product_versions")
-    .select(PRODUCT_SELECT)
-    .eq("state", "published")
+  const { data, error } = await storefrontQuery(ctx)
     .eq("is_active", true)
     .in("category_id", visibleIds)
     .order("created_at", { ascending: false });
@@ -223,7 +249,7 @@ export async function getAllProducts(): Promise<Product[]> {
     console.error("getAllProducts:", error.message);
     return [];
   }
-  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
+  return finish(data, cats);
 }
 
 /**
@@ -234,15 +260,13 @@ export async function getAllProducts(): Promise<Product[]> {
  * visibility rules.
  */
 export async function getProductsByCollection(
-  collection: string
+  collection: string,
+  ctx: ReadCtx = ANON_CTX
 ): Promise<Product[]> {
-  const [visibleIds, cats] = await Promise.all([scopeToVisible(), categoryMap()]);
+  const [visibleIds, cats] = await Promise.all([scopeToVisible(undefined, ctx), categoryMap(ctx.client, ctx)]);
   if (visibleIds.length === 0) return [];
 
-  const { data, error } = await supabase
-    .from("product_versions")
-    .select(PRODUCT_SELECT)
-    .eq("state", "published")
+  const { data, error } = await storefrontQuery(ctx)
     .eq("is_active", true)
     .eq("collection", collection)
     .in("category_id", visibleIds)
@@ -252,10 +276,14 @@ export async function getProductsByCollection(
     console.error("getProductsByCollection:", error.message);
     return [];
   }
-  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
+  return finish(data, cats);
 }
 
-/** Distinct published collection slugs, for generateStaticParams. */
+/**
+ * Distinct published collection slugs, for generateStaticParams. Deliberately
+ * published-only: this runs at build time, where preview does not apply, and a
+ * draft collection reaches its page through dynamicParams anyway.
+ */
 export async function getCollectionSlugs(): Promise<string[]> {
   const { data, error } = await supabase
     .from("product_versions")
@@ -282,17 +310,15 @@ export async function getCollectionSlugs(): Promise<string[]> {
  * landing pages, which pass in their visible sub-category ids.
  */
 export async function getProductsByCategoryIds(
-  categoryIds: string[]
+  categoryIds: string[],
+  ctx: ReadCtx = ANON_CTX
 ): Promise<Product[]> {
   if (categoryIds.length === 0) return [];
 
-  const [scoped, cats] = await Promise.all([scopeToVisible(categoryIds), categoryMap()]);
+  const [scoped, cats] = await Promise.all([scopeToVisible(categoryIds, ctx), categoryMap(ctx.client, ctx)]);
   if (scoped.length === 0) return [];
 
-  const { data, error } = await supabase
-    .from("product_versions")
-    .select(PRODUCT_SELECT)
-    .eq("state", "published")
+  const { data, error } = await storefrontQuery(ctx)
     .eq("is_active", true)
     .in("category_id", scoped)
     .order("created_at", { ascending: false });
@@ -301,43 +327,42 @@ export async function getProductsByCategoryIds(
     console.error("getProductsByCategoryIds:", error.message);
     return [];
   }
-  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
+  return finish(data, cats);
 }
 
-export async function getProductBySlug(slug: string): Promise<Product | null> {
-  const [visibleIds, cats] = await Promise.all([scopeToVisible(), categoryMap()]);
+export async function getProductBySlug(
+  slug: string,
+  ctx: ReadCtx = ANON_CTX
+): Promise<Product | null> {
+  const [visibleIds, cats] = await Promise.all([scopeToVisible(undefined, ctx), categoryMap(ctx.client, ctx)]);
   if (visibleIds.length === 0) return null;
 
-  const { data, error } = await supabase
-    .from("product_versions")
-    .select(PRODUCT_SELECT)
-    .eq("state", "published")
+  const { data, error } = await storefrontQuery(ctx)
     .eq("slug", slug)
     .eq("is_active", true)
-    .in("category_id", visibleIds)
-    .maybeSingle();
+    .in("category_id", visibleIds);
 
   if (error) {
     console.error("getProductBySlug:", error.message);
     return null;
   }
-  return data ? mapProduct(data as unknown as ProductVersionRow, cats) : null;
+  // Not maybeSingle(): in preview a product with a draft matches twice, and
+  // maybeSingle errors on more than one row.
+  return finish(data, cats)[0] ?? null;
 }
 
 export async function getRelatedProducts(
   categoryId: string | null,
   excludeSlug: string,
-  limit = 4
+  limit = 4,
+  ctx: ReadCtx = ANON_CTX
 ): Promise<Product[]> {
   if (!categoryId) return [];
 
-  const [scoped, cats] = await Promise.all([scopeToVisible([categoryId]), categoryMap()]);
+  const [scoped, cats] = await Promise.all([scopeToVisible([categoryId], ctx), categoryMap(ctx.client, ctx)]);
   if (scoped.length === 0) return [];
 
-  const { data, error } = await supabase
-    .from("product_versions")
-    .select(PRODUCT_SELECT)
-    .eq("state", "published")
+  const { data, error } = await storefrontQuery(ctx)
     .eq("is_active", true)
     .eq("category_id", categoryId)
     .neq("slug", excludeSlug)
@@ -347,5 +372,5 @@ export async function getRelatedProducts(
     console.error("getRelatedProducts:", error.message);
     return [];
   }
-  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
+  return finish(data, cats);
 }

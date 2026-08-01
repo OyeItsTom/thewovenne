@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import type { JournalPost } from "./types";
+import { ANON_CTX, preferDraft, statesFor, type ReadCtx } from "./readCtx";
 
 /**
  * Journal reads come from PUBLISHED versions. Two different "published" are in
@@ -34,11 +35,14 @@ function mapPost(row: JournalVersionRow): JournalPost {
 }
 
 /** Published journal posts, newest first. Public read. */
-export async function getPublishedPosts(): Promise<JournalPost[]> {
-  const { data, error } = await supabase
+export async function getPublishedPosts(
+  ctx: ReadCtx = ANON_CTX
+): Promise<JournalPost[]> {
+  const preview = ctx.preview;
+  const { data, error } = await ctx.client
     .from("journal_versions")
-    .select(JOURNAL_SELECT)
-    .eq("state", "published")
+    .select(preview ? `${JOURNAL_SELECT}, state, pending_delete` : JOURNAL_SELECT)
+    .in("state", statesFor(ctx))
     .eq("published", true)
     .order("created_at", { ascending: false });
 
@@ -46,24 +50,37 @@ export async function getPublishedPosts(): Promise<JournalPost[]> {
     console.error("getPublishedPosts:", error.message);
     return [];
   }
-  return ((data as unknown as JournalVersionRow[] | null) ?? []).map(mapPost);
+  const rows = (data as unknown as (JournalVersionRow & {
+    state?: string;
+    pending_delete?: boolean;
+  })[] | null) ?? [];
+  return preferDraft(rows, (r) => r.journal_id).map(mapPost);
 }
 
 /** A single published post by slug. */
-export async function getPostBySlug(slug: string): Promise<JournalPost | null> {
-  const { data, error } = await supabase
+export async function getPostBySlug(
+  slug: string,
+  ctx: ReadCtx = ANON_CTX
+): Promise<JournalPost | null> {
+  const preview = ctx.preview;
+  const { data, error } = await ctx.client
     .from("journal_versions")
-    .select(JOURNAL_SELECT)
-    .eq("state", "published")
+    .select(preview ? `${JOURNAL_SELECT}, state, pending_delete` : JOURNAL_SELECT)
+    .in("state", statesFor(ctx))
     .eq("slug", slug)
-    .eq("published", true)
-    .maybeSingle();
+    .eq("published", true);
 
   if (error) {
     console.error("getPostBySlug:", error.message);
     return null;
   }
-  return data ? mapPost(data as unknown as JournalVersionRow) : null;
+  // Not maybeSingle(): in preview a post with a draft matches twice.
+  const rows = (data as unknown as (JournalVersionRow & {
+    state?: string;
+    pending_delete?: boolean;
+  })[] | null) ?? [];
+  const one = preferDraft(rows, (r) => r.journal_id)[0];
+  return one ? mapPost(one) : null;
 }
 
 /**

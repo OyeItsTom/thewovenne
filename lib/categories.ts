@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import type { Category, CategoryNode } from "./types";
+import { ANON_CTX, statesFor, type ReadCtx } from "./readCtx";
 
 /** A category_versions row, flattened to the Category shape callers expect. */
 type CategoryVersionRow = {
@@ -41,13 +42,18 @@ function mapCategoryVersion(row: CategoryVersionRow): Category {
  * missing.
  */
 export async function getAllCategories(
-  client: SupabaseClient = supabase,
-  { drafts = false }: { drafts?: boolean } = {}
+  client?: SupabaseClient,
+  { drafts }: { drafts?: boolean } = {}
 ): Promise<Category[]> {
-  const { data, error } = await client
+  // Storefront callers pass nothing, so preview flows through here without
+  // every page having to know about it. Admin screens pass both explicitly and
+  // are unaffected.
+  const read = client ?? supabase;
+  const withDrafts = drafts ?? false;
+  const { data, error } = await read
     .from("category_versions")
     .select("category_id, state, name, slug, parent_id, is_visible, sort_order, created_at")
-    .in("state", drafts ? ["published", "draft"] : ["published"])
+    .in("state", withDrafts ? ["published", "draft"] : ["published"])
     .order("sort_order", { ascending: true });
 
   if (error) {
@@ -56,7 +62,7 @@ export async function getAllCategories(
   }
 
   const rows = (data as (CategoryVersionRow & { state: string })[] | null) ?? [];
-  if (!drafts) return rows.map(mapCategoryVersion);
+  if (!withDrafts) return rows.map(mapCategoryVersion);
 
   // Admin view: a draft supersedes the published version of the same category.
   const byCategory = new Map<string, CategoryVersionRow & { state: string }>();
@@ -89,8 +95,10 @@ export async function getDraftCategoryIds(
  *  - Within a visible parent, only visible children are included.
  *  - Parents with no visible children are dropped (no empty sections).
  */
-export async function getVisibleCategoryTree(): Promise<CategoryNode[]> {
-  const all = await getAllCategories();
+export async function getVisibleCategoryTree(
+  ctx: ReadCtx = ANON_CTX
+): Promise<CategoryNode[]> {
+  const all = await getAllCategories(ctx.client, { drafts: ctx.preview });
 
   return all
     .filter((c) => c.parent_id === null && c.is_visible)
@@ -110,8 +118,10 @@ export async function getVisibleCategoryTree(): Promise<CategoryNode[]> {
  * Unlike getVisibleCategoryTree this keeps parents that have no visible
  * children, since a product can be filed directly against a parent.
  */
-export async function getVisibleCategoryIds(): Promise<string[]> {
-  const all = await getAllCategories();
+export async function getVisibleCategoryIds(
+  ctx: ReadCtx = ANON_CTX
+): Promise<string[]> {
+  const all = await getAllCategories(ctx.client, { drafts: ctx.preview });
 
   const visibleParents = new Set(
     all.filter((c) => c.parent_id === null && c.is_visible).map((c) => c.id)
@@ -135,14 +145,16 @@ export async function getVisibleCategoryIds(): Promise<string[]> {
  * Stock level is deliberately ignored — an in-stock check would pull a whole
  * section out of the nav the moment its last item sold out.
  */
-export async function getNavCategoryTree(): Promise<CategoryNode[]> {
-  const tree = await getVisibleCategoryTree();
+export async function getNavCategoryTree(
+  ctx: ReadCtx = ANON_CTX
+): Promise<CategoryNode[]> {
+  const tree = await getVisibleCategoryTree(ctx);
   if (tree.length === 0) return [];
 
-  const { data, error } = await supabase
+  const { data, error } = await ctx.client
     .from("product_versions")
     .select("category_id")
-    .eq("state", "published")
+    .in("state", statesFor(ctx))
     .eq("is_active", true);
 
   // Fail closed: if we can't confirm a section has products, don't advertise it.

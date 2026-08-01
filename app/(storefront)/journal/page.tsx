@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
-import { getPublishedPosts } from "@/lib/journal";
+import { getPublishedPosts } from "@/lib/storefront";
 import WovenSeam from "@/components/weave/WovenSeam";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 

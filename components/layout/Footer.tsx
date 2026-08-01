@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { Facebook, Instagram, MessageCircle } from "lucide-react";
-import { getPublishedPages } from "@/lib/pages";
+import { getPublishedPages } from "@/lib/storefront";
 
 const INSTAGRAM_URL = "https://www.instagram.com/thewovenne";
 

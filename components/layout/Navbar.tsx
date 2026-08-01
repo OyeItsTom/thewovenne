@@ -1,4 +1,4 @@
-import { getNavCategoryTree } from "@/lib/categories";
+import { getNavCategoryTree } from "@/lib/storefront";
 import NavbarClient, { type NavItem } from "./NavbarClient";
 
 /**

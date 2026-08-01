@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getVisibleCategoryTree } from "@/lib/categories";
-import { getProductsByCategoryIds } from "@/lib/products";
-import { getPageBySlug, getPublishedPages } from "@/lib/pages";
+import { getVisibleCategoryTree } from "@/lib/storefront";
+import { getProductsByCategoryIds } from "@/lib/storefront";
+import { getPageBySlug, getPublishedPages } from "@/lib/storefront";
 import ProductGrid from "@/components/shop/ProductGrid";
 import PageBlocks from "@/components/page/PageBlocks";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";

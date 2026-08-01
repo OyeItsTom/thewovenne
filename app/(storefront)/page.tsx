@@ -5,8 +5,8 @@ import SeasonalEdit from "@/components/home/SeasonalEdit";
 import BrandStory from "@/components/home/BrandStory";
 import InstagramGrid from "@/components/home/InstagramGrid";
 import WovenSeam from "@/components/weave/WovenSeam";
-import { getFeaturedProducts } from "@/lib/products";
-import { getContent } from "@/lib/content";
+import { getFeaturedProducts } from "@/lib/storefront";
+import { getContent } from "@/lib/storefront";
 
 // Editable homepage content is public + rarely changes; revalidate periodically.
 export const revalidate = 60;
