@@ -5,6 +5,7 @@ import { MessageCircle, Minus, Plus } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { useCartStore } from "@/lib/store";
 import Button from "@/components/ui/Button";
+import { effectivePrice } from "@/lib/pricing";
 
 export default function AddToCart({
   product,
@@ -26,7 +27,7 @@ export default function AddToCart({
         id: product.id,
         slug: product.slug,
         name: product.name,
-        price_inr: product.price_inr,
+        price_inr: effectivePrice(product).price,
         image_url: product.image_url,
         size,
       },

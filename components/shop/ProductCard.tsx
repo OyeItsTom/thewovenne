@@ -7,6 +7,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { Plus } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { formatINR } from "@/lib/utils";
+import { effectivePrice } from "@/lib/pricing";
 import { fadeUp } from "@/lib/motion";
 import { useCartStore } from "@/lib/store";
 import Badge from "@/components/ui/Badge";
@@ -17,6 +18,9 @@ export default function ProductCard({ product }: { product: Product }) {
   const openCart = useCartStore((s) => s.openCart);
 
   const outOfStock = product.stock_quantity <= 0;
+  // The campaign price, so the card, the cart and the charge all agree. The
+  // server re-resolves this at checkout regardless — see the checkout route.
+  const { price, wasPrice } = effectivePrice(product);
   const lowStock = product.stock_quantity > 0 && product.stock_quantity <= 5;
 
   const handleQuickAdd = (e: MouseEvent) => {
@@ -26,7 +30,7 @@ export default function ProductCard({ product }: { product: Product }) {
       id: product.id,
       slug: product.slug,
       name: product.name,
-      price_inr: product.price_inr,
+      price_inr: price,
       image_url: product.image_url,
       size: "One Size",
     });
@@ -85,8 +89,13 @@ export default function ProductCard({ product }: { product: Product }) {
               </p>
             )}
           </div>
-          <span className="whitespace-nowrap font-body text-sm font-medium text-ink">
-            {formatINR(product.price_inr)}
+          <span className="flex items-baseline gap-2 whitespace-nowrap font-body text-sm font-medium">
+            <span className="text-ink">{formatINR(price)}</span>
+            {wasPrice != null && (
+              <span className="text-xs font-normal text-ink/40 line-through">
+                {formatINR(wasPrice)}
+              </span>
+            )}
           </span>
         </div>
       </Link>

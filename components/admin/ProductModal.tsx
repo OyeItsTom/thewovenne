@@ -18,7 +18,8 @@ import { getAllCategories } from "@/lib/categories";
 import { getDraftProductImages } from "@/lib/products";
 import { newProductDraft, productDraftId } from "@/lib/drafts";
 import { uploadImage } from "@/lib/storage";
-import { slugify, uniqueSlug } from "@/lib/utils";
+import { slugify, uniqueSlug, formatINR } from "@/lib/utils";
+import { effectivePrice } from "@/lib/pricing";
 import type { Category, Product } from "@/lib/types";
 
 const emptyForm = {
@@ -29,6 +30,11 @@ const emptyForm = {
   fabric: "",
   colour: "",
   stock_quantity: "",
+  collection: "",
+  discount_type: "",
+  discount_value: "",
+  discount_starts_at: "",
+  discount_ends_at: "",
 };
 
 type FormState = typeof emptyForm;
@@ -71,6 +77,12 @@ const formFromProduct = (p: Product): FormState => ({
   fabric: p.fabric ?? "",
   colour: p.colour ?? "",
   stock_quantity: String(p.stock_quantity),
+  collection: p.collection ?? "",
+  discount_type: p.discount_type ?? "",
+  discount_value: p.discount_value != null ? String(p.discount_value) : "",
+  // datetime-local wants "YYYY-MM-DDTHH:mm"; the DB gives full ISO.
+  discount_starts_at: p.discount_starts_at ? p.discount_starts_at.slice(0, 16) : "",
+  discount_ends_at: p.discount_ends_at ? p.discount_ends_at.slice(0, 16) : "",
 });
 
 /**
@@ -104,6 +116,23 @@ export default function ProductModal({
   // Gallery is edited locally and written on save, so cancelling leaves the
   // existing gallery untouched.
   const [images, setImages] = useState<string[]>([]);
+
+  // Shows the admin the actual outcome before saving, using the same function
+  // the storefront renders with, so the preview cannot disagree with the site.
+  const discountPreview = (() => {
+    const base = Number(form.price_inr);
+    const value = Number(form.discount_value);
+    if (!form.discount_type || !base || !value) return null;
+    const { price, wasPrice } = effectivePrice({
+      price_inr: base,
+      discount_type: form.discount_type as "percent" | "flat",
+      discount_value: value,
+      discount_starts_at: null,
+      discount_ends_at: null,
+    });
+    if (wasPrice == null) return null;
+    return `${formatINR(price)}, with ${formatINR(wasPrice)} struck through.`;
+  })();
 
   const loadCategories = useCallback(async () => {
     const cats = await getAllCategories(getBrowserSupabase(), { drafts: true });
@@ -244,6 +273,28 @@ export default function ProductModal({
       return;
     }
 
+    const hasDiscount =
+      !!form.discount_type && Number(form.discount_value) > 0;
+
+    if (!!form.discount_type !== Number(form.discount_value) > 0) {
+      setError(
+        "A discount needs both a type and an amount above zero — or leave both blank."
+      );
+      return;
+    }
+    if (form.discount_type === "percent" && Number(form.discount_value) > 100) {
+      setError("A percentage discount can't be more than 100%.");
+      return;
+    }
+    if (
+      form.discount_starts_at &&
+      form.discount_ends_at &&
+      new Date(form.discount_ends_at) <= new Date(form.discount_starts_at)
+    ) {
+      setError("The discount's end date has to be after its start date.");
+      return;
+    }
+
     const payload = {
       name: form.name,
       slug: form.slug,
@@ -256,6 +307,17 @@ export default function ProductModal({
       // Cover image stays denormalised on the product so listings, cart and the
       // concierge keep reading one column instead of joining the gallery.
       image_url: images[0] ?? null,
+      collection: form.collection.trim() ? slugify(form.collection) : null,
+      // A discount is all-or-nothing: clearing the type clears the whole thing,
+      // which matches the check constraint in migration 0016.
+      discount_type: hasDiscount ? form.discount_type : null,
+      discount_value: hasDiscount ? Number(form.discount_value) : null,
+      discount_starts_at: hasDiscount && form.discount_starts_at
+        ? new Date(form.discount_starts_at).toISOString()
+        : null,
+      discount_ends_at: hasDiscount && form.discount_ends_at
+        ? new Date(form.discount_ends_at).toISOString()
+        : null,
     };
 
     setSaving(true);
@@ -276,7 +338,7 @@ export default function ProductModal({
       .from("product_versions")
       .update(isEdit ? payload : { ...payload, is_active: true })
       .eq("id", versionId)
-      .select("product_id, name, slug, description, price_inr, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at")
+      .select("product_id, name, slug, description, price_inr, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at")
       .single();
 
     if (saveError) {
@@ -448,6 +510,80 @@ export default function ProductModal({
             onChange={update("stock_quantity")}
           />
         </div>
+
+        {/* Seasonal campaign — optional, collapsed visually so the common
+            case (no campaign) stays out of the way. */}
+        <fieldset className="rounded-lg border border-ink/10 p-4">
+          <legend className="px-2 text-sm font-medium text-ink/70">
+            Seasonal campaign (optional)
+          </legend>
+
+          <Field
+            label="Collection"
+            placeholder="onam-edit"
+            value={form.collection}
+            onChange={update("collection")}
+          />
+          <p className="mt-1 text-xs text-ink/50">
+            Group products under a name to give them their own page — products
+            tagged <code className="text-ink/70">onam-edit</code> appear at{" "}
+            <code className="text-ink/70">/collection/onam-edit</code>. Leave
+            blank for none.
+          </p>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <label className="block text-sm">
+              <span className="font-medium text-ink/70">Discount</span>
+              <select
+                value={form.discount_type}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, discount_type: e.target.value }))
+                }
+                className="mt-1 w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
+              >
+                <option value="">No discount</option>
+                <option value="percent">Percentage off</option>
+                <option value="flat">Amount off (₹)</option>
+              </select>
+            </label>
+            <Field
+              label={form.discount_type === "flat" ? "Amount off (₹)" : "Percent off"}
+              type="number"
+              min="0"
+              disabled={!form.discount_type}
+              value={form.discount_value}
+              onChange={update("discount_value")}
+            />
+          </div>
+
+          {!!form.discount_type && (
+            <>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <Field
+                  label="Starts (optional)"
+                  type="datetime-local"
+                  value={form.discount_starts_at}
+                  onChange={update("discount_starts_at")}
+                />
+                <Field
+                  label="Ends (optional)"
+                  type="datetime-local"
+                  value={form.discount_ends_at}
+                  onChange={update("discount_ends_at")}
+                />
+              </div>
+              <p className="mt-2 text-xs text-ink/50">
+                Leave the dates blank to run the discount until you remove it.
+                Outside its dates the product simply shows its normal price.
+              </p>
+              {discountPreview && (
+                <p className="mt-3 rounded-lg bg-linen/60 px-3 py-2 text-xs text-ink/70">
+                  Customers will see {discountPreview}
+                </p>
+              )}
+            </>
+          )}
+        </fieldset>
 
         <div>
           <div className="flex items-baseline justify-between">
