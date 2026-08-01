@@ -12,7 +12,7 @@ export const metadata: Metadata = {
  * — it lives in the (storefront) and (admin) group layouts instead.
  *
  * KNOWN ISSUE (pre-dates the route groups; production behaves identically):
- * a single-segment miss such as /no-such-page routes through the /[parent]
+ * a single-segment miss such as /no-such-page routes through the /[slug]
  * catch-all, whose notFound() emits an empty server body and leaves React to
  * render this on the client. Humans see the page; crawlers get nothing. Paths
  * that match no segment at all (/deep/miss/path) render correctly server-side.

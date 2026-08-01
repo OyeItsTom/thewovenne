@@ -20,13 +20,14 @@ import Button, { buttonClassName } from "@/components/ui/Button";
 import ProductTable from "@/components/admin/ProductTable";
 import ProductModal from "@/components/admin/ProductModal";
 import AuditLog from "@/components/admin/AuditLog";
+import PagesManager from "@/components/admin/PagesManager";
 import PublishBar from "@/components/admin/PublishBar";
 import CategoryManager from "@/components/admin/CategoryManager";
 import ContentEditor from "@/components/admin/ContentEditor";
 import JournalManager from "@/components/admin/JournalManager";
 import TestErrorButton from "@/components/admin/TestErrorButton";
 
-type Tab = "products" | "categories" | "content" | "journal" | "activity";
+type Tab = "products" | "categories" | "content" | "pages" | "journal" | "activity";
 
 export default function AdminDashboardPage() {
   const router = useRouter();
@@ -177,6 +178,7 @@ export default function AdminDashboardPage() {
           ["products", "Products & Stock"],
           ["categories", "Categories"],
           ["content", "Homepage Content"],
+          ["pages", "Pages"],
           ["journal", "Journal"],
           ["activity", "Activity"],
         ] as [Tab, string][]).map(([id, label]) => (
@@ -214,6 +216,7 @@ export default function AdminDashboardPage() {
           ))}
         {tab === "categories" && <CategoryManager onChange={noteEdit} />}
         {tab === "content" && <ContentEditor onChange={noteEdit} />}
+        {tab === "pages" && <PagesManager onChange={noteEdit} />}
         {tab === "journal" && <JournalManager onChange={noteEdit} />}
         {tab === "activity" && <AuditLog />}
       </div>

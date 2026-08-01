@@ -1,10 +1,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { Facebook, Instagram, MessageCircle } from "lucide-react";
+import { getPublishedPages } from "@/lib/pages";
 
 const INSTAGRAM_URL = "https://www.instagram.com/thewovenne";
 
-export default function Footer() {
+export default async function Footer() {
+  // Footer links come from the pages themselves, so adding a page adds its link.
+  const pages = (await getPublishedPages()).filter((p) => p.in_footer);
   const number = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
   const message = encodeURIComponent("Hi, I'm interested in THE WOVENNE products");
   const whatsappHref = `https://wa.me/${number}?text=${message}`;
@@ -57,6 +60,16 @@ export default function Footer() {
                 Journal
               </Link>
             </li>
+            {pages.map((page) => (
+              <li key={page.id}>
+                <Link
+                  href={`/${page.slug}`}
+                  className="transition-colors hover:text-cream"
+                >
+                  {page.title}
+                </Link>
+              </li>
+            ))}
           </ul>
         </div>
 
