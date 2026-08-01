@@ -14,6 +14,21 @@ export interface ChatMessage {
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+/**
+ * Whether the concierge has a usable key.
+ *
+ * Checks for a plausible key, not merely a set variable: the placeholder from
+ * .env.local.example is a non-empty string, so a bare presence check passes and
+ * the failure only surfaces as a 401 mid-stream — after the response has
+ * started, where it can no longer be turned into a clean status code.
+ */
+export function chatConfigured(): boolean {
+  const key = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!key) return false;
+  // Real keys are long and prefixed; the example file ships "your-anthropic-api-key".
+  return key.startsWith("sk-ant-") && key.length > 40;
+}
+
 /** Compact catalogue context so the assistant can answer fabric/sizing/care/price questions. */
 async function getProductContext(): Promise<string> {
   // Same visibility scope as the storefront — the concierge must never offer

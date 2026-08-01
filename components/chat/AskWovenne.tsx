@@ -46,7 +46,13 @@ export default function AskWovenne() {
         body: JSON.stringify({ messages: payload }),
       });
 
-      if (!res.ok || !res.body) throw new Error(await res.text());
+      // The server explains WHY when it can (e.g. the concierge is not
+      // configured). Carry that through rather than replacing every failure
+      // with the same generic line.
+      if (!res.ok || !res.body) {
+        const detail = (await res.text()).trim();
+        throw new Error(detail.startsWith("<") ? "" : detail);
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -61,12 +67,14 @@ export default function AskWovenne() {
           return copy;
         });
       }
-    } catch {
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "";
       setMessages((prev) => {
         const copy = [...prev];
         copy[copy.length - 1] = {
           role: "assistant",
           content:
+            detail ||
             "Sorry — I couldn't reach the loom just now. Please try again, or continue on WhatsApp below.",
         };
         return copy;
