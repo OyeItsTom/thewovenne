@@ -1,10 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import {
-  getProductBySlug,
-  getProductImages,
-  getRelatedProducts,
-} from "@/lib/products";
+import { getProductBySlug, getProductImages, getRelatedProducts,  } from "@/lib/storefront";
 import { formatINR } from "@/lib/utils";
 import { effectivePrice, savingAmount } from "@/lib/pricing";
 import ImageGallery from "@/components/product/ImageGallery";

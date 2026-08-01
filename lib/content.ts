@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import type { SiteContentMap } from "./types";
+import { ANON_CTX, type ReadCtx } from "./readCtx";
 
 /**
  * Default homepage content — mirrors the seed in supabase/migrations/0007_seed.sql. Used as a graceful
@@ -41,15 +42,21 @@ export const DEFAULT_CONTENT: SiteContentMap = {
 
 /** Fetch one content block by key, falling back to the built-in default. */
 export async function getContent<K extends keyof SiteContentMap>(
-  key: K
+  key: K,
+  ctx: ReadCtx = ANON_CTX
 ): Promise<SiteContentMap[K]> {
-  const { data, error } = await supabase
+  const preview = ctx.preview;
+  const { data, error } = await ctx.client
     .from("site_content")
-    .select("value")
+    .select(preview ? "value, draft_value" : "value")
     .eq("key", key)
     .maybeSingle();
 
-  if (error || !data?.value) return DEFAULT_CONTENT[key];
+  const row = data as { value?: unknown; draft_value?: unknown } | null;
+  // In preview the unpublished copy wins, falling back to the live one for a
+  // key that has never been edited.
+  const chosen = preview ? row?.draft_value ?? row?.value : row?.value;
+  if (error || !chosen) return DEFAULT_CONTENT[key];
   // Merge over defaults so a partially-edited block never loses required fields.
-  return { ...DEFAULT_CONTENT[key], ...(data.value as object) } as SiteContentMap[K];
+  return { ...DEFAULT_CONTENT[key], ...(chosen as object) } as SiteContentMap[K];
 }

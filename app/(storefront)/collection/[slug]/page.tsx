@@ -1,10 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import {
-  getCollectionSlugs,
-  getProductsByCollection,
-} from "@/lib/products";
-import { getContent } from "@/lib/content";
+import { getCollectionSlugs, getProductsByCollection,  } from "@/lib/storefront";
+import { getContent } from "@/lib/storefront";
 import ProductGrid from "@/components/shop/ProductGrid";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 

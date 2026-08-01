@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
+import { ANON_CTX, preferDraft, statesFor, type ReadCtx } from "./readCtx";
 
 /**
  * Content pages — About, Size Guide, Policies, Contact, FAQ and anything added
@@ -49,33 +50,49 @@ function mapPage(row: PageVersionRow): SitePage {
 }
 
 /** Published pages, for the storefront and the footer. */
-export async function getPublishedPages(): Promise<SitePage[]> {
-  const { data, error } = await supabase
+export async function getPublishedPages(
+  ctx: ReadCtx = ANON_CTX
+): Promise<SitePage[]> {
+  const preview = ctx.preview;
+  const { data, error } = await ctx.client
     .from("site_page_versions")
-    .select(PAGE_SELECT)
-    .eq("state", "published")
+    .select(preview ? `${PAGE_SELECT}, state, pending_delete` : PAGE_SELECT)
+    .in("state", statesFor(ctx))
     .order("sort_order", { ascending: true });
 
   if (error) {
     console.error("getPublishedPages:", error.message);
     return [];
   }
-  return ((data as unknown as PageVersionRow[] | null) ?? []).map(mapPage);
+  const rows = (data as unknown as (PageVersionRow & {
+    state?: string;
+    pending_delete?: boolean;
+  })[] | null) ?? [];
+  return preferDraft(rows, (r) => r.page_id).map(mapPage);
 }
 
-export async function getPageBySlug(slug: string): Promise<SitePage | null> {
-  const { data, error } = await supabase
+export async function getPageBySlug(
+  slug: string,
+  ctx: ReadCtx = ANON_CTX
+): Promise<SitePage | null> {
+  const preview = ctx.preview;
+  const { data, error } = await ctx.client
     .from("site_page_versions")
-    .select(PAGE_SELECT)
-    .eq("state", "published")
-    .eq("slug", slug)
-    .maybeSingle();
+    .select(preview ? `${PAGE_SELECT}, state, pending_delete` : PAGE_SELECT)
+    .in("state", statesFor(ctx))
+    .eq("slug", slug);
 
   if (error) {
     console.error("getPageBySlug:", error.message);
     return null;
   }
-  return data ? mapPage(data as unknown as PageVersionRow) : null;
+  // Not maybeSingle(): in preview a page with a draft matches twice.
+  const rows = (data as unknown as (PageVersionRow & {
+    state?: string;
+    pending_delete?: boolean;
+  })[] | null) ?? [];
+  const one = preferDraft(rows, (r) => r.page_id)[0];
+  return one ? mapPage(one) : null;
 }
 
 /** Admin list: drafts supersede their published counterparts. */

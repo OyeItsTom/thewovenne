@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getPostBySlug, getPublishedPosts } from "@/lib/journal";
+import { getPostBySlug, getPublishedPosts } from "@/lib/storefront";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 export const revalidate = 60;
