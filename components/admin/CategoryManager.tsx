@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { getAllCategories, getDraftCategoryIds } from "@/lib/categories";
+import { categoryLiveStatus, type LiveStatus } from "@/lib/categoryStatus";
 import { categoryDraftId, markPendingDelete, newCategoryDraft } from "@/lib/drafts";
 import { cn, uniqueSlug } from "@/lib/utils";
 import type { Category } from "@/lib/types";
@@ -26,6 +27,8 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [draftIds, setDraftIds] = useState<Set<string>>(new Set());
+  const [neverPublished, setNeverPublished] = useState<Set<string>>(new Set());
+  const [pageMissing, setPageMissing] = useState<Set<string>>(new Set());
   const [newParentName, setNewParentName] = useState("");
   const [newChild, setNewChild] = useState<{ parentId: string; name: string }>({
     parentId: "",
@@ -38,7 +41,8 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
       getBrowserSupabase()
         .from("product_versions")
         .select("category_id")
-        .in("state", ["published", "draft"]),
+        .eq("state", "published")
+        .eq("is_active", true),
     ]);
 
     const tally: Record<string, number> = {};
@@ -48,6 +52,29 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
     setCounts(tally);
     setCategories(cats);
     setDraftIds(await getDraftCategoryIds(getBrowserSupabase()));
+
+    // A category with no published version has never reached the site at all.
+    const { data: publishedRows } = await getBrowserSupabase()
+      .from("category_versions")
+      .select("category_id")
+      .eq("state", "published");
+    const published = new Set((publishedRows ?? []).map((r) => r.category_id as string));
+    setNeverPublished(new Set(cats.filter((c) => !published.has(c.id)).map((c) => c.id)));
+
+    // "Needs a deploy" cannot be inferred — top-level pages are generated at
+    // build time. Ask the site whether the page exists rather than guessing.
+    const parentsToCheck = cats.filter((c) => c.parent_id === null && c.is_visible);
+    const missing = await Promise.all(
+      parentsToCheck.map(async (c) => {
+        try {
+          const res = await fetch(`/${c.slug}`, { method: "HEAD" });
+          return res.status === 404 ? c.id : null;
+        } catch {
+          return null;
+        }
+      })
+    );
+    setPageMissing(new Set(missing.filter(Boolean) as string[]));
   }, []);
 
   useEffect(() => {
@@ -191,6 +218,12 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
               <Row
                 cat={parent}
                 isDraft={draftIds.has(parent.id)}
+                status={categoryLiveStatus(parent, {
+                  all: categories ?? [],
+                  productCounts: counts,
+                  neverPublished,
+                  pageMissing: pageMissing.has(parent.id),
+                })}
                 productCount={counts[parent.id] ?? 0}
                 effectivelyVisible={parent.is_visible}
                 isParent
@@ -213,6 +246,11 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
                     key={child.id}
                     cat={child}
                     isDraft={draftIds.has(child.id)}
+                    status={categoryLiveStatus(child, {
+                      all: categories ?? [],
+                      productCounts: counts,
+                      neverPublished,
+                    })}
                     productCount={counts[child.id] ?? 0}
                     effectivelyVisible={child.is_visible && parent.is_visible}
                     parentHidden={!parent.is_visible}
@@ -278,6 +316,7 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
 function Row({
   cat,
   isDraft = false,
+  status,
   productCount,
   effectivelyVisible,
   parentHidden = false,
@@ -296,6 +335,7 @@ function Row({
 }: {
   cat: Category;
   isDraft?: boolean;
+  status?: LiveStatus;
   productCount: number;
   effectivelyVisible: boolean;
   parentHidden?: boolean;
@@ -332,8 +372,13 @@ function Row({
         )}
         <p className="mt-0.5 text-xs text-ink/40">
           /{cat.slug} · {productCount} {productCount === 1 ? "product" : "products"}
-          {parentHidden && cat.is_visible && " · parent hidden, so still not public"}
         </p>
+        {status && !status.live && (
+          <p className="mt-1 text-xs text-terracotta-dark">
+            <span className="font-medium">Not on the site — {status.reason}.</span>{" "}
+            <span className="text-ink/60">{status.fix}</span>
+          </p>
+        )}
       </div>
 
       <button
