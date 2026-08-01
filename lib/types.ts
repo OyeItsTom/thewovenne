@@ -26,6 +26,9 @@ export interface Product {
   // Kept so display code can show the category name without a second lookup.
   category: string | null;
   category_slug: string | null;
+  /** Slug of the category's PARENT, so a product URL can be built without a
+      second lookup. Null when the category has no published parent. */
+  category_parent_slug: string | null;
   fabric: string | null;
   colour: string | null;
   stock_quantity: number;

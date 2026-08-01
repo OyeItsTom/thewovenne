@@ -102,7 +102,7 @@ export default async function SlugPage({
             {category.children.map((child) => (
               <Link
                 key={child.id}
-                href={`/shop?category=${child.slug}`}
+                href={`/${category.slug}/${child.slug}`}
                 className="rounded-full border border-ink/15 px-4 py-2 text-xs uppercase tracking-widest text-ink/70 transition-colors hover:border-terracotta hover:text-terracotta"
               >
                 {child.name}
