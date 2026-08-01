@@ -32,6 +32,12 @@ export interface Product {
   image_url: string | null;
   is_active: boolean;
   created_at: string;
+  /** Seasonal collection slug, e.g. "onam-edit". Null when not in a campaign. */
+  collection: string | null;
+  discount_type: "percent" | "flat" | null;
+  discount_value: number | null;
+  discount_starts_at: string | null;
+  discount_ends_at: string | null;
 }
 
 /**
@@ -115,8 +121,23 @@ export interface BrandStoryContent {
   body: string;
 }
 
+/**
+ * The homepage seasonal section. `enabled` is the off switch — when false the
+ * section is not rendered at all, which is how the site sits outside a campaign.
+ */
+export interface SeasonalEditContent {
+  enabled: boolean;
+  eyebrow: string;
+  heading: string;
+  body: string;
+  image_url: string;
+  link_label: string;
+  link_href: string;
+}
+
 export interface SiteContentMap {
   home_hero: HomeHeroContent;
   why_linen: WhyLinenContent;
   brand_story: BrandStoryContent;
+  seasonal_edit: SeasonalEditContent;
 }

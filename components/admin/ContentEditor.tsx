@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
+import { uploadImage, UnsupportedImageError } from "@/lib/storage";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { DEFAULT_CONTENT } from "@/lib/content";
 import type { SiteContentMap } from "@/lib/types";
@@ -9,7 +11,7 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 
 /**
  * Edits the homepage copy stored in `site_content` (home_hero / why_linen /
- * brand_story). Loads current values, merges over the built-in defaults, and
+ * brand_story / seasonal_edit). Loads current values, merges over the built-in defaults, and
  * upserts each block by key. No code editing required to change site wording.
  */
 export default function ContentEditor({ onChange }: { onChange?: () => void }) {
@@ -34,6 +36,7 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
           home_hero: { ...DEFAULT_CONTENT.home_hero, ...((rows.get("home_hero") as object) ?? {}) },
           why_linen: { ...DEFAULT_CONTENT.why_linen, ...((rows.get("why_linen") as object) ?? {}) },
           brand_story: { ...DEFAULT_CONTENT.brand_story, ...((rows.get("brand_story") as object) ?? {}) },
+          seasonal_edit: { ...DEFAULT_CONTENT.seasonal_edit, ...((rows.get("seasonal_edit") as object) ?? {}) },
         });
         setLoading(false);
       });
@@ -64,6 +67,10 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
   const hero = content.home_hero;
   const why = content.why_linen;
   const story = content.brand_story;
+  const season = content.seasonal_edit;
+
+  const setSeason = (patch: Partial<typeof season>) =>
+    setContent((c) => ({ ...c, seasonal_edit: { ...c.seasonal_edit, ...patch } }));
 
   return (
     <div className="space-y-8">
@@ -98,6 +105,49 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
               })} />
           </div>
         ))}
+      </Block>
+
+      {/* Seasonal edit */}
+      <Block
+        title="Seasonal edit"
+        onSave={() => saveBlock("seasonal_edit")}
+        state={save.seasonal_edit}
+      >
+        <p className="-mt-1 text-sm text-ink/60">
+          An optional section below the homepage hero, for Onam, Christmas and
+          the like. It stays off the site entirely until you tick “Show”, and it
+          needs both a heading and an image before it will appear.
+        </p>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={season.enabled}
+            onChange={(e) => setSeason({ enabled: e.target.checked })}
+            className="h-4 w-4 accent-terracotta"
+          />
+          <span className="font-medium text-ink/70">
+            Show this section on the homepage
+          </span>
+        </label>
+
+        <SeasonImage
+          url={season.image_url}
+          onChange={(url) => setSeason({ image_url: url })}
+        />
+
+        <Text label="Eyebrow (small line above)" value={season.eyebrow} onChange={(v) => setSeason({ eyebrow: v })} />
+        <Text label="Heading" value={season.heading} onChange={(v) => setSeason({ heading: v })} />
+        <Text area label="Body" value={season.body} onChange={(v) => setSeason({ body: v })} />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Text label="Link label" value={season.link_label} onChange={(v) => setSeason({ link_label: v })} />
+          <Text label="Link address" value={season.link_href} onChange={(v) => setSeason({ link_href: v })} />
+        </div>
+        <p className="text-xs text-ink/50">
+          Link address can be any page on the site — for example{" "}
+          <code className="text-ink/70">/collection/onam-edit</code> for products
+          you have tagged “onam-edit”, or <code className="text-ink/70">/women</code>.
+        </p>
       </Block>
 
       {/* Brand story */}
@@ -136,6 +186,75 @@ function Block({
         {state === "error" && <span className="text-sm text-terracotta-dark">Couldn’t save — try again.</span>}
       </div>
     </section>
+  );
+}
+
+function SeasonImage({
+  url,
+  onChange,
+}: {
+  url: string;
+  onChange: (url: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handle(file: File) {
+    setBusy(true);
+    setError(null);
+    try {
+      onChange(await uploadImage(file, "campaigns"));
+    } catch (e) {
+      // HEIC and other unsupported formats get a plain explanation rather than
+      // a storage error the admin cannot act on.
+      setError(
+        e instanceof UnsupportedImageError
+          ? e.message
+          : "Upload failed — please try again."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="text-sm">
+      <span className="font-medium text-ink/70">Image</span>
+      <div className="mt-1 flex items-start gap-4">
+        {url ? (
+          <div className="relative h-24 w-32 overflow-hidden rounded-lg bg-linen">
+            <Image src={url} alt="" fill sizes="128px" className="object-cover" />
+          </div>
+        ) : (
+          <div className="flex h-24 w-32 items-center justify-center rounded-lg border border-dashed border-ink/20 text-xs text-ink/40">
+            No image
+          </div>
+        )}
+        <div>
+          <input
+            type="file"
+            accept="image/*"
+            disabled={busy}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handle(f);
+              e.target.value = "";
+            }}
+            className="text-xs text-ink/70 file:mr-3 file:rounded-full file:border-0 file:bg-ink/5 file:px-4 file:py-2 file:text-xs file:text-ink hover:file:bg-ink/10"
+          />
+          {busy && <p className="mt-2 text-xs text-ink/50">Uploading…</p>}
+          {url && !busy && (
+            <button
+              onClick={() => onChange("")}
+              className="mt-2 block text-xs text-terracotta-dark hover:underline"
+            >
+              Remove image
+            </button>
+          )}
+          {error && <p className="mt-2 text-xs text-terracotta-dark">{error}</p>}
+        </div>
+      </div>
+    </div>
   );
 }
 

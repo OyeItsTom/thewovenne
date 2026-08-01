@@ -6,6 +6,7 @@ import { useCartStore } from "@/lib/store";
 import { formatINR } from "@/lib/utils";
 import SizeSelector from "./SizeSelector";
 import AddToCart from "./AddToCart";
+import { effectivePrice } from "@/lib/pricing";
 
 const CLOTHING_SIZES = ["S", "M", "L", "XL"];
 const ONE_SIZE = ["One Size"];
@@ -23,7 +24,7 @@ export default function ProductOptions({ product }: { product: Product }) {
         id: product.id,
         slug: product.slug,
         name: product.name,
-        price_inr: product.price_inr,
+        price_inr: effectivePrice(product).price,
         image_url: product.image_url,
         size,
       },
@@ -42,7 +43,7 @@ export default function ProductOptions({ product }: { product: Product }) {
       <div className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-3 border-t border-ink/10 bg-cream/95 py-3 pl-4 pr-24 backdrop-blur lg:hidden">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-ink">{product.name}</p>
-          <p className="text-sm text-ink/70">{formatINR(product.price_inr)}</p>
+          <p className="text-sm text-ink/70">{formatINR(effectivePrice(product).price)}</p>
         </div>
         <button
           onClick={quickAdd}

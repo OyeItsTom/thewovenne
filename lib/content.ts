@@ -23,6 +23,16 @@ export const DEFAULT_CONTENT: SiteContentMap = {
       { title: "Made to last", text: "Linen softens with every wash and outlives fast fashion by decades." },
     ],
   },
+  seasonal_edit: {
+    // Off until a campaign is deliberately turned on in the admin.
+    enabled: false,
+    eyebrow: "",
+    heading: "",
+    body: "",
+    image_url: "",
+    link_label: "",
+    link_href: "",
+  },
   brand_story: {
     title: "From the loom, to you",
     body: "THE WOVENNE works directly with handloom artisans across Kerala. No middleman, no compromise — just honest cloth, woven the way it has been for generations, sent straight to you.",

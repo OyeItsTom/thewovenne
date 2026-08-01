@@ -6,6 +6,7 @@ import {
   getRelatedProducts,
 } from "@/lib/products";
 import { formatINR } from "@/lib/utils";
+import { effectivePrice, savingAmount } from "@/lib/pricing";
 import ImageGallery from "@/components/product/ImageGallery";
 import ProductOptions from "@/components/product/ProductOptions";
 import CareAccordion from "@/components/product/CareAccordion";
@@ -72,7 +73,12 @@ export default async function ProductPage({
             {product.name}
           </h1>
           <p className="mt-3 font-body text-2xl text-ink">
-            {formatINR(product.price_inr)}
+            {formatINR(effectivePrice(product).price)}
+            {effectivePrice(product).wasPrice != null && (
+              <span className="ml-3 align-middle text-base font-normal text-ink/40 line-through">
+                {formatINR(effectivePrice(product).wasPrice!)}
+              </span>
+            )}
           </p>
 
           {product.description && (

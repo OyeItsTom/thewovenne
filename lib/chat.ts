@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { supabase, createServiceClient } from "./supabase";
 import { getAllCategories, getVisibleCategoryIds } from "./categories";
+import { effectivePrice } from "./pricing";
 
 // Current Sonnet — strong English + Malayalam, Sonnet-tier latency/cost.
 // (The brief's "claude-sonnet-4-6" is the previous generation; this is current.)
@@ -24,21 +25,50 @@ async function getProductContext(): Promise<string> {
   // whatever is sitting in drafts.
   const { data, error } = await supabase
     .from("product_versions")
-    .select("name, price_inr, category_id, fabric, colour, stock_quantity")
+    .select("name, price_inr, category_id, fabric, colour, stock_quantity, " +
+            "discount_type, discount_value, discount_starts_at, discount_ends_at")
     .eq("state", "published")
     .eq("is_active", true)
     .in("category_id", visibleIds);
 
   if (error || !data?.length) return "No product data available right now.";
 
+  // Splitting the select string across lines defeats PostgREST's inferred row
+  // type, so name the shape here.
+  const rows = data as unknown as {
+    name: string;
+    price_inr: number;
+    category_id: string | null;
+    fabric: string | null;
+    colour: string | null;
+    stock_quantity: number;
+    discount_type: "percent" | "flat" | null;
+    discount_value: number | null;
+    discount_starts_at: string | null;
+    discount_ends_at: string | null;
+  }[];
+
   const categoryNames = new Map(
     (await getAllCategories()).map((c) => [c.id, c.name])
   );
 
-  return data
+  return rows
     .map((p) => {
-      const category = categoryNames.get(p.category_id as string) ?? "—";
-      return `- ${p.name} — ₹${Number(p.price_inr).toLocaleString("en-IN")} · ${category} · ${p.fabric ?? "—"} · ${p.colour ?? "—"} · ${p.stock_quantity > 0 ? "in stock" : "out of stock"}`;
+      const category = categoryNames.get(p.category_id ?? "") ?? "—";
+      // Quote the campaign price, or the concierge would talk customers
+      // through a price the storefront no longer shows.
+      const { price, wasPrice } = effectivePrice({
+        price_inr: Number(p.price_inr),
+        discount_type: p.discount_type,
+        discount_value: p.discount_value,
+        discount_starts_at: p.discount_starts_at,
+        discount_ends_at: p.discount_ends_at,
+      });
+      const priceText =
+        wasPrice == null
+          ? `₹${price.toLocaleString("en-IN")}`
+          : `₹${price.toLocaleString("en-IN")} (reduced from ₹${wasPrice.toLocaleString("en-IN")})`;
+      return `- ${p.name} — ${priceText} · ${category} · ${p.fabric ?? "—"} · ${p.colour ?? "—"} · ${p.stock_quantity > 0 ? "in stock" : "out of stock"}`;
     })
     .join("\n");
 }

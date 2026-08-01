@@ -8,7 +8,8 @@ import type { Category, Product } from "./types";
 // draft work — the policy is the guarantee, this is just the query.
 const PRODUCT_SELECT =
   "product_id, name, slug, description, price_inr, category_id, fabric, colour, " +
-  "stock_quantity, image_url, is_active, created_at";
+  "stock_quantity, image_url, is_active, created_at, collection, " +
+  "discount_type, discount_value, discount_starts_at, discount_ends_at";
 
 type ProductVersionRow = {
   product_id: string;
@@ -23,6 +24,11 @@ type ProductVersionRow = {
   image_url: string | null;
   is_active: boolean;
   created_at: string;
+  collection: string | null;
+  discount_type: "percent" | "flat" | null;
+  discount_value: number | null;
+  discount_starts_at: string | null;
+  discount_ends_at: string | null;
 };
 
 /**
@@ -51,6 +57,11 @@ function mapProduct(row: ProductVersionRow, categories: Map<string, Category>): 
     created_at: row.created_at,
     category: category?.name ?? null,
     category_slug: category?.slug ?? null,
+    collection: row.collection,
+    discount_type: row.discount_type,
+    discount_value: row.discount_value,
+    discount_starts_at: row.discount_starts_at,
+    discount_ends_at: row.discount_ends_at,
   };
 }
 
@@ -213,6 +224,57 @@ export async function getAllProducts(): Promise<Product[]> {
     return [];
   }
   return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
+}
+
+/**
+ * Products in a seasonal collection, e.g. "onam-edit".
+ *
+ * Goes through scopeToVisible like every other listing, so putting a product
+ * from a hidden category into a campaign does not become a way around the
+ * visibility rules.
+ */
+export async function getProductsByCollection(
+  collection: string
+): Promise<Product[]> {
+  const [visibleIds, cats] = await Promise.all([scopeToVisible(), categoryMap()]);
+  if (visibleIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("product_versions")
+    .select(PRODUCT_SELECT)
+    .eq("state", "published")
+    .eq("is_active", true)
+    .eq("collection", collection)
+    .in("category_id", visibleIds)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("getProductsByCollection:", error.message);
+    return [];
+  }
+  return ((data as unknown as ProductVersionRow[] | null) ?? []).map((r) => mapProduct(r, cats));
+}
+
+/** Distinct published collection slugs, for generateStaticParams. */
+export async function getCollectionSlugs(): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("product_versions")
+    .select("collection")
+    .eq("state", "published")
+    .eq("is_active", true)
+    .not("collection", "is", null);
+
+  if (error) {
+    console.error("getCollectionSlugs:", error.message);
+    return [];
+  }
+  return [
+    ...new Set(
+      (data ?? [])
+        .map((r) => (r as { collection: string | null }).collection)
+        .filter((c): c is string => !!c)
+    ),
+  ];
 }
 
 /**
