@@ -147,6 +147,14 @@ grant execute on function
 
 -- ── Extend the existing publish machinery ─────
 -- Pages join the same transaction rather than getting their own button.
+--
+-- DROP before CREATE is required, not stylistic: 0012 defined
+-- pending_changes() with four output columns and this adds a fifth. The column
+-- list of a RETURNS TABLE is part of the signature, and CREATE OR REPLACE
+-- cannot change a return type — it raises "cannot change return type of
+-- existing function", which aborts the script and, because the SQL editor runs
+-- it in a transaction, rolls back the tables created above it too.
+drop function if exists public.pending_changes();
 create or replace function public.pending_changes()
 returns table (products integer, categories integer, journal integer,
                content integer, pages integer)
@@ -169,6 +177,7 @@ grant execute on function public.pending_changes() to authenticated;
 
 -- publish_all must promote pages too, in the same transaction as everything
 -- else — a page that staged forever would be a silent dead end.
+drop function if exists public.publish_all();
 create or replace function public.publish_all()
 returns jsonb
 language plpgsql
@@ -262,6 +271,7 @@ begin
 end;
 $$;
 
+drop function if exists public.discard_drafts();
 create or replace function public.discard_drafts()
 returns jsonb
 language plpgsql
