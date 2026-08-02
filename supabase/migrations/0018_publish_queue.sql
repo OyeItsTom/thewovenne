@@ -470,10 +470,19 @@ grant execute on function public.publish_one(text, uuid, text) to authenticated;
 -- row the next time that item is saved.
 
 -- ── Verify ────────────────────────────────────
+-- Deliberately does NOT call pending_queue(): it begins with an is_admin()
+-- check, and the SQL editor runs as postgres with no auth.uid(), so it raises
+-- and the whole migration rolls back with it. Checking that the function EXISTS
+-- is the part that belongs in a migration; whether it returns rows is a
+-- question for the admin UI, signed in as an actual admin.
 select
-  (select count(*) from product_versions where state = 'draft')   as product_drafts,
-  (select count(*) from category_versions where state = 'draft')  as category_drafts,
-  (select count(*) from journal_versions where state = 'draft')   as journal_drafts,
+  (select count(*) from product_versions   where state = 'draft') as product_drafts,
+  (select count(*) from category_versions  where state = 'draft') as category_drafts,
+  (select count(*) from journal_versions   where state = 'draft') as journal_drafts,
   (select count(*) from site_page_versions where state = 'draft') as page_drafts,
-  public.pending_changes()                                         as pending,
-  jsonb_array_length(public.pending_queue())                       as queue_size;
+  (select count(*) from pg_proc
+    where pronamespace = 'public'::regnamespace
+      and proname in ('version_noise', 'jsonb_diff', 'gallery_matches',
+                      'draft_is_noop', 'settle_draft', 'pending_queue',
+                      'discard_one', 'publish_one')) as new_functions,
+  public.pending_changes() as pending;
