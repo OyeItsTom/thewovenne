@@ -3,15 +3,17 @@ import Link from "next/link";
 import type { SeasonalEditContent } from "@/lib/types";
 
 /**
- * The seasonal edit — one image, a short heading, one understated link.
+ * The seasonal edit — a full-bleed band below the hero.
  *
- * Sits below the hero and leaves the hero untouched. Renders nothing at all
- * unless the campaign is enabled AND has both a heading and an image, so a
- * half-filled draft cannot put an empty band on the homepage.
+ * Edge to edge, with the wording set over the photograph rather than beside it,
+ * so a campaign reads as a piece of art direction instead of a promotion. The
+ * hero above it is untouched.
  *
- * No countdown, no sale colour, no badge: the same terracotta-and-graphite
- * palette as the rest of the site, and the link is a text link rather than a
- * button, so a campaign reads as an editorial note rather than a promotion.
+ * Renders nothing unless the campaign is enabled AND has both a heading and an
+ * image, so a half-filled draft cannot leave an empty band on the homepage.
+ *
+ * Still quiet: no countdown, no sale colour, no badge, and the call to action is
+ * a text link rather than a button.
  */
 export default function SeasonalEdit({
   content,
@@ -25,57 +27,74 @@ export default function SeasonalEdit({
   const mobileSrc = content.image_url_mobile?.trim() || content.image_url;
 
   return (
-    <section className="section-padding">
-      <div className="container-wovenne grid items-center gap-10 md:grid-cols-2 md:gap-16">
-        {/* Two crops rather than one: a wide desktop frame and a portrait
-            mobile one differ enough that a single file has to be centre-cropped
-            for at least one of them, which throws away the composition. Both
-            are in the DOM and CSS picks. Both are lazy, so browsers normally
-            skip fetching the display:none one — but that is a browser
-            optimisation, not a guarantee. <picture> with media queries would
-            guarantee it; next/image cannot express that, and the correct crop
-            is worth more than a possible extra request.
+    <section className="relative isolate w-full overflow-hidden bg-ink">
+      {/* Sized in viewport height rather than by aspect ratio: a fixed ratio
+          either towers on a wide monitor or collapses on a short laptop, and a
+          full-bleed band has to sit well on both. */}
+      <div className="relative h-[78vh] min-h-[440px] w-full md:h-[68vh] md:min-h-[460px] md:max-h-[720px]">
+        {/* Two crops, not one. Full-bleed means the frame is landscape on
+            desktop and portrait on mobile — far enough apart that a single file
+            has to be centre-cropped for one of them, which is precisely the
+            composition a campaign image exists to control.
+
+            Both are in the DOM and CSS picks. Both are lazy, so browsers
+            normally skip fetching the display:none one, but that is an
+            optimisation rather than a guarantee. <picture> with media queries
+            would guarantee it; next/image cannot express that, and the right
+            crop is worth more than a possible extra request.
 
             Falling back to the desktop file keeps a campaign publishable before
-            its mobile crop exists; the admin flags the gap rather than blocking
-            on it. */}
-        <div className="relative aspect-[4/5] overflow-hidden rounded-xl bg-linen md:aspect-[4/3]">
-          <Image
-            src={mobileSrc}
-            alt={content.heading}
-            fill
-            sizes="100vw"
-            className="object-cover md:hidden"
-          />
-          <Image
-            src={content.image_url}
-            alt={content.heading}
-            fill
-            sizes="50vw"
-            className="hidden object-cover md:block"
-          />
-        </div>
+            its mobile crop exists; the admin flags the gap rather than blocking. */}
+        <Image
+          src={mobileSrc}
+          alt=""
+          fill
+          sizes="100vw"
+          className="object-cover md:hidden"
+        />
+        <Image
+          src={content.image_url}
+          alt=""
+          fill
+          sizes="100vw"
+          className="hidden object-cover md:block"
+        />
 
-        <div>
-          {content.eyebrow?.trim() && (
-            <p className="eyebrow">{content.eyebrow}</p>
-          )}
-          <h2 className="mt-3 font-heading text-display-sm text-ink">
-            {content.heading}
-          </h2>
-          {content.body?.trim() && (
-            <p className="mt-5 max-w-prose text-base leading-relaxed text-ink/70">
-              {content.body}
-            </p>
-          )}
-          {hasLink && (
-            <Link
-              href={content.link_href}
-              className="mt-7 inline-block border-b border-terracotta pb-1 text-xs uppercase tracking-widest text-terracotta transition-colors hover:border-ink hover:text-ink"
-            >
-              {content.link_label}
-            </Link>
-          )}
+        {/* Legibility, not decoration. Text over an uncontrolled photograph is
+            unreadable often enough that it needs a floor, and a gradient keeps
+            the top of the image clean while guaranteeing contrast where the
+            words actually sit. */}
+        <div
+          aria-hidden
+          className="absolute inset-0 bg-gradient-to-t from-ink/80 via-ink/30 to-ink/5"
+        />
+
+        <div className="absolute inset-x-0 bottom-0">
+          <div className="container-wovenne max-w-3xl pb-12 md:pb-16">
+            {content.eyebrow?.trim() && (
+              <p className="text-xs uppercase tracking-[0.2em] text-cream/70">
+                {content.eyebrow}
+              </p>
+            )}
+            {/* h2, not h1: the page already has one, and a campaign is a
+                section of the homepage rather than its subject. */}
+            <h2 className="mt-3 font-heading text-display-sm text-cream md:text-display-md">
+              {content.heading}
+            </h2>
+            {content.body?.trim() && (
+              <p className="mt-4 max-w-prose text-base leading-relaxed text-cream/80">
+                {content.body}
+              </p>
+            )}
+            {hasLink && (
+              <Link
+                href={content.link_href}
+                className="mt-7 inline-block border-b border-cream/50 pb-1 text-xs uppercase tracking-widest text-cream transition-colors hover:border-cream hover:text-white"
+              >
+                {content.link_label}
+              </Link>
+            )}
+          </div>
         </div>
       </div>
     </section>

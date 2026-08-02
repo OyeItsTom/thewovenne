@@ -114,9 +114,11 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
         state={save.seasonal_edit}
       >
         <p className="-mt-1 text-sm text-ink/60">
-          An optional section below the homepage hero, for Onam, Christmas and
-          the like. It stays off the site entirely until you tick “Show”, and it
-          needs both a heading and an image before it will appear.
+          An optional full-width band below the homepage hero, for Onam,
+          Christmas and the like. The heading sits over the photograph, so
+          choose images with a calm lower third. It stays off the site entirely
+          until you tick “Show”, and needs both a heading and an image before it
+          will appear.
         </p>
 
         <label className="flex items-center gap-2 text-sm">
@@ -133,14 +135,14 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
 
         <SeasonImage
           label="Desktop image"
-          hint="Landscape — 1600 × 1200 works well (4:3). Keep the subject away from the edges."
+          hint="Wide/landscape — 2400 × 1200 works well. It runs edge to edge, so keep the subject clear of the outer edges and leave the lower third calm: the heading sits there."
           url={season.image_url}
           onChange={(url) => setSeason({ image_url: url })}
         />
 
         <SeasonImage
           label="Mobile image"
-          hint="Portrait — 1200 × 1500 works well (4:5). A wide photo centre-cropped to portrait usually loses its composition, which is why this is separate."
+          hint="Tall/portrait — 1200 × 1600 works well. On a phone the band is portrait, so a wide photo centre-cropped to fit usually loses its composition — that is why this is separate. Leave the lower third calm here too."
           url={season.image_url_mobile}
           onChange={(url) => setSeason({ image_url_mobile: url })}
         />
