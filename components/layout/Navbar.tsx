@@ -16,6 +16,13 @@ export default async function Navbar() {
     ...tree.map((parent) => ({
       href: `/${parent.slug}`,
       label: parent.name,
+      // The sub-categories the mega-menu opens. Already filtered upstream to
+      // visible ones that actually hold products, so a menu never offers a link
+      // to an empty listing.
+      children: parent.children.map((child) => ({
+        href: `/${parent.slug}/${child.slug}`,
+        label: child.name,
+      })),
     })),
     { href: "/#story", label: "Our Story" },
     { href: "/journal", label: "Journal" },
