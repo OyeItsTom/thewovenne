@@ -147,23 +147,23 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
           </select>
         </label>
         <p className="-mt-2 text-xs text-ink/50">
-          The band is a fixed shape, so filling it edge to edge means cropping
-          anything that doesn&apos;t match — unavoidable, not a bug. That&apos;s
-          right for a photograph. For an illustration or anything with lettering
-          in it, choose &ldquo;show the whole image&rdquo; instead: it appears
-          complete, with the background showing above and below.
+          At the recommended sizes above, the band matches your image exactly
+          and both settings look identical — nothing is cropped either way. This
+          only matters if you upload a different shape: then &ldquo;fill&rdquo;
+          crops the overflow, and &ldquo;show the whole image&rdquo; keeps all of
+          it with the background showing around it.
         </p>
 
         <SeasonImage
           label="Desktop image"
-          hint="Wide/landscape — export around 2400 × 1000. The band is roughly 2.4:1 on a typical desktop, so a squarer image loses its top and bottom. Keep the lower third calm: the heading sits there."
+          hint="Export at 2400 × 1350 (16:9). The band on desktop is exactly 16:9 and scales with the width, so an image at this ratio fills it with nothing cropped and no bars. Keep the lower third calm: the heading sits there."
           url={season.image_url}
           onChange={(url) => setSeason({ image_url: url })}
         />
 
         <SeasonImage
           label="Mobile image"
-          hint="Tall/portrait — export around 1200 × 2000. On a phone the band is roughly 3:5, so a wide photo cropped to fit loses most of its composition; that is why this is a separate upload. Keep the lower third calm here too."
+          hint="Export at 1200 × 1600 (3:4). The band on phones is exactly 3:4, so an image at this ratio fills it with nothing cropped and no bars. Keep the lower third calm here too."
           url={season.image_url_mobile}
           onChange={(url) => setSeason({ image_url_mobile: url })}
         />
