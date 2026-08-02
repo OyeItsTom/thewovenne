@@ -9,6 +9,11 @@ import FilterSidebar, {
   type Filters,
 } from "@/components/shop/FilterSidebar";
 import ProductGrid from "@/components/shop/ProductGrid";
+import {
+  availableSizes,
+  matchesFilters,
+  type SizesByProduct,
+} from "@/lib/productFilters";
 
 /**
  * Client-side filtering over a server-fetched product list. The list itself is
@@ -19,9 +24,12 @@ import ProductGrid from "@/components/shop/ProductGrid";
 export default function ShopFilters({
   products,
   categoryTree,
+  sizesByProduct = {},
 }: {
   products: Product[];
   categoryTree: CategoryNode[];
+  /** Per-product sizes, for the Size filter. Absent means no Size filter. */
+  sizesByProduct?: SizesByProduct;
 }) {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
@@ -40,21 +48,14 @@ export default function ShopFilters({
       })),
       fabrics: Array.from(fabrics).sort(),
       colours: Array.from(colours).sort(),
+      sizes: availableSizes(products, sizesByProduct),
     };
-  }, [products, categoryTree]);
+  }, [products, categoryTree, sizesByProduct]);
 
   const filteredProducts = useMemo(
     () =>
-      products.filter((p) => {
-        if (filters.category && p.category_slug !== filters.category)
-          return false;
-        if (filters.fabric && p.fabric !== filters.fabric) return false;
-        if (filters.colour && p.colour !== filters.colour) return false;
-        if (filters.maxPrice !== null && p.price_inr > filters.maxPrice)
-          return false;
-        return true;
-      }),
-    [products, filters]
+      products.filter((p) => matchesFilters(p, filters, sizesByProduct)),
+    [products, filters, sizesByProduct]
   );
 
   return (
