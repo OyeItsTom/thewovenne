@@ -73,33 +73,34 @@ export default function SeasonalEdit({
           className={`hidden ${fit} md:block`}
         />
 
-        {/* Legibility, not decoration. Text over an uncontrolled photograph is
-            unreadable often enough that it needs a floor, and a gradient keeps
-            the top of the image clean while guaranteeing contrast where the
-            words actually sit. */}
+        {/* Legibility, and it has to survive the worst case.
+
+            A gentle gradient is enough over a photograph, which is usually dark
+            and low-contrast where text sits. It is NOT enough over an
+            illustration on a white ground — the first real campaign was exactly
+            that, and cream text on white is unreadable. So the base is close to
+            opaque and fades out by three-quarters height: the top of the image
+            stays clean, and the strip carrying the words is always dark enough
+            regardless of what is behind it. */}
         <div
           aria-hidden
-          className={
-            contain
-              ? "absolute inset-0 bg-gradient-to-t from-ink/60 to-transparent"
-              : "absolute inset-0 bg-gradient-to-t from-ink/80 via-ink/30 to-ink/5"
-          }
+          className="absolute inset-0 bg-[linear-gradient(to_top,rgba(28,31,59,0.94)_0%,rgba(28,31,59,0.82)_22%,rgba(28,31,59,0.45)_45%,rgba(28,31,59,0.12)_65%,rgba(28,31,59,0)_80%)]"
         />
 
         <div className="absolute inset-x-0 bottom-0">
           <div className="container-wovenne max-w-3xl pb-12 md:pb-16">
             {content.eyebrow?.trim() && (
-              <p className="text-xs uppercase tracking-[0.2em] text-cream/70">
+              <p className="text-xs uppercase tracking-[0.2em] text-cream/80 drop-shadow-[0_1px_8px_rgba(28,31,59,0.55)]">
                 {content.eyebrow}
               </p>
             )}
             {/* h2, not h1: the page already has one, and a campaign is a
                 section of the homepage rather than its subject. */}
-            <h2 className="mt-3 font-heading text-display-sm text-cream md:text-display-md">
+            <h2 className="mt-3 font-heading text-display-sm text-cream drop-shadow-[0_2px_12px_rgba(28,31,59,0.55)] md:text-display-md">
               {content.heading}
             </h2>
             {content.body?.trim() && (
-              <p className="mt-4 max-w-prose text-base leading-relaxed text-cream/80">
+              <p className="mt-4 max-w-prose text-base leading-relaxed text-cream/90 drop-shadow-[0_1px_8px_rgba(28,31,59,0.55)]">
                 {content.body}
               </p>
             )}
