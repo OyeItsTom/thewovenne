@@ -116,6 +116,93 @@ export async function markPendingDelete(
   return error?.message ?? null;
 }
 
+/** The kinds of thing the versioning system tracks. */
+export type DraftKind = "product" | "category" | "journal" | "page" | "content";
+
+/**
+ * Drop a draft that turned out to change nothing.
+ *
+ * Call once a save is COMPLETELY finished — for products that means after the
+ * gallery too, since photos live in their own table. Before that point "did
+ * anything change?" has no meaningful answer, which is exactly why this is a
+ * call rather than a trigger.
+ *
+ * Best-effort by design: if it never runs, the leftover draft is not counted
+ * or queued anyway (pending_changes and pending_queue both filter no-ops), so
+ * a missed call leaves untidy data, never a wrong publish.
+ */
+export async function settleDraft(
+  client: SupabaseClient,
+  kind: DraftKind,
+  versionId: string
+): Promise<boolean> {
+  const { data, error } = await client.rpc("settle_draft", {
+    p_kind: kind,
+    p_version_id: versionId,
+  });
+  if (error) {
+    console.error("settleDraft:", error.message);
+    return false;
+  }
+  return data === true;
+}
+
+/** One row of the publish queue. */
+export interface QueueItem {
+  kind: DraftKind;
+  entity_id: string | null;
+  version_id: string | null;
+  label: string;
+  slug: string;
+  is_new: boolean;
+  pending_delete: boolean;
+  changed_at: string;
+  changed_by: string | null;
+  changes: { field: string; old: unknown; new: unknown }[];
+}
+
+/** Everything waiting to go live, with a field-level diff for each item. */
+export async function getPendingQueue(
+  client: SupabaseClient
+): Promise<QueueItem[]> {
+  const { data, error } = await client.rpc("pending_queue");
+  if (error) {
+    console.error("getPendingQueue:", error.message);
+    return [];
+  }
+  return (data as QueueItem[]) ?? [];
+}
+
+/** Throw away one item's draft, leaving everything else queued. */
+export async function discardOne(
+  client: SupabaseClient,
+  kind: DraftKind,
+  entityId: string | null,
+  key?: string
+): Promise<string | null> {
+  const { error } = await client.rpc("discard_one", {
+    p_kind: kind,
+    p_id: entityId,
+    p_key: key ?? null,
+  });
+  return error?.message ?? null;
+}
+
+/** Publish one item on its own. Throws with a readable reason if blocked. */
+export async function publishOne(
+  client: SupabaseClient,
+  kind: DraftKind,
+  entityId: string | null,
+  key?: string
+): Promise<void> {
+  const { error } = await client.rpc("publish_one", {
+    p_kind: kind,
+    p_id: entityId,
+    p_key: key ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
 export interface PendingChanges {
   products: number;
   categories: number;

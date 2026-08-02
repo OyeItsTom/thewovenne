@@ -5,7 +5,7 @@ import Image from "next/image";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { getAdminPosts } from "@/lib/journal";
-import { journalDraftId, markPendingDelete, newJournalDraft } from "@/lib/drafts";
+import { journalDraftId, markPendingDelete, newJournalDraft, settleDraft } from "@/lib/drafts";
 import { uploadImage } from "@/lib/storage";
 import type { JournalPost } from "@/lib/types";
 
@@ -84,6 +84,8 @@ export default function JournalManager({ onChange }: { onChange?: () => void }) 
       .update(row)
       .eq("id", versionId);
     if (err) return setError(err.message);
+    // Editing a post back to what is already live is not a change.
+    await settleDraft(client, "journal", versionId);
     setDraft(null);
     setError(null);
     load();

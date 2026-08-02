@@ -22,17 +22,37 @@ export default function SeasonalEdit({
   if (!content.heading?.trim() || !content.image_url?.trim()) return null;
 
   const hasLink = !!content.link_href?.trim() && !!content.link_label?.trim();
+  const mobileSrc = content.image_url_mobile?.trim() || content.image_url;
 
   return (
     <section className="section-padding">
       <div className="container-wovenne grid items-center gap-10 md:grid-cols-2 md:gap-16">
-        <div className="relative aspect-[4/3] overflow-hidden rounded-xl bg-linen">
+        {/* Two crops rather than one: a wide desktop frame and a portrait
+            mobile one differ enough that a single file has to be centre-cropped
+            for at least one of them, which throws away the composition. Both
+            are in the DOM and CSS picks. Both are lazy, so browsers normally
+            skip fetching the display:none one — but that is a browser
+            optimisation, not a guarantee. <picture> with media queries would
+            guarantee it; next/image cannot express that, and the correct crop
+            is worth more than a possible extra request.
+
+            Falling back to the desktop file keeps a campaign publishable before
+            its mobile crop exists; the admin flags the gap rather than blocking
+            on it. */}
+        <div className="relative aspect-[4/5] overflow-hidden rounded-xl bg-linen md:aspect-[4/3]">
+          <Image
+            src={mobileSrc}
+            alt={content.heading}
+            fill
+            sizes="100vw"
+            className="object-cover md:hidden"
+          />
           <Image
             src={content.image_url}
             alt={content.heading}
             fill
-            sizes="(min-width: 768px) 50vw, 100vw"
-            className="object-cover"
+            sizes="50vw"
+            className="hidden object-cover md:block"
           />
         </div>
 

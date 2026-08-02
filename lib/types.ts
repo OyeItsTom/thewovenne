@@ -133,7 +133,14 @@ export interface SeasonalEditContent {
   eyebrow: string;
   heading: string;
   body: string;
+  /**
+   * The desktop image. Kept as `image_url` rather than renamed to
+   * `image_url_desktop` so every campaign already saved keeps its picture —
+   * a rename would need a data migration and could silently blank one.
+   */
   image_url: string;
+  /** Portrait crop for narrow screens. Falls back to image_url when empty. */
+  image_url_mobile: string;
   link_label: string;
   link_href: string;
 }

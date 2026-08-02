@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Eye, Loader2, Rocket, Undo2 } from "lucide-react";
+import { Eye, ListChecks, Loader2, Rocket, Undo2 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
 import {
   discardDrafts,
@@ -37,7 +37,14 @@ function summarise(p: PendingChanges): string {
  * products, categories, journal and content — a publish button living in a
  * single tab would imply it only published that tab.
  */
-export default function PublishBar({ refreshKey = 0 }: { refreshKey?: number }) {
+export default function PublishBar({
+  refreshKey = 0,
+  onReview,
+}: {
+  refreshKey?: number;
+  /** Jump to the queue. Omitted where there is nowhere to jump to. */
+  onReview?: () => void;
+}) {
   const [pending, setPending] = useState<PendingChanges | null>(null);
   const [state, setState] = useState<State>("idle");
   const [message, setMessage] = useState<string | null>(null);
@@ -144,6 +151,18 @@ export default function PublishBar({ refreshKey = 0 }: { refreshKey?: number }) 
                 <Undo2 className="h-3.5 w-3.5" /> Discard
               </button>
             ))}
+
+          {/* The count says how much is pending; this is how you find out
+              WHAT. Publishing without being able to look first is the gap this
+              closes. */}
+          {total > 0 && onReview && (
+            <button
+              onClick={onReview}
+              className="inline-flex items-center gap-1.5 rounded-full border border-ink/20 px-4 py-2 text-xs font-medium text-ink transition-colors hover:border-ink hover:bg-ink hover:text-cream"
+            >
+              <ListChecks className="h-3.5 w-3.5" /> Review
+            </button>
+          )}
 
           {/* Preview opens the real storefront rendered from drafts, so the
               check before publishing is the actual page, not a description of
