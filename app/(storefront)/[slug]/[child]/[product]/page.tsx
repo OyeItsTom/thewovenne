@@ -8,6 +8,7 @@ import {
   getVisibleCategoryTree,
 } from "@/lib/storefront";
 import { resolveOldPath } from "@/lib/redirects";
+import { getProductSizes } from "@/lib/sizes";
 import { productHref } from "@/lib/urls";
 import ProductDetail from "@/components/product/ProductDetail";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
@@ -88,10 +89,11 @@ export default async function ProductPage({
     permanentRedirect(canonical);
   }
 
-  const [related, gallery, tree] = await Promise.all([
+  const [related, gallery, tree, sizes] = await Promise.all([
     getRelatedProducts(product.category_id, product.slug, 4),
     getProductImages(product.id),
     getVisibleCategoryTree(),
+    getProductSizes(product.id),
   ]);
 
   // Fall back to the cover image if the gallery is empty, so a product with one
@@ -108,6 +110,7 @@ export default async function ProductPage({
       product={product}
       images={images}
       related={related}
+      sizes={sizes}
       breadcrumb={
         parent && child
           ? {

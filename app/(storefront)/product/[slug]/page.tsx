@@ -6,6 +6,7 @@ import {
   getRelatedProducts,
 } from "@/lib/storefront";
 import { resolveOldPath } from "@/lib/redirects";
+import { getProductSizes } from "@/lib/sizes";
 import { productHref } from "@/lib/urls";
 import ProductDetail from "@/components/product/ProductDetail";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
@@ -68,14 +69,20 @@ export default async function LegacyProductPage({
   }
 
   // No hierarchical path exists yet, so render in place rather than 404.
-  const [related, gallery] = await Promise.all([
+  const [related, gallery, sizes] = await Promise.all([
     getRelatedProducts(product.category_id, product.slug, 4),
     getProductImages(product.id),
+    getProductSizes(product.id),
   ]);
 
   const images = (gallery.length ? gallery : [product.image_url]).filter(
     (src): src is string => Boolean(src)
   );
 
-  return <ProductDetail product={product} images={images} related={related} />;
+  return <ProductDetail
+      product={product}
+      images={images}
+      related={related}
+      sizes={sizes}
+    />;
 }

@@ -3,11 +3,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { razorpay } from "@/lib/razorpay";
 import { createServiceClient } from "@/lib/supabase";
 import { priceCart } from "@/lib/checkoutPricing";
+import { validateOrderDetails } from "@/lib/orderDetails";
 import type { CartItem } from "@/lib/store";
 
 interface CreatePayload {
   action: "create";
   items: CartItem[];
+  details: unknown;
 }
 
 interface VerifyPayload {
@@ -32,11 +34,19 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 }
 
-async function handleCreate({ items }: CreatePayload) {
+async function handleCreate({ items, details: rawDetails }: CreatePayload) {
+  // Validated here, not just in the form: the form runs in a browser the
+  // customer controls, and an order with no deliverable address is worse than
+  // a rejected checkout.
+  const { details, error: detailsError } = validateOrderDetails(rawDetails);
+  if (detailsError || !details) {
+    return NextResponse.json({ error: detailsError }, { status: 400 });
+  }
+
   // The cart comes from the browser, so its prices are a claim, not a fact.
   // Re-price from the database — this is what decides the amount charged, and
   // the client's own price_inr is ignored entirely.
-  const { total, error } = await priceCart(items);
+  const { items: priced, total, error } = await priceCart(items);
   if (error) {
     return NextResponse.json({ error }, { status: 400 });
   }
@@ -51,11 +61,48 @@ async function handleCreate({ items }: CreatePayload) {
       receipt: `wovenne_${Date.now()}`,
     });
 
+    // Recorded BEFORE payment. If the customer abandons the modal we still know
+    // who they were and what they wanted, and verify then updates this row
+    // rather than inserting a second one for the same order.
+    const supabase = createServiceClient();
+    const { error: insertError } = await supabase.from("orders").insert({
+      razorpay_order_id: order.id,
+      customer_email: details.email,
+      customer_name: details.name,
+      customer_phone: details.phone,
+      shipping_address: details.address,
+      total_inr: total,
+      payment_provider: "razorpay",
+      payment_status: "pending",
+      items: priced.map((item) => ({
+        id: item.id,
+        name: item.name,
+        size: item.size,
+        quantity: item.quantity,
+        price_inr: item.price_inr,
+      })),
+    });
+
+    if (insertError) {
+      // Better to stop than to take money for an order we cannot ship.
+      console.error("Could not record pending order:", insertError.message);
+      return NextResponse.json(
+        { error: "Could not start checkout. Please try again." },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
       orderId: order.id,
       amount: Number(order.amount),
       currency: order.currency,
       keyId: process.env.RAZORPAY_KEY_ID,
+      // Saves the customer retyping what they just gave us.
+      prefill: {
+        name: details.name,
+        email: details.email,
+        contact: details.phone,
+      },
     });
   } catch (error) {
     console.error("Razorpay order creation error:", error);
@@ -105,25 +152,84 @@ async function handleVerify({
   }
 
   const supabase = createServiceClient();
-  const { error: insertError } = await supabase.from("orders").insert({
-    total_inr:
-      capturedInr ??
-      priced.reduce((sum, item) => sum + item.price_inr * item.quantity, 0),
-    payment_provider: "razorpay",
-    payment_status: "paid",
-    items: priced.map((item) => ({
-      id: item.id,
-      name: item.name,
-      size: item.size,
-      quantity: item.quantity,
-      price_inr: item.price_inr,
-    })),
-  });
 
-  if (insertError) {
+  // Stock comes out HERE, after payment is confirmed, and atomically —
+  // reserve_stock decrements with the guard inside the UPDATE, so two buyers
+  // racing for the last unit cannot both succeed.
+  //
+  // The cost of decrementing after payment rather than before is a window of a
+  // few seconds in which both can pay. When that happens the customer is NOT
+  // failed — they have paid, and refusing their confirmation over our stock
+  // arithmetic would be indefensible. The order is flagged instead, so a human
+  // can refund or restock deliberately.
+  let stockShort = false;
+  try {
+    const { error: stockError } = await supabase.rpc("reserve_stock", {
+      p_items: priced.map((i) => ({
+        id: i.id,
+        size: i.size,
+        quantity: i.quantity,
+      })),
+    });
+    if (stockError) {
+      stockShort = true;
+      console.error(
+        `Stock could not be reserved for paid order ${razorpay_order_id}: ${stockError.message}`
+      );
+    }
+  } catch (e) {
+    stockShort = true;
+    console.error("reserve_stock threw:", e);
+  }
+
+  // UPDATE, not insert: handleCreate already wrote this row with the customer's
+  // contact and address. Inserting here would leave two rows for one order, the
+  // paid one missing the details needed to ship it.
+  const { data: updated, error: updateError } = await supabase
+    .from("orders")
+    .update({
+      payment_status: "paid",
+      // Surfaces in the admin as an order needing attention rather than one
+      // quietly shipped from stock that was not there.
+      tracking_status: stockShort ? "needs_review" : null,
+      total_inr:
+        capturedInr ??
+        priced.reduce((sum, item) => sum + item.price_inr * item.quantity, 0),
+      items: priced.map((item) => ({
+        id: item.id,
+        name: item.name,
+        size: item.size,
+        quantity: item.quantity,
+        price_inr: item.price_inr,
+      })),
+    })
+    .eq("razorpay_order_id", razorpay_order_id)
+    .select("id");
+
+  if (updateError) {
     // The customer has paid — never fail their confirmation over a recording
     // problem. Sentry picks this up from the console error.
-    console.error("Failed to record Razorpay order:", insertError.message);
+    console.error("Failed to mark order paid:", updateError.message);
+  } else if (!updated?.length) {
+    // Paid, but no pending row to update. Should not happen, and losing a paid
+    // order silently would be far worse than a duplicate, so record what we
+    // have and shout about it.
+    console.error(
+      `Paid order ${razorpay_order_id} had no pending row — recording without contact details.`
+    );
+    await supabase.from("orders").insert({
+      razorpay_order_id,
+      payment_provider: "razorpay",
+      payment_status: "paid",
+      total_inr: capturedInr,
+      items: priced.map((item) => ({
+        id: item.id,
+        name: item.name,
+        size: item.size,
+        quantity: item.quantity,
+        price_inr: item.price_inr,
+      })),
+    });
   }
   if (error) {
     console.error("Order recorded with unpriced items:", error);

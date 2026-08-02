@@ -10,16 +10,25 @@ import { effectivePrice } from "@/lib/pricing";
 export default function AddToCart({
   product,
   size,
+  /** Availability of the SELECTED size, decided by the parent. */
+  disabled = false,
+  /** Units left in the selected size; falls back to the product's own count. */
+  available,
 }: {
   product: Product;
   size: string;
+  disabled?: boolean;
+  available?: number;
 }) {
   const [quantity, setQuantity] = useState(1);
   const addItem = useCartStore((s) => s.addItem);
   const openCart = useCartStore((s) => s.openCart);
 
-  const outOfStock = product.stock_quantity <= 0;
-  const max = Math.max(product.stock_quantity, 0);
+  // Capped by what is actually left in this size, so the quantity stepper
+  // cannot offer more than can be sold.
+  const stock = available ?? product.stock_quantity;
+  const outOfStock = disabled || stock <= 0;
+  const max = Math.max(stock, 0);
 
   const handleAdd = () => {
     addItem(
