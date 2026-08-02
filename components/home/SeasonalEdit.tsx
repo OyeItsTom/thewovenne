@@ -35,10 +35,16 @@ export default function SeasonalEdit({
 
   return (
     <section className="relative isolate w-full overflow-hidden bg-ink">
-      {/* Sized in viewport height rather than by aspect ratio: a fixed ratio
-          either towers on a wide monitor or collapses on a short laptop, and a
-          full-bleed band has to sit well on both. */}
-      <div className="relative h-[78vh] min-h-[440px] w-full md:h-[68vh] md:min-h-[460px] md:max-h-[720px]">
+      {/* The band takes its shape from the IMAGE, not the viewport: 3:4 on
+          mobile and 16:9 on desktop, matching the two recommended exports. A
+          container whose ratio matches the file it holds crops nothing and
+          letterboxes nothing at any screen width, because the two scale
+          together.
+
+          The cost is height on very wide screens — 16:9 at 2560px is 1440px
+          tall, more than a typical viewport. That is the deliberate trade for
+          never losing part of the composition. */}
+      <div className="relative aspect-[3/4] w-full md:aspect-[16/9]">
         {/* Two crops, not one. Full-bleed means the frame is landscape on
             desktop and portrait on mobile — far enough apart that a single file
             has to be centre-cropped for one of them, which is precisely the
