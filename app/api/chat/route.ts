@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { streamChat, chatConfigured, type ChatMessage } from "@/lib/chat";
+import { consumeChatQuota, quotaMessage } from "@/lib/chatQuota";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +39,20 @@ export async function POST(req: NextRequest) {
   );
   if (messages.length === 0) {
     return new Response("No messages provided.", { status: 400 });
+  }
+
+  // Enforced HERE rather than in the widget. A cap the browser applies is a
+  // suggestion — this endpoint is public, and anything worth rate-limiting
+  // against will call it directly rather than through the UI.
+  //
+  // Checked after validation but before the model call, so a rejected request
+  // costs nothing, and a malformed one doesn't spend the caller's allowance.
+  const quota = await consumeChatQuota(req);
+  if (!quota.allowed) {
+    return new Response(quotaMessage(quota.resetAt), {
+      status: 429,
+      headers: { "Retry-After": "600" },
+    });
   }
 
   try {
