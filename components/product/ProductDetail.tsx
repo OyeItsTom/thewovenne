@@ -6,6 +6,7 @@ import ProductOptions from "@/components/product/ProductOptions";
 import CareAccordion from "@/components/product/CareAccordion";
 import ProductGrid from "@/components/shop/ProductGrid";
 import type { Product } from "@/lib/types";
+import type { ProductSize } from "@/lib/sizes";
 
 /**
  * The product page body, shared so the canonical hierarchical route is the only
@@ -15,11 +16,14 @@ export default function ProductDetail({
   product,
   images,
   related,
+  sizes,
   breadcrumb,
 }: {
   product: Product;
   images: string[];
   related: Product[];
+  /** Empty for single-stock products such as sarees. */
+  sizes: ProductSize[];
   /** Parent and sub-category, when the product is filed under both. */
   breadcrumb?: { parent: { slug: string; name: string }; child: { slug: string; name: string } };
 }) {
@@ -72,7 +76,7 @@ export default function ProductDetail({
           )}
 
           <div className="mt-8">
-            <ProductOptions product={product} />
+            <ProductOptions product={product} sizes={sizes} />
           </div>
 
           <CareAccordion fabric={product.fabric} />

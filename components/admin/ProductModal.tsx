@@ -18,6 +18,12 @@ import { getAllCategories } from "@/lib/categories";
 import { getDraftProductImages } from "@/lib/products";
 import { newProductDraft, productDraftId, settleDraft } from "@/lib/drafts";
 import { uploadImage } from "@/lib/storage";
+import {
+  getProductSizes,
+  saveProductSizes,
+  DEFAULT_SIZE_RUN,
+  type SizeDraft,
+} from "@/lib/sizes";
 import { slugify, uniqueSlug, formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
 import type { Category, Product } from "@/lib/types";
@@ -116,6 +122,10 @@ export default function ProductModal({
   // Gallery is edited locally and written on save, so cancelling leaves the
   // existing gallery untouched.
   const [images, setImages] = useState<string[]>([]);
+  // Sizes live OUTSIDE draft/publish — see migration 0021. Loaded and saved
+  // directly, and the UI says so, because an admin who expects Publish to gate
+  // a stock change would oversell.
+  const [sizes, setSizes] = useState<SizeDraft[]>([]);
 
   // Shows the admin the actual outcome before saving, using the same function
   // the storefront renders with, so the preview cannot disagree with the site.
@@ -131,6 +141,17 @@ export default function ProductModal({
       ? `/${parent.slug}/${child.slug}/${slug}`
       : `/product/${slug}`;
   })();
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!product?.id) {
+      setSizes([]);
+      return;
+    }
+    void getProductSizes(product.id, getBrowserSupabase()).then((rows) =>
+      setSizes(rows.map((r) => ({ id: r.id, label: r.label, stock_quantity: r.stock_quantity })))
+    );
+  }, [isOpen, product?.id]);
 
   const discountPreview = (() => {
     const base = Number(form.price_inr);
@@ -382,6 +403,15 @@ export default function ProductModal({
       return;
     }
 
+    // Sizes are keyed to the product identity, so this needs the saved id —
+    // which is why it runs here rather than beside the scalar update.
+    const sizeError = await saveProductSizes(client, savedProductId, sizes);
+    if (sizeError) {
+      setSaving(false);
+      setError(`Product saved, but its sizes didn't: ${sizeError}`);
+      return;
+    }
+
     // Only now is the save complete — scalars AND photos. Before this point
     // "did anything change?" has no answer, because a photo-only edit leaves
     // every scalar identical.
@@ -528,6 +558,92 @@ export default function ProductModal({
             onChange={update("stock_quantity")}
           />
         </div>
+
+        <fieldset className="rounded-lg border border-ink/10 p-4">
+          <legend className="px-2 text-sm font-medium text-ink/70">
+            Sizes &amp; stock
+          </legend>
+
+          <p className="text-xs text-ink/60">
+            Leave empty for products sold in one size — sarees, home — which use
+            the single stock number above. Otherwise each size carries its own
+            count.
+          </p>
+          {/* Said plainly because it contradicts every other field in this
+              form, and an admin who assumed otherwise would oversell. */}
+          <p className="mt-2 rounded-lg bg-linen/60 px-3 py-2 text-xs text-ink/70">
+            Sizes and their stock save <strong>immediately</strong> — they
+            don&apos;t wait for Publish. Stock has to match what&apos;s really on
+            the shelf, and an order can&apos;t wait for a publish either.
+          </p>
+
+          {sizes.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {sizes.map((sz, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    value={sz.label}
+                    onChange={(e) =>
+                      setSizes((rows) =>
+                        rows.map((r, j) => (j === i ? { ...r, label: e.target.value } : r))
+                      )
+                    }
+                    placeholder="Size"
+                    aria-label={`Size ${i + 1} label`}
+                    className="w-28 rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    value={sz.stock_quantity}
+                    onChange={(e) =>
+                      setSizes((rows) =>
+                        rows.map((r, j) =>
+                          j === i ? { ...r, stock_quantity: Number(e.target.value) } : r
+                        )
+                      )
+                    }
+                    aria-label={`${sz.label || `Size ${i + 1}`} stock`}
+                    className="w-24 rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
+                  />
+                  <span className="text-xs text-ink/50">
+                    {sz.stock_quantity <= 0 ? "sold out" : "in stock"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSizes((rows) => rows.filter((_, j) => j !== i))}
+                    className="ml-auto text-xs text-terracotta-dark hover:underline"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() =>
+                setSizes((rows) => [...rows, { label: "", stock_quantity: 0 }])
+              }
+              className="rounded-full border border-ink/20 px-4 py-2 text-xs text-ink transition-colors hover:border-ink"
+            >
+              Add a size
+            </button>
+            {sizes.length === 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  setSizes(DEFAULT_SIZE_RUN.map((label) => ({ label, stock_quantity: 0 })))
+                }
+                className="rounded-full border border-ink/20 px-4 py-2 text-xs text-ink transition-colors hover:border-ink"
+              >
+                Use {DEFAULT_SIZE_RUN.join(" · ")}
+              </button>
+            )}
+          </div>
+        </fieldset>
 
         {/* Seasonal campaign — optional, collapsed visually so the common
             case (no campaign) stays out of the way. */}

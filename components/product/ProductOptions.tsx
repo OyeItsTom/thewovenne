@@ -2,21 +2,38 @@
 
 import { useState } from "react";
 import type { Product } from "@/lib/types";
+import type { ProductSize } from "@/lib/sizes";
 import { useCartStore } from "@/lib/store";
 import { formatINR } from "@/lib/utils";
 import SizeSelector from "./SizeSelector";
 import AddToCart from "./AddToCart";
 import { effectivePrice } from "@/lib/pricing";
 
-const CLOTHING_SIZES = ["S", "M", "L", "XL"];
-const ONE_SIZE = ["One Size"];
+/** What the cart records when a product has no sizes of its own. */
+const NO_SIZE = "One Size";
 
-export default function ProductOptions({ product }: { product: Product }) {
-  const sizes = product.category === "Home" ? ONE_SIZE : CLOTHING_SIZES;
-  const [size, setSize] = useState(sizes[0]);
+export default function ProductOptions({
+  product,
+  sizes,
+}: {
+  product: Product;
+  /** Empty for single-stock products such as sarees. */
+  sizes: ProductSize[];
+}) {
+  // Start on the first size that can actually be bought, so the default
+  // selection is never one the customer is not allowed to add.
+  const firstAvailable = sizes.find((s) => s.stock_quantity > 0);
+  const [size, setSize] = useState(firstAvailable?.label ?? NO_SIZE);
   const addItem = useCartStore((s) => s.addItem);
   const openCart = useCartStore((s) => s.openCart);
-  const outOfStock = product.stock_quantity <= 0;
+
+  // With sizes, availability is per size — a product with stock in L is not
+  // buyable in a sold-out M.
+  const selected = sizes.find((s) => s.label === size);
+  const outOfStock =
+    sizes.length > 0
+      ? !selected || selected.stock_quantity <= 0
+      : product.stock_quantity <= 0;
 
   const quickAdd = () => {
     addItem(
@@ -36,7 +53,12 @@ export default function ProductOptions({ product }: { product: Product }) {
   return (
     <div className="space-y-6">
       <SizeSelector sizes={sizes} selected={size} onSelect={setSize} />
-      <AddToCart product={product} size={size} />
+      <AddToCart
+        product={product}
+        size={size}
+        disabled={outOfStock}
+        available={sizes.length > 0 ? (selected?.stock_quantity ?? 0) : undefined}
+      />
 
       {/* Sticky add-to-cart bar — mobile only. Adds one of the selected size. */}
       {/* pr-24 clears the floating WhatsApp button at bottom-right. */}

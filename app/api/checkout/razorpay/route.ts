@@ -152,6 +152,36 @@ async function handleVerify({
   }
 
   const supabase = createServiceClient();
+
+  // Stock comes out HERE, after payment is confirmed, and atomically —
+  // reserve_stock decrements with the guard inside the UPDATE, so two buyers
+  // racing for the last unit cannot both succeed.
+  //
+  // The cost of decrementing after payment rather than before is a window of a
+  // few seconds in which both can pay. When that happens the customer is NOT
+  // failed — they have paid, and refusing their confirmation over our stock
+  // arithmetic would be indefensible. The order is flagged instead, so a human
+  // can refund or restock deliberately.
+  let stockShort = false;
+  try {
+    const { error: stockError } = await supabase.rpc("reserve_stock", {
+      p_items: priced.map((i) => ({
+        id: i.id,
+        size: i.size,
+        quantity: i.quantity,
+      })),
+    });
+    if (stockError) {
+      stockShort = true;
+      console.error(
+        `Stock could not be reserved for paid order ${razorpay_order_id}: ${stockError.message}`
+      );
+    }
+  } catch (e) {
+    stockShort = true;
+    console.error("reserve_stock threw:", e);
+  }
+
   // UPDATE, not insert: handleCreate already wrote this row with the customer's
   // contact and address. Inserting here would leave two rows for one order, the
   // paid one missing the details needed to ship it.
@@ -159,6 +189,9 @@ async function handleVerify({
     .from("orders")
     .update({
       payment_status: "paid",
+      // Surfaces in the admin as an order needing attention rather than one
+      // quietly shipped from stock that was not there.
+      tracking_status: stockShort ? "needs_review" : null,
       total_inr:
         capturedInr ??
         priced.reduce((sum, item) => sum + item.price_inr * item.quantity, 0),

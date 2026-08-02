@@ -1,5 +1,6 @@
 import { createServiceClient } from "./supabase";
 import type { CartItem } from "./store";
+import { getSizesForProducts } from "./sizes";
 
 /**
  * Re-price a cart from the database.
@@ -50,7 +51,10 @@ export async function priceCart(items: CartItem[]): Promise<PricingResult> {
 
   const ids = [...new Set(items.map((i) => i.id))];
   const supabase = createServiceClient();
-  const { data, error } = await supabase.rpc("checkout_prices", { p_ids: ids });
+  const [{ data, error }, sizeMap] = await Promise.all([
+    supabase.rpc("checkout_prices", { p_ids: ids }),
+    getSizesForProducts(ids, supabase),
+  ]);
 
   if (error) {
     console.error("priceCart:", error.message);
@@ -80,7 +84,27 @@ export async function priceCart(items: CartItem[]): Promise<PricingResult> {
           "Something in your cart is no longer available. Please remove it and try again.",
       };
     }
-    if (!row.in_stock) {
+    // A product with sizes is in stock per SIZE — the product-level flag says
+    // nothing about the one this customer picked.
+    const sizes = sizeMap.get(item.id) ?? [];
+    if (sizes.length > 0) {
+      const chosen = sizes.find((s) => s.label === item.size);
+      if (!chosen) {
+        return {
+          ...empty,
+          error: `Please choose a size for ${row.name}.`,
+        };
+      }
+      if (chosen.stock_quantity < item.quantity) {
+        return {
+          ...empty,
+          error:
+            chosen.stock_quantity === 0
+              ? `${row.name} in ${chosen.label} has just sold out.`
+              : `Only ${chosen.stock_quantity} left of ${row.name} in ${chosen.label}.`,
+        };
+      }
+    } else if (!row.in_stock) {
       return { ...empty, error: `${row.name} has just sold out.` };
     }
     out.push({
