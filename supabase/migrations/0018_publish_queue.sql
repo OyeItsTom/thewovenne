@@ -295,7 +295,7 @@ begin
       end
     ) as x
     from items i
-  ) rows;
+  ) q;
 
   return result;
 end;
