@@ -6,6 +6,10 @@
 -- all for changes made through the API or the SQL editor.
 --
 -- Requires is_admin() from 0002 and the tables from 0001 / 0006.
+--
+-- SUPERSEDED IN PART: log_admin_action() was rewritten by 0014 to cover the
+-- *_versions tables. Re-running THIS file reverts that and stops drafts and
+-- publishes being recorded. Re-run 0014 afterwards if you ever need to.
 
 create table if not exists admin_audit_log (
   id uuid primary key default gen_random_uuid(),

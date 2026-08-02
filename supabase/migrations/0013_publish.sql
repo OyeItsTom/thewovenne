@@ -5,6 +5,11 @@
 -- a category the storefront cannot see.
 --
 -- Requires 0011 and 0012.
+--
+-- SUPERSEDED IN PART: publish_all() and discard_drafts() were rewritten by
+-- 0015 to cover content pages. Re-running THIS file reverts that, and page
+-- edits would stage forever without ever going live. Re-run 0015 afterwards
+-- if you ever need to.
 
 -- Publishing a product into a category that has never been published would put
 -- a live product behind an invisible category. Rather than publish a broken

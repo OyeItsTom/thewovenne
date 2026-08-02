@@ -10,6 +10,11 @@
 -- showing the wrong photos.
 --
 -- Requires 0011.
+--
+-- SUPERSEDED IN PART: ensure_product_draft() was rewritten by 0016 (campaign
+-- columns) and pending_changes() by 0018 (ignores no-op drafts). Re-running
+-- THIS file reverts both, silently — a product edit would start wiping its
+-- own campaign fields. Re-run 0016 and 0018 afterwards if you ever need to.
 
 -- ── Products ─────────────────────────────────
 create or replace function public.ensure_product_draft(p_product_id uuid)
