@@ -179,8 +179,14 @@ revoke execute on function public.settle_draft(text, uuid) from public;
 grant execute on function public.settle_draft(text, uuid) to authenticated;
 
 -- ── Counts ignore no-op drafts ────────────────
--- Same five output columns as before, so CREATE OR REPLACE is safe. (0015 had
--- to DROP first because it added a column; nothing changes shape here.)
+-- This file owns pending_changes() outright now; 0015 no longer defines it, so
+-- re-running 0015 cannot revert the no-op filtering below.
+--
+-- DROP first is required for that reason: on a database rebuilt from scratch
+-- the last definition before this one is 0012's FOUR-column version, and
+-- CREATE OR REPLACE cannot change a return type. Without the drop, a clean
+-- rebuild would fail here with exactly the error that broke 0015.
+drop function if exists public.pending_changes();
 create or replace function public.pending_changes()
 returns table (products integer, categories integer, journal integer,
                content integer, pages integer)

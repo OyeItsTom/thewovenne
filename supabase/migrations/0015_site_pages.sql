@@ -19,6 +19,11 @@
 -- inject anything.
 --
 -- Requires 0002 (is_admin) and 0011 (the versioning pattern).
+--
+-- SAFE TO RE-RUN: every statement is guarded (if not exists / drop if
+-- exists / create or replace), the page seed skips slugs that already
+-- exist, and this file no longer redefines pending_changes() — 0018 owns
+-- that now, so re-running cannot revert its no-op filtering.
 
 create table if not exists site_pages (
   id uuid primary key default gen_random_uuid(),
@@ -148,32 +153,14 @@ grant execute on function
 -- ── Extend the existing publish machinery ─────
 -- Pages join the same transaction rather than getting their own button.
 --
--- DROP before CREATE is required, not stylistic: 0012 defined
--- pending_changes() with four output columns and this adds a fifth. The column
--- list of a RETURNS TABLE is part of the signature, and CREATE OR REPLACE
--- cannot change a return type — it raises "cannot change return type of
--- existing function", which aborts the script and, because the SQL editor runs
--- it in a transaction, rolls back the tables created above it too.
-drop function if exists public.pending_changes();
-create or replace function public.pending_changes()
-returns table (products integer, categories integer, journal integer,
-               content integer, pages integer)
-language sql
-security definer
-stable
-set search_path = public
-as $$
-  select
-    (select count(*)::integer from product_versions   where state = 'draft'),
-    (select count(*)::integer from category_versions  where state = 'draft'),
-    (select count(*)::integer from journal_versions   where state = 'draft'),
-    (select count(*)::integer from site_content
-      where draft_value is distinct from value),
-    (select count(*)::integer from site_page_versions where state = 'draft');
-$$;
-
-revoke execute on function public.pending_changes() from public;
-grant execute on function public.pending_changes() to authenticated;
+-- pending_changes() USED to be redefined here, to add a fifth column for pages.
+-- It has moved to 0018, which owns it now: 0018 teaches it to ignore drafts that
+-- are identical to what is already published.
+--
+-- Leaving the old definition here would make re-running this file silently
+-- revert that — restoring the unfiltered count with no error to say so, and
+-- bringing back the phantom "1 change pending" that 0018 exists to remove.
+-- Migrations get re-run; a file that quietly undoes a later one is a trap.
 
 -- publish_all must promote pages too, in the same transaction as everything
 -- else — a page that staged forever would be a silent dead end.
