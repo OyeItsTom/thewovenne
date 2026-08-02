@@ -16,7 +16,7 @@ import Button from "@/components/ui/Button";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { getAllCategories } from "@/lib/categories";
 import { getDraftProductImages } from "@/lib/products";
-import { newProductDraft, productDraftId } from "@/lib/drafts";
+import { newProductDraft, productDraftId, settleDraft } from "@/lib/drafts";
 import { uploadImage } from "@/lib/storage";
 import { slugify, uniqueSlug, formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
@@ -381,6 +381,11 @@ export default function ProductModal({
       );
       return;
     }
+
+    // Only now is the save complete — scalars AND photos. Before this point
+    // "did anything change?" has no answer, because a photo-only edit leaves
+    // every scalar identical.
+    await settleDraft(client, "product", versionId);
 
     // Version rows carry product_id; the table wants the Product shape keyed by
     // the stable id, with the category name resolved locally.

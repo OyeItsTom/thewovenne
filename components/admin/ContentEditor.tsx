@@ -132,9 +132,28 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
         </label>
 
         <SeasonImage
+          label="Desktop image"
+          hint="Landscape — 1600 × 1200 works well (4:3). Keep the subject away from the edges."
           url={season.image_url}
           onChange={(url) => setSeason({ image_url: url })}
         />
+
+        <SeasonImage
+          label="Mobile image"
+          hint="Portrait — 1200 × 1500 works well (4:5). A wide photo centre-cropped to portrait usually loses its composition, which is why this is separate."
+          url={season.image_url_mobile}
+          onChange={(url) => setSeason({ image_url_mobile: url })}
+        />
+
+        {/* Not an error: a campaign is publishable without it. Worth saying
+            plainly, though, because the desktop crop standing in on a phone is
+            the kind of thing nobody notices until a customer does. */}
+        {!!season.image_url.trim() && !season.image_url_mobile.trim() && (
+          <p className="rounded-lg bg-linen/60 px-3 py-2 text-xs text-ink/70">
+            No mobile image yet — phones will show the desktop one, cropped to
+            portrait. Add a mobile image when you have one.
+          </p>
+        )}
 
         <Text label="Eyebrow (small line above)" value={season.eyebrow} onChange={(v) => setSeason({ eyebrow: v })} />
         <Text label="Heading" value={season.heading} onChange={(v) => setSeason({ heading: v })} />
@@ -190,9 +209,13 @@ function Block({
 }
 
 function SeasonImage({
+  label,
+  hint,
   url,
   onChange,
 }: {
+  label: string;
+  hint: string;
   url: string;
   onChange: (url: string) => void;
 }) {
@@ -219,7 +242,8 @@ function SeasonImage({
 
   return (
     <div className="text-sm">
-      <span className="font-medium text-ink/70">Image</span>
+      <span className="font-medium text-ink/70">{label}</span>
+      <p className="mt-0.5 text-xs text-ink/50">{hint}</p>
       <div className="mt-1 flex items-start gap-4">
         {url ? (
           <div className="relative h-24 w-32 overflow-hidden rounded-lg bg-linen">

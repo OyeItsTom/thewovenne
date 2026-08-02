@@ -6,7 +6,7 @@ import { Pencil, Trash2 } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { cn, formatINR } from "@/lib/utils";
 import { getBrowserSupabase } from "@/lib/supabase";
-import { markPendingDelete, productDraftId } from "@/lib/drafts";
+import { markPendingDelete, productDraftId, settleDraft } from "@/lib/drafts";
 import StockEditor from "./StockEditor";
 import DraftBadge from "./DraftBadge";
 
@@ -52,6 +52,11 @@ export default function ProductTable({
       setError(updateError.message);
       return;
     }
+
+    // Toggling a product off and back on lands exactly where it started, so
+    // clear the draft rather than leaving a change queued that changes nothing.
+    await settleDraft(client, "product", versionId);
+
     // The row already reflects the draft-merged view, so patch it locally
     // rather than re-reading.
     onUpdate({ ...product, ...patch });

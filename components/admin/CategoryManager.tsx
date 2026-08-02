@@ -13,7 +13,7 @@ import {
 import { getBrowserSupabase } from "@/lib/supabase";
 import { getAllCategories, getDraftCategoryIds } from "@/lib/categories";
 import { categoryLiveStatus, type LiveStatus } from "@/lib/categoryStatus";
-import { categoryDraftId, markPendingDelete, newCategoryDraft } from "@/lib/drafts";
+import { categoryDraftId, markPendingDelete, newCategoryDraft, settleDraft } from "@/lib/drafts";
 import { cn, uniqueSlug } from "@/lib/utils";
 import type { Category } from "@/lib/types";
 import Button from "@/components/ui/Button";
@@ -114,7 +114,15 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
     if (error || !versionId) {
       return { error: { message: error ?? "Could not start a draft." } };
     }
-    return client.from("category_versions").update(patch).eq("id", versionId);
+    const result = await client
+      .from("category_versions")
+      .update(patch)
+      .eq("id", versionId);
+
+    // Hiding a section and showing it again is a round trip to nowhere; don't
+    // leave it queued as a change.
+    if (!result.error) await settleDraft(client, "category", versionId);
+    return result;
   };
 
   const toggleVisible = (cat: Category) =>

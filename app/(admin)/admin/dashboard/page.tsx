@@ -26,8 +26,16 @@ import CategoryManager from "@/components/admin/CategoryManager";
 import ContentEditor from "@/components/admin/ContentEditor";
 import JournalManager from "@/components/admin/JournalManager";
 import TestErrorButton from "@/components/admin/TestErrorButton";
+import PublishQueue from "@/components/admin/PublishQueue";
 
-type Tab = "products" | "categories" | "content" | "pages" | "journal" | "activity";
+type Tab =
+  | "queue"
+  | "products"
+  | "categories"
+  | "content"
+  | "pages"
+  | "journal"
+  | "activity";
 
 export default function AdminDashboardPage() {
   const router = useRouter();
@@ -169,7 +177,7 @@ export default function AdminDashboardPage() {
 
       {/* Pending changes span every tab, so this sits above all of them. */}
       <div className="mt-8">
-        <PublishBar refreshKey={publishKey} />
+        <PublishBar refreshKey={publishKey} onReview={() => setTab("queue")} />
       </div>
 
       {/* Tabs */}
@@ -181,6 +189,7 @@ export default function AdminDashboardPage() {
           ["pages", "Pages"],
           ["journal", "Journal"],
           ["activity", "Activity"],
+          ["queue", "Review & Publish"],
         ] as [Tab, string][]).map(([id, label]) => (
           <button
             key={id}
@@ -219,6 +228,15 @@ export default function AdminDashboardPage() {
         {tab === "pages" && <PagesManager onChange={noteEdit} />}
         {tab === "journal" && <JournalManager onChange={noteEdit} />}
         {tab === "activity" && <AuditLog />}
+        {tab === "queue" && (
+          <PublishQueue
+            onChange={noteEdit}
+            onEdit={(target) => {
+              setTab(target as Tab);
+              noteEdit();
+            }}
+          />
+        )}
       </div>
 
       {/* Sentry verification */}

@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { getAdminPages, getDraftPageIds, type PageBlock, type SitePage } from "@/lib/pages";
-import { markPendingDelete, newPageDraft, pageDraftId } from "@/lib/drafts";
+import { markPendingDelete, newPageDraft, pageDraftId, settleDraft } from "@/lib/drafts";
 import { uploadImage } from "@/lib/storage";
 import { slugify, uniqueSlug } from "@/lib/utils";
 import Button from "@/components/ui/Button";
@@ -137,6 +137,9 @@ export default function PagesManager({ onChange }: { onChange?: () => void }) {
         meta_description: editing.meta_description || null,
       })
       .eq("id", versionId);
+
+    // A page edited back to its published wording is not a pending change.
+    if (!saveError) await settleDraft(client, "page", versionId);
 
     setSaving(false);
     if (saveError) return setError(saveError.message);
