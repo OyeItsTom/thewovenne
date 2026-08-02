@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { streamChat, type ChatMessage } from "@/lib/chat";
+import { streamChat, chatConfigured, type ChatMessage } from "@/lib/chat";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,8 +10,16 @@ export const dynamic = "force-dynamic";
  * exact orderId + email match (handled in lib/chat).
  */
 export async function POST(req: NextRequest) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return new Response("Chat is not configured yet.", { status: 503 });
+  // Checked before anything streams: once the response has started the status
+  // code is already sent, and a key problem can only be reported in-band.
+  if (!chatConfigured()) {
+    console.error(
+      "chat: ANTHROPIC_API_KEY is missing or not a real key — the concierge is disabled."
+    );
+    return new Response(
+      "Ask Wovenne isn't set up yet. Please message us on WhatsApp and we'll help straight away.",
+      { status: 503 }
+    );
   }
 
   let body: {
@@ -41,15 +49,27 @@ export async function POST(req: NextRequest) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
+        let sentAnything = false;
         try {
           claudeStream.on("text", (delta: string) => {
+            sentAnything = true;
             controller.enqueue(encoder.encode(delta));
           });
           await claudeStream.finalMessage();
           controller.close();
         } catch (err) {
+          // The status line has already gone out, so erroring the stream just
+          // drops the connection and the widget shows nothing. Say something
+          // useful instead and close cleanly; the log is what raises the alarm.
           console.error("chat stream error:", err);
-          controller.error(err);
+          if (!sentAnything) {
+            controller.enqueue(
+              encoder.encode(
+                "Sorry — I can't reach my notes just now. Please try again, or message us on WhatsApp and we'll help straight away."
+              )
+            );
+          }
+          controller.close();
         }
       },
     });
