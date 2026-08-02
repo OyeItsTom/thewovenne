@@ -26,6 +26,13 @@ export default function SeasonalEdit({
   const hasLink = !!content.link_href?.trim() && !!content.link_label?.trim();
   const mobileSrc = content.image_url_mobile?.trim() || content.image_url;
 
+  // Filling a band whose shape differs from the image means cropping — that is
+  // what "cover" is. For a photograph the lost edge costs nothing; for an
+  // illustration or anything containing text it destroys the subject. So the
+  // campaign chooses, and "contain" shows the whole image against the band.
+  const contain = content.image_fit === "contain";
+  const fit = contain ? "object-contain" : "object-cover";
+
   return (
     <section className="relative isolate w-full overflow-hidden bg-ink">
       {/* Sized in viewport height rather than by aspect ratio: a fixed ratio
@@ -50,14 +57,14 @@ export default function SeasonalEdit({
           alt=""
           fill
           sizes="100vw"
-          className="object-cover md:hidden"
+          className={`${fit} md:hidden`}
         />
         <Image
           src={content.image_url}
           alt=""
           fill
           sizes="100vw"
-          className="hidden object-cover md:block"
+          className={`hidden ${fit} md:block`}
         />
 
         {/* Legibility, not decoration. Text over an uncontrolled photograph is
@@ -66,7 +73,11 @@ export default function SeasonalEdit({
             words actually sit. */}
         <div
           aria-hidden
-          className="absolute inset-0 bg-gradient-to-t from-ink/80 via-ink/30 to-ink/5"
+          className={
+            contain
+              ? "absolute inset-0 bg-gradient-to-t from-ink/60 to-transparent"
+              : "absolute inset-0 bg-gradient-to-t from-ink/80 via-ink/30 to-ink/5"
+          }
         />
 
         <div className="absolute inset-x-0 bottom-0">

@@ -133,16 +133,37 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
           </span>
         </label>
 
+        <label className="block text-sm">
+          <span className="font-medium text-ink/70">How the image fills the band</span>
+          <select
+            value={season.image_fit}
+            onChange={(e) =>
+              setSeason({ image_fit: e.target.value as "cover" | "contain" })
+            }
+            className="mt-1 w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
+          >
+            <option value="cover">Fill the band — crops the edges (photographs)</option>
+            <option value="contain">Show the whole image — no cropping (illustrations, diagrams)</option>
+          </select>
+        </label>
+        <p className="-mt-2 text-xs text-ink/50">
+          The band is a fixed shape, so filling it edge to edge means cropping
+          anything that doesn&apos;t match — unavoidable, not a bug. That&apos;s
+          right for a photograph. For an illustration or anything with lettering
+          in it, choose &ldquo;show the whole image&rdquo; instead: it appears
+          complete, with the background showing above and below.
+        </p>
+
         <SeasonImage
           label="Desktop image"
-          hint="Wide/landscape — 2400 × 1200 works well. It runs edge to edge, so keep the subject clear of the outer edges and leave the lower third calm: the heading sits there."
+          hint="Wide/landscape — export around 2400 × 1000. The band is roughly 2.4:1 on a typical desktop, so a squarer image loses its top and bottom. Keep the lower third calm: the heading sits there."
           url={season.image_url}
           onChange={(url) => setSeason({ image_url: url })}
         />
 
         <SeasonImage
           label="Mobile image"
-          hint="Tall/portrait — 1200 × 1600 works well. On a phone the band is portrait, so a wide photo centre-cropped to fit usually loses its composition — that is why this is separate. Leave the lower third calm here too."
+          hint="Tall/portrait — export around 1200 × 2000. On a phone the band is roughly 3:5, so a wide photo cropped to fit loses most of its composition; that is why this is a separate upload. Keep the lower third calm here too."
           url={season.image_url_mobile}
           onChange={(url) => setSeason({ image_url_mobile: url })}
         />
