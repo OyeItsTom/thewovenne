@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { getAllProducts } from "@/lib/storefront";
 import { getVisibleCategoryTree } from "@/lib/storefront";
 import ShopFilters from "@/components/shop/ShopFilters";
+import { getSizesForProducts } from "@/lib/sizes";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 // Cache the catalogue for 60s so the DB isn't queried on every request.
@@ -24,6 +25,8 @@ export default async function ShopPage() {
     getAllProducts(),
     getVisibleCategoryTree(),
   ]);
+  const sizeMap = await getSizesForProducts(products.map((p) => p.id));
+  const sizesByProduct = Object.fromEntries(sizeMap);
 
   return (
     <div className="container-wovenne section-padding">
@@ -33,7 +36,11 @@ export default async function ShopPage() {
           Shop All
         </h1>
       </div>
-      <ShopFilters products={products} categoryTree={categoryTree} />
+      <ShopFilters
+        products={products}
+        categoryTree={categoryTree}
+        sizesByProduct={sizesByProduct}
+      />
     </div>
   );
 }

@@ -5,7 +5,8 @@ import {
   getVisibleCategoryTree,
   getProductsByCategoryIds,
 } from "@/lib/storefront";
-import ProductGrid from "@/components/shop/ProductGrid";
+import CategoryFilters from "@/components/shop/CategoryFilters";
+import { getSizesForProducts } from "@/lib/sizes";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 /**
@@ -63,6 +64,9 @@ export default async function SubCategoryPage({
   if (!parent || !child) notFound();
 
   const products = await getProductsByCategoryIds([child.id]);
+  // One query for every product's sizes rather than one per product.
+  const sizeMap = await getSizesForProducts(products.map((p) => p.id));
+  const sizesByProduct = Object.fromEntries(sizeMap);
 
   return (
     <div className="container-wovenne section-padding">
@@ -87,7 +91,7 @@ export default async function SubCategoryPage({
             This collection is still on the loom. Please check back soon.
           </p>
         ) : (
-          <ProductGrid products={products} />
+          <CategoryFilters products={products} sizesByProduct={sizesByProduct} />
         )}
       </div>
     </div>

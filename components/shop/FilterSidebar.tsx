@@ -9,6 +9,7 @@ export interface Filters {
   category: string | null;
   fabric: string | null;
   colour: string | null;
+  size: string | null;
   maxPrice: number | null;
 }
 
@@ -21,12 +22,21 @@ export interface FilterOptions {
   categoryGroups: CategoryFilterGroup[];
   fabrics: string[];
   colours: string[];
+  /**
+   * Sizes that at least one product on show still has stock in.
+   *
+   * Empty hides the Size filter entirely — which is how sarees end up without
+   * one without anybody hardcoding "sarees". Any future size-less category gets
+   * the same treatment for free, and renaming a category cannot break it.
+   */
+  sizes: string[];
 }
 
 export const EMPTY_FILTERS: Filters = {
   category: null,
   fabric: null,
   colour: null,
+  size: null,
   maxPrice: null,
 };
 
@@ -52,7 +62,11 @@ export default function FilterSidebar({
     onChange({ ...filters, ...patch });
 
   const hasActiveFilters =
-    filters.category || filters.fabric || filters.colour || filters.maxPrice;
+    filters.category ||
+    filters.fabric ||
+    filters.colour ||
+    filters.size ||
+    filters.maxPrice;
 
   const content = (
     <div className="space-y-8">
@@ -63,6 +77,14 @@ export default function FilterSidebar({
           update({ category: filters.category === v ? null : v })
         }
       />
+      {options.sizes.length > 0 && (
+        <FilterGroup
+          title="Size"
+          options={options.sizes}
+          selected={filters.size}
+          onSelect={(v) => update({ size: filters.size === v ? null : v })}
+        />
+      )}
       <FilterGroup
         title="Fabric"
         options={options.fabrics}
