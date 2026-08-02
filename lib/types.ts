@@ -141,6 +141,20 @@ export interface SeasonalEditContent {
   image_url: string;
   /** Portrait crop for narrow screens. Falls back to image_url when empty. */
   image_url_mobile: string;
+  /**
+   * How the image meets the band.
+   *
+   * "cover" fills it edge to edge and crops whatever does not fit — right for a
+   * photograph, where losing an edge costs nothing.
+   *
+   * "contain" shows the whole image and lets the band's colour show around it —
+   * right for an illustration or anything with text in it, where a cropped edge
+   * destroys the thing itself.
+   *
+   * The two cannot be reconciled: filling a band whose shape differs from the
+   * image means cropping, by definition. So it is a choice, not a default.
+   */
+  image_fit: "cover" | "contain";
   link_label: string;
   link_href: string;
 }

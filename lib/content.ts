@@ -32,6 +32,7 @@ export const DEFAULT_CONTENT: SiteContentMap = {
     body: "",
     image_url: "",
     image_url_mobile: "",
+    image_fit: "cover",
     link_label: "",
     link_href: "",
   },
