@@ -1,4 +1,6 @@
 import { supabase } from "./supabase";
+import { getProductBySlug } from "./products";
+import { ANON_CTX } from "./readCtx";
 
 /**
  * Where a path that no longer resolves has moved to.
@@ -23,5 +25,14 @@ export async function resolveOldPath(path: string): Promise<string | null> {
   }
   const to = data as string | null;
   // Never redirect a path to itself — that is an infinite loop for the browser.
-  return to && to !== path ? to : null;
+  if (!to || to === path) return null;
+
+  // Only send a visitor somewhere they can actually get to. A product filed
+  // under a hidden category still HAS a canonical path, so without this check a
+  // dead link becomes a redirect that lands on a 404 — worse than 404ing
+  // straight away, for crawlers and for people. Costs one query, and only on
+  // the miss path.
+  const slug = to.split("/").pop() ?? "";
+  const reachable = await getProductBySlug(slug, ANON_CTX);
+  return reachable ? to : null;
 }
