@@ -4,7 +4,6 @@ import { createRSCClient } from "@/lib/supabaseRSC";
 import { getProductsByIds } from "@/lib/products";
 import ProductGrid from "@/components/shop/ProductGrid";
 import { buttonClassName } from "@/components/ui/Button";
-import AccountNav from "@/components/account/AccountNav";
 
 export const metadata: Metadata = {
   title: "Your wishlist | THE WOVENNE",
@@ -50,18 +49,14 @@ export default async function WishlistPage() {
   const ids = (rows ?? []).map((r) => r.product_id as string);
   const products = ids.length ? await getProductsByIds(ids) : [];
 
+  // The account layout owns the sidebar and the page padding. This page kept
+  // its own copies from before that layout existed, which is why choosing
+  // Wishlist drew the whole menu again inside the content.
   return (
-    <div className="container-wovenne section-padding">
-      <AccountNav />
+    <div>
+      <h1 className="font-heading text-display-sm text-ink">Your wishlist</h1>
 
-      <div className="mt-12 text-center">
-        <p className="eyebrow">Saved for later</p>
-        <h1 className="mt-3 font-heading text-display-sm text-ink">
-          Your wishlist
-        </h1>
-      </div>
-
-      <div className="mt-12">
+      <div className="mt-8">
         {products.length === 0 ? (
           <div className="py-16 text-center">
             <p className="text-sm text-ink/60">

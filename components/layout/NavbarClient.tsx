@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ChevronDown, Heart, Menu, ShoppingBag, User, X } from "lucide-react";
+import { ChevronDown, Heart, Menu, Search, ShoppingBag, User, X } from "lucide-react";
 import { useCartStore } from "@/lib/store";
+import SearchField from "@/components/shop/SearchField";
 
 export interface NavChild {
   href: string;
@@ -39,6 +40,7 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [expandedMobile, setExpandedMobile] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reduced = useReducedMotion();
   const totalItems = useCartStore((s) => s.totalItems());
@@ -60,24 +62,31 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
   }, []);
 
   // Escape closes the menu. A hover menu with no keyboard exit traps anyone
-  // navigating by keyboard once it has opened on focus.
+  // navigating by keyboard once it has opened on focus. The search panel goes
+  // through the same handler — Escape is what people press to dismiss a search
+  // field, and having it work in one place but not the other is worse than
+  // neither.
   useEffect(() => {
-    if (!openMenu) return;
+    if (!openMenu && !searchOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpenMenu(null);
+      if (e.key !== "Escape") return;
+      setOpenMenu(null);
+      setSearchOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openMenu]);
+  }, [openMenu, searchOpen]);
 
   return (
     <header className="sticky top-0 z-40 border-b border-ink/5 bg-cream/90 backdrop-blur-md">
       <nav className="container-wovenne flex items-center justify-between py-4">
-        {/* The logo + wordmark is the home button, on every page. */}
+        {/* Emblem alone — the wordmark belongs to the hero, where it is stated
+            once at full size instead of repeated small on every page. The
+            aria-label carries the name for anyone who cannot see the mark. */}
         <Link
           href="/"
           aria-label="THE WOVENNE — home"
-          className="flex items-center gap-2 font-heading text-2xl tracking-wide text-ink sm:text-3xl"
+          className="flex items-center text-ink transition-opacity hover:opacity-70"
         >
           <Image
             src="/logo_emblem_transparent.png"
@@ -85,10 +94,9 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
             width={3096}
             height={2792}
             priority
-            sizes="40px"
-            className="h-8 w-auto"
+            sizes="48px"
+            className="h-10 w-auto sm:h-11"
           />
-          THE WOVENNE
         </Link>
 
         <div className="hidden items-center gap-8 md:flex">
@@ -175,6 +183,15 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
         </div>
 
         <div className="flex items-center gap-5">
+          <button
+            onClick={() => setSearchOpen((v) => !v)}
+            aria-label={searchOpen ? "Close search" : "Search"}
+            aria-expanded={searchOpen}
+            className="text-ink transition-colors hover:text-terracotta"
+          >
+            <Search className="h-6 w-6" strokeWidth={1.5} />
+          </button>
+
           <Link
             href={WISHLIST_HREF}
             aria-label="Wishlist"
@@ -213,6 +230,29 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
           </button>
         </div>
       </nav>
+
+      {/* Expands below the bar rather than replacing the nav in place: the row
+          keeps its height, so nothing under the header jumps when it opens. */}
+      <AnimatePresence>
+        {searchOpen && (
+          <motion.div
+            initial={reduced ? { opacity: 0 } : { height: 0, opacity: 0 }}
+            animate={reduced ? { opacity: 1 } : { height: "auto", opacity: 1 }}
+            exit={reduced ? { opacity: 0 } : { height: 0, opacity: 0 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden border-t border-ink/5"
+          >
+            <div className="container-wovenne py-4">
+              <div className="mx-auto max-w-xl">
+                <SearchField
+                  autoFocus
+                  onSubmitted={() => setSearchOpen(false)}
+                />
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {mobileOpen && (

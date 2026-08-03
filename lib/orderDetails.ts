@@ -20,11 +20,24 @@ export interface ShippingAddress {
   country: string;
 }
 
+/**
+ * Where delivery progress updates go.
+ *
+ * Only channels we could plausibly honour. WhatsApp is recorded but not yet
+ * sent — no provider is connected — and the checkout says so. SMS is absent on
+ * purpose: India's DLT registration is a lot of compliance for the weakest of
+ * the three experiences.
+ */
+export type DeliveryChannel = "email" | "whatsapp";
+
+const DELIVERY_CHANNELS: readonly DeliveryChannel[] = ["email", "whatsapp"];
+
 export interface OrderDetails {
   email: string;
   name: string;
   phone: string;
   address: ShippingAddress;
+  delivery_updates: DeliveryChannel;
 }
 
 export const EMPTY_ADDRESS: ShippingAddress = {
@@ -69,10 +82,21 @@ export function validateOrderDetails(input: unknown): ValidationResult {
   const raw = (input ?? {}) as Record<string, unknown>;
   const addr = (raw.address ?? {}) as Record<string, unknown>;
 
+  // Anything unrecognised falls back to email rather than being rejected. The
+  // channel is a preference, not an instruction, and a bad value here should
+  // never be the thing that stops someone paying.
+  const channel = raw.delivery_updates;
+  const delivery_updates: DeliveryChannel = DELIVERY_CHANNELS.includes(
+    channel as DeliveryChannel
+  )
+    ? (channel as DeliveryChannel)
+    : "email";
+
   const details: OrderDetails = {
     email: clean(raw.email, LIMITS.email).toLowerCase(),
     name: clean(raw.name, LIMITS.name),
     phone: clean(raw.phone, LIMITS.phone),
+    delivery_updates,
     address: {
       line1: clean(addr.line1, LIMITS.line1),
       line2: clean(addr.line2, LIMITS.line2),

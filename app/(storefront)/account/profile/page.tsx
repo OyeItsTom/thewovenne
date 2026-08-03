@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { createRSCClient } from "@/lib/supabaseRSC";
+import { getProductsByIds } from "@/lib/products";
 import ProfileForm from "@/components/account/ProfileForm";
-import ChangePassword from "@/components/account/ChangePassword";
-import DangerZone from "@/components/account/DangerZone";
+import ProductGrid from "@/components/shop/ProductGrid";
 
 export const metadata: Metadata = {
   title: "Your profile | THE WOVENNE",
@@ -10,6 +11,20 @@ export const metadata: Metadata = {
 };
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Who the customer is, and what they have their eye on.
+ *
+ * The wishlist is shown HERE rather than only linked, because it is the one
+ * thing on the account worth looking at rather than acting on — the reason to
+ * come back. Everything that changes a setting now lives under Settings, which
+ * leaves this page as a single coherent thing instead of details stacked on
+ * top of levers.
+ *
+ * The full wishlist keeps its own page: this is a preview, capped, with a way
+ * through to the rest.
+ */
+const PREVIEW_COUNT = 8;
 
 export default async function ProfilePage() {
   const supabase = createRSCClient();
@@ -40,27 +55,67 @@ export default async function ProfilePage() {
         .maybeSingle()
     : { data: null };
 
+  // RLS restricts this to the signed-in customer's rows.
+  const { data: savedRows } = user
+    ? await supabase
+        .from("wishlists")
+        .select("product_id")
+        .order("created_at", { ascending: false })
+    : { data: null };
+
+  const savedIds = (savedRows ?? []).map((r) => r.product_id as string);
+  const saved = savedIds.length
+    ? await getProductsByIds(savedIds.slice(0, PREVIEW_COUNT))
+    : [];
+
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="font-heading text-display-sm text-ink">Profile</h1>
-        <p className="mt-2 text-sm text-ink/60">
-          Your details, and how you sign in.
-        </p>
+    <div className="space-y-12">
+      <div className="space-y-8">
+        <div>
+          <h1 className="font-heading text-display-sm text-ink">Profile</h1>
+          <p className="mt-2 text-sm text-ink/60">Your details.</p>
+        </div>
+
+        <ProfileForm
+          initialName={profile?.full_name ?? ""}
+          email={profile?.email ?? user?.email ?? ""}
+          lastPhone={
+            (lastOrder as { customer_phone?: string } | null)?.customer_phone ?? null
+          }
+        />
       </div>
 
-      <ProfileForm
-        initialName={profile?.full_name ?? ""}
-        email={profile?.email ?? user?.email ?? ""}
-        lastPhone={(lastOrder as { customer_phone?: string } | null)?.customer_phone ?? null}
-      />
+      <section>
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="font-heading text-2xl text-ink">Your wishlist</h2>
+          {savedIds.length > PREVIEW_COUNT && (
+            <Link
+              href="/account/wishlist"
+              className="border-b border-terracotta pb-0.5 text-xs uppercase tracking-widest text-terracotta"
+            >
+              All {savedIds.length} saved
+            </Link>
+          )}
+        </div>
 
-      <ChangePassword />
-
-      {/* Last, and visually separated. Genuinely reachable — data-deletion is a
-          right, not a favour — but not something to hit while looking for
-          something else. */}
-      <DangerZone />
+        <div className="mt-6">
+          {saved.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-ink/15 px-6 py-12 text-center">
+              <p className="text-sm text-ink/60">
+                Nothing saved yet. Tap the heart on anything you like.
+              </p>
+              <Link
+                href="/shop"
+                className="mt-5 inline-block border-b border-terracotta pb-1 text-xs uppercase tracking-widest text-terracotta"
+              >
+                Browse the collection
+              </Link>
+            </div>
+          ) : (
+            <ProductGrid products={saved} />
+          )}
+        </div>
+      </section>
     </div>
   );
 }

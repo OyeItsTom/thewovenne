@@ -7,8 +7,9 @@ import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useCartStore } from "@/lib/store";
 import { formatINR } from "@/lib/utils";
-import { EMPTY_ADDRESS, type OrderDetails } from "@/lib/orderDetails";
+import { type OrderDetails, type DeliveryChannel } from "@/lib/orderDetails";
 import { quoteShipping, type ShippingConfig } from "@/lib/shipping";
+import type { CheckoutIdentity } from "@/lib/checkoutIdentity";
 import Button from "@/components/ui/Button";
 
 /**
@@ -16,6 +17,12 @@ import Button from "@/components/ui/Button";
  *
  * The fields are validated again on the server — this form's job is to make
  * getting it right easy, not to be the thing that guarantees it.
+ *
+ * A SIGNED-IN CUSTOMER IS NOT ASKED WHO THEY ARE. Name and email come from the
+ * account and are shown as a fact, not a field: re-typing them invites a typo
+ * that sends the receipt to an address the account cannot see. What is still
+ * asked is what genuinely varies per parcel — where it goes, and the number
+ * the courier should ring.
  */
 
 interface RazorpayPaymentResponse {
@@ -30,22 +37,23 @@ declare global {
   }
 }
 
-const EMPTY: OrderDetails = {
-  email: "",
-  name: "",
-  phone: "",
-  address: { ...EMPTY_ADDRESS },
-};
-
 export default function CheckoutForm({
   shipping: shippingConfig,
+  identity,
 }: {
   shipping: ShippingConfig;
+  identity: CheckoutIdentity;
 }) {
   const router = useRouter();
   const items = useCartStore((s) => s.items);
   const clearCart = useCartStore((s) => s.clearCart);
-  const [form, setForm] = useState<OrderDetails>(EMPTY);
+  const [form, setForm] = useState<OrderDetails>({
+    email: identity.email,
+    name: identity.name,
+    phone: identity.phone,
+    address: { ...identity.address },
+    delivery_updates: "email",
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,6 +70,9 @@ export default function CheckoutForm({
   const setAddr = (field: keyof OrderDetails["address"]) =>
     (e: React.ChangeEvent<HTMLInputElement>) =>
       setForm((f) => ({ ...f, address: { ...f.address, [field]: e.target.value } }));
+
+  const setChannel = (delivery_updates: DeliveryChannel) =>
+    setForm((f) => ({ ...f, delivery_updates }));
 
   async function handlePay(e: React.FormEvent) {
     e.preventDefault();
@@ -131,19 +142,51 @@ export default function CheckoutForm({
       <form onSubmit={handlePay} className="mt-10 space-y-8">
         <section className="space-y-4">
           <h2 className="font-heading text-xl text-ink">Contact</h2>
-          <Field
-            label="Email"
-            type="email"
-            required
-            autoComplete="email"
-            value={form.email}
-            onChange={set("email")}
-            hint="Your order confirmation and tracking updates go here."
-          />
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Full name" required autoComplete="name" value={form.name} onChange={set("name")} />
-            <Field label="Phone" type="tel" required autoComplete="tel" value={form.phone} onChange={set("phone")} />
-          </div>
+
+          {identity.signedIn ? (
+            <>
+              {/* Shown, not asked. The account already holds these, and the
+                  receipt has to reach the address the account can see. */}
+              <div className="rounded-xl border border-ink/10 bg-linen/40 px-4 py-3.5 text-sm">
+                <p className="text-ink">{identity.name || "Your account"}</p>
+                <p className="mt-0.5 text-ink/60">{identity.email}</p>
+                <p className="mt-2 text-xs text-ink/50">
+                  From your account.{" "}
+                  <Link
+                    href="/account/settings"
+                    className="border-b border-ink/30 pb-px hover:text-ink"
+                  >
+                    Change your name
+                  </Link>
+                </p>
+              </div>
+              <Field
+                label="Phone"
+                type="tel"
+                required
+                autoComplete="tel"
+                value={form.phone}
+                onChange={set("phone")}
+                hint="For the courier, if they need to reach you on the day."
+              />
+            </>
+          ) : (
+            <>
+              <Field
+                label="Email"
+                type="email"
+                required
+                autoComplete="email"
+                value={form.email}
+                onChange={set("email")}
+                hint="Your order confirmation and tracking updates go here."
+              />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Full name" required autoComplete="name" value={form.name} onChange={set("name")} />
+                <Field label="Phone" type="tel" required autoComplete="tel" value={form.phone} onChange={set("phone")} />
+              </div>
+            </>
+          )}
         </section>
 
         <section className="space-y-4">
@@ -158,6 +201,45 @@ export default function CheckoutForm({
             <Field label="PIN / postcode" required autoComplete="postal-code" value={form.address.postal_code} onChange={setAddr("postal_code")} />
             <Field label="Country" required autoComplete="country-name" value={form.address.country} onChange={setAddr("country")} />
           </div>
+
+          {identity.prefilledFromLastOrder && (
+            <p className="text-xs text-ink/50">
+              Filled in from your last order — change anything that&apos;s
+              different this time.
+            </p>
+          )}
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="font-heading text-xl text-ink">Delivery updates</h2>
+          <p className="text-sm text-ink/60">
+            How you&apos;d like to hear as your order moves.
+          </p>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <ChannelOption
+              value="email"
+              checked={form.delivery_updates === "email"}
+              onChange={setChannel}
+              title="Email"
+              blurb="Sent to the address on this order."
+            />
+            <ChannelOption
+              value="whatsapp"
+              checked={form.delivery_updates === "whatsapp"}
+              onChange={setChannel}
+              title="WhatsApp"
+              // Says plainly that this is a preference, not a promise. A
+              // channel that cannot send yet must not imply a message is
+              // coming — that is worse than not offering it.
+              blurb="Coming soon — we'll note your preference and email you meanwhile."
+            />
+          </div>
+
+          <p className="text-xs text-ink/50">
+            Your order confirmation always arrives by email either way — it is
+            your receipt.
+          </p>
         </section>
 
         <div className="rounded-xl border border-ink/10 bg-linen/40 p-5">
@@ -208,6 +290,45 @@ export default function CheckoutForm({
         </p>
       </form>
     </>
+  );
+}
+
+function ChannelOption({
+  value,
+  checked,
+  onChange,
+  title,
+  blurb,
+}: {
+  value: DeliveryChannel;
+  checked: boolean;
+  onChange: (v: DeliveryChannel) => void;
+  title: string;
+  blurb: string;
+}) {
+  return (
+    <label
+      className={`flex cursor-pointer gap-3 rounded-xl border p-4 transition-colors ${
+        checked
+          ? "border-terracotta bg-terracotta/5"
+          : "border-ink/15 bg-white hover:border-ink/30"
+      }`}
+    >
+      <input
+        type="radio"
+        name="delivery_updates"
+        value={value}
+        checked={checked}
+        onChange={() => onChange(value)}
+        className="mt-1 h-4 w-4 shrink-0 accent-terracotta"
+      />
+      <span className="block">
+        <span className="block text-sm font-medium text-ink">{title}</span>
+        <span className="mt-0.5 block text-xs leading-relaxed text-ink/55">
+          {blurb}
+        </span>
+      </span>
+    </label>
   );
 }
 

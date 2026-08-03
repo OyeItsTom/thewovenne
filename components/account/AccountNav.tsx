@@ -12,15 +12,16 @@ import { cn } from "@/lib/utils";
  * sections either way, so a customer who learns the layout on a phone finds it
  * where they expect on a laptop.
  *
- * Addresses is deliberately absent: nothing stores a customer address book yet.
- * Only orders carry an address, captured per order at checkout. A menu item
- * leading to an empty page would be worse than no menu item.
+ * Four sections, and Settings is the last of them on purpose. Profile is what a
+ * customer comes here to look at; changing a password, editing preferences or
+ * closing the account are things they come here to DO, occasionally, and they
+ * are gathered in one place rather than stacked under the details.
  */
 const LINKS = [
   { href: "/account/profile", label: "Profile", icon: User },
   { href: "/account/orders", label: "Orders", icon: Package },
   { href: "/account/wishlist", label: "Wishlist", icon: Heart },
-  { href: "/account/preferences", label: "Preferences", icon: Settings },
+  { href: "/account/settings", label: "Settings", icon: Settings },
 ];
 
 export default function AccountNav() {

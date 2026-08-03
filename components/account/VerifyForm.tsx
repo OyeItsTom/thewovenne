@@ -21,7 +21,13 @@ import { verifySignupCode, resendSignupCode, AFTER_LOGIN } from "@/lib/customerA
  * Password reset uses a link instead: that token establishes a session when
  * clicked, and the user is usually on a different device by then anyway.
  */
-export default function VerifyForm({ email }: { email: string }) {
+export default function VerifyForm({
+  email,
+  from,
+}: {
+  email: string;
+  from?: string | null;
+}) {
   const router = useRouter();
 
   const [code, setCode] = useState("");
@@ -41,8 +47,12 @@ export default function VerifyForm({ email }: { email: string }) {
       setBusy(false);
       return;
     }
-    // verifyOtp signs the customer in, so go straight where they were headed.
-    router.push(AFTER_LOGIN);
+    // verifyOtp signs the customer in, so go straight where they were headed —
+    // the checkout, if that is where they started. Relative paths only: an
+    // absolute one would make this an open redirect.
+    const onward =
+      from && from.startsWith("/") && !from.startsWith("//") ? from : AFTER_LOGIN;
+    router.push(onward);
     router.refresh();
   }
 

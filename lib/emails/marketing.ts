@@ -57,7 +57,7 @@ function shell(body: string, siteUrl: string): string {
         <tr><td style="border-top:1px solid #eee;padding-top:20px;font-size:11px;line-height:1.6;color:${MUTED};">
           You're receiving this because you asked for updates when you created
           your account. You can turn them off any time in
-          <a href="${siteUrl}/account/preferences" style="color:${TERRACOTTA};">your preferences</a>
+          <a href="${siteUrl}/account/settings" style="color:${TERRACOTTA};">your preferences</a>
           — order and delivery emails are separate and will keep arriving.
         </td></tr>
       </table>
@@ -130,7 +130,7 @@ export function marketingText(
       : `Your wishlist: ${siteUrl}/account/wishlist`,
     "",
     "You're receiving this because you asked for updates when you created your",
-    `account. Turn them off any time: ${siteUrl}/account/preferences`,
+    `account. Turn them off any time: ${siteUrl}/account/settings`,
     "Order and delivery emails are separate and will keep arriving.",
     "",
     "THE WOVENNE",

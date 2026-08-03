@@ -51,7 +51,9 @@ export default async function Footer() {
               </Link>
             </li>
             <li>
-              <Link href="/#story" className="transition-colors hover:text-cream">
+              {/* /about, not the old /#story anchor — that homepage section no
+                  longer exists. */}
+              <Link href="/about" className="transition-colors hover:text-cream">
                 Our Story
               </Link>
             </li>

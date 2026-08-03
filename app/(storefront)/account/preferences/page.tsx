@@ -1,50 +1,13 @@
-import type { Metadata } from "next";
-import { createRSCClient } from "@/lib/supabaseRSC";
-import MarketingPreference from "@/components/account/MarketingPreference";
-import LoyaltyPanel from "@/components/account/LoyaltyPanel";
-
-export const metadata: Metadata = {
-  title: "Your preferences | THE WOVENNE",
-  robots: { index: false, follow: false },
-};
-
-export const dynamic = "force-dynamic";
+import { permanentRedirect } from "next/navigation";
 
 /**
- * Where a customer decides what we may send them.
+ * Preferences moved into Settings alongside the password, address and account
+ * deletion controls.
  *
- * Its own page rather than a line buried in a settings list, because this is
- * also the route by which accounts created BEFORE consent existed can opt in.
- * Nobody was opted in on their behalf.
+ * Kept as a redirect rather than deleted: this path has been linked from
+ * marketing emails ("change what we send you"), and those land in inboxes that
+ * outlive any deploy. A 308 keeps every one of them working.
  */
-export default async function PreferencesPage() {
-  const supabase = createRSCClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const { data } = user
-    ? await supabase
-        .from("profiles")
-        .select("marketing_consent")
-        .eq("id", user.id)
-        .maybeSingle()
-    : { data: null };
-
-  const consent = (data as { marketing_consent?: boolean } | null)?.marketing_consent ?? false;
-
-  return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="font-heading text-display-sm text-ink">Preferences</h1>
-        <p className="mt-2 text-sm text-ink/60">What we may send you.</p>
-      </div>
-
-      <div className="space-y-6">
-        {/* Renders nothing while the scheme is off. */}
-        <LoyaltyPanel />
-        <MarketingPreference initial={consent} />
-      </div>
-    </div>
-  );
+export default function PreferencesRedirect() {
+  permanentRedirect("/account/settings");
 }

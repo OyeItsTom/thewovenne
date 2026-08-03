@@ -6,14 +6,21 @@ import ProductOptions from "@/components/product/ProductOptions";
 import CareAccordion from "@/components/product/CareAccordion";
 import ProductGrid from "@/components/shop/ProductGrid";
 import WishlistButton from "@/components/shop/WishlistButton";
+import ProductReviews from "@/components/product/ProductReviews";
+import Stars from "@/components/product/Stars";
+import { getReviews, getRating } from "@/lib/reviews";
 import type { Product } from "@/lib/types";
 import type { ProductSize } from "@/lib/sizes";
 
 /**
  * The product page body, shared so the canonical hierarchical route is the only
  * place this markup lives.
+ *
+ * Reviews are fetched HERE rather than in each route, so the two routes that
+ * render this cannot drift into showing different things. Both are public
+ * reads, so they cache with the page.
  */
-export default function ProductDetail({
+export default async function ProductDetail({
   product,
   images,
   related,
@@ -29,6 +36,10 @@ export default function ProductDetail({
   breadcrumb?: { parent: { slug: string; name: string }; child: { slug: string; name: string } };
 }) {
   const { price, wasPrice } = effectivePrice(product);
+  const [reviews, rating] = await Promise.all([
+    getReviews(product.id),
+    getRating(product.id),
+  ]);
 
   return (
     <div className="container-wovenne section-padding pb-28 lg:pb-24">
@@ -68,6 +79,20 @@ export default function ProductDetail({
               className="mt-1 shrink-0 border border-ink/10"
             />
           </div>
+          {/* Only once there is something to say. A row of empty stars reading
+              "no reviews" on every product makes a young catalogue look
+              unloved, and says nothing a buyer can use. */}
+          {rating.total > 0 && rating.average !== null && (
+            <a
+              href="#reviews"
+              className="mt-3 inline-flex items-center gap-2 text-sm text-ink/60 transition-colors hover:text-ink"
+            >
+              <Stars rating={rating.average} />
+              {rating.average.toFixed(1)} · {rating.total}{" "}
+              {rating.total === 1 ? "review" : "reviews"}
+            </a>
+          )}
+
           <p className="mt-3 font-body text-2xl text-ink">
             {formatINR(price)}
             {wasPrice != null && (
@@ -106,6 +131,12 @@ export default function ProductDetail({
           </div>
         </div>
       )}
+
+      <ProductReviews
+        productId={product.id}
+        reviews={reviews}
+        rating={rating}
+      />
     </div>
   );
 }

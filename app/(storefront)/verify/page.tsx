@@ -9,7 +9,12 @@ export const metadata: Metadata = {
 export default function VerifyPage({
   searchParams,
 }: {
-  searchParams: { email?: string };
+  searchParams: { email?: string; from?: string };
 }) {
-  return <VerifyForm email={searchParams.email ?? ""} />;
+  return (
+    <VerifyForm
+      email={searchParams.email ?? ""}
+      from={searchParams.from ?? null}
+    />
+  );
 }

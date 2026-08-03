@@ -4,7 +4,6 @@ import { createRSCClient } from "@/lib/supabaseRSC";
 import { getMyOrders, orderRef, STATUS_LABEL, STATUS_BLURB } from "@/lib/orders";
 import { formatINR } from "@/lib/utils";
 import { buttonClassName } from "@/components/ui/Button";
-import AccountNav from "@/components/account/AccountNav";
 import OrderStatusTrail from "@/components/account/OrderStatusTrail";
 
 export const metadata: Metadata = {
@@ -49,16 +48,15 @@ export default async function OrdersPage() {
   // JWT. Filtering here as well would imply the policy were optional.
   const orders = await getMyOrders(supabase);
 
+  // No sidebar, no page padding and no "Your account" eyebrow here: the account
+  // layout supplies all three. This page predated that layout and still carried
+  // its own, so selecting Orders rendered the whole menu a second time inside
+  // the content area.
   return (
-    <div className="container-wovenne section-padding">
-      <AccountNav />
+    <div>
+      <h1 className="font-heading text-display-sm text-ink">Your orders</h1>
 
-      <div className="mt-12 text-center">
-        <p className="eyebrow">Your account</p>
-        <h1 className="mt-3 font-heading text-display-sm text-ink">Your orders</h1>
-      </div>
-
-      <div className="mx-auto mt-12 max-w-3xl">
+      <div className="mt-8">
         {orders.length === 0 ? (
           <div className="py-16 text-center">
             <p className="text-sm text-ink/60">
@@ -203,3 +201,4 @@ export default async function OrdersPage() {
     </div>
   );
 }
+
