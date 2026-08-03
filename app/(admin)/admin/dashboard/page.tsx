@@ -32,9 +32,11 @@ import AnalyticsDashboard from "@/components/admin/AnalyticsDashboard";
 import InsightsChat from "@/components/admin/InsightsChat";
 import StoreSettingsEditor from "@/components/admin/StoreSettingsEditor";
 import CustomersManager from "@/components/admin/CustomersManager";
+import MarketingPanel from "@/components/admin/MarketingPanel";
 
 type Tab =
   | "customers"
+  | "marketing"
   | "settings"
   | "analytics"
   | "insights"
@@ -202,6 +204,7 @@ export default function AdminDashboardPage() {
           ["queue", "Review & Publish"],
           ["orders", "Orders"],
           ["customers", "Customers"],
+          ["marketing", "Marketing"],
           ["analytics", "Analytics"],
           ["insights", "Ask the data"],
           ["settings", "Settings"],
@@ -248,6 +251,7 @@ export default function AdminDashboardPage() {
         {tab === "insights" && <InsightsChat />}
         {tab === "settings" && <StoreSettingsEditor onChange={noteEdit} />}
         {tab === "customers" && <CustomersManager />}
+        {tab === "marketing" && <MarketingPanel />}
         {tab === "queue" && (
           <PublishQueue
             onChange={noteEdit}
