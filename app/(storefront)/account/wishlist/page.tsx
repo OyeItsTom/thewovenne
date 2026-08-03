@@ -4,6 +4,7 @@ import { createRSCClient } from "@/lib/supabaseRSC";
 import { getProductsByIds } from "@/lib/products";
 import ProductGrid from "@/components/shop/ProductGrid";
 import { buttonClassName } from "@/components/ui/Button";
+import AccountNav from "@/components/account/AccountNav";
 
 export const metadata: Metadata = {
   title: "Your wishlist | THE WOVENNE",
@@ -51,7 +52,9 @@ export default async function WishlistPage() {
 
   return (
     <div className="container-wovenne section-padding">
-      <div className="text-center">
+      <AccountNav />
+
+      <div className="mt-12 text-center">
         <p className="eyebrow">Saved for later</p>
         <h1 className="mt-3 font-heading text-display-sm text-ink">
           Your wishlist
