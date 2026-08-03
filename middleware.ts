@@ -58,6 +58,22 @@ export async function middleware(request: NextRequest) {
     (p) => pathname === p || pathname.startsWith(`${p}/`)
   );
 
+  // Customer area: a session is all it takes. No is_admin check and no MFA — a
+  // shopper is not an operator, and demanding an authenticator app to open a
+  // wishlist would be theatre rather than security. Kept as its own branch so
+  // the customer gate can never be mistaken for the admin one.
+  if (pathname.startsWith("/account")) {
+    if (!user) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      // Sends them back where they were headed once they log in, and tells the
+      // login page to say why it appeared.
+      url.searchParams.set("from", pathname);
+      return NextResponse.redirect(url);
+    }
+    return response;
+  }
+
   if (isAdminArea && !isPublicAdminPath) {
     if (!user) {
       const url = request.nextUrl.clone();
@@ -115,7 +131,8 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Only /admin needs gating. Keeping the matcher tight means the storefront
-  // pays no middleware cost, and static assets are never intercepted.
-  matcher: ["/admin/:path*"],
+  // /account needs a session; /admin needs a session AND is_admin AND aal2.
+  // Keeping the matcher tight means the rest of the storefront pays no
+  // middleware cost, and static assets are never intercepted.
+  matcher: ["/admin/:path*", "/account/:path*"],
 };

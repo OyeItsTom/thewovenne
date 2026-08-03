@@ -283,6 +283,36 @@ export async function getProductsByCollection(
 }
 
 /**
+ * Published products by identity id, for the wishlist.
+ *
+ * Scoped like every other listing, so a saved item whose category was later
+ * hidden stops appearing — a wishlist should not be a back door to products
+ * that have been taken off the site.
+ */
+export async function getProductsByIds(
+  ids: string[],
+  ctx: ReadCtx = ANON_CTX
+): Promise<Product[]> {
+  if (ids.length === 0) return [];
+  const [visibleIds, cats] = await Promise.all([
+    scopeToVisible(undefined, ctx),
+    categoryMap(ctx.client, ctx),
+  ]);
+  if (visibleIds.length === 0) return [];
+
+  const { data, error } = await storefrontQuery(ctx)
+    .eq("is_active", true)
+    .in("product_id", ids)
+    .in("category_id", visibleIds);
+
+  if (error) {
+    console.error("getProductsByIds:", error.message);
+    return [];
+  }
+  return finish(data, cats);
+}
+
+/**
  * Distinct published collection slugs, for generateStaticParams. Deliberately
  * published-only: this runs at build time, where preview does not apply, and a
  * draft collection reaches its page through dynamicParams anyway.
