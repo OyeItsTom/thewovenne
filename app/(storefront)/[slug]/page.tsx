@@ -18,14 +18,16 @@ import { DEFAULT_OG_IMAGE } from "@/lib/seo";
  */
 export const revalidate = 60;
 
-// Only slugs from generateStaticParams are served. Anything else 404s through
-// the normal not-found path — this route's own notFound() emits an empty
-// server body, which a crawler reads as a blank page.
+// A new top-level section works the moment it is published, without waiting
+// for a deploy. This was false, to fix a 404 that rendered an EMPTY server body
+// — this route matches every single-segment path, so every mistyped URL went
+// through its notFound(). Restricting it to build-time slugs fixed that, but
+// made adding a section require a redeploy: /jewellery 404d while
+// /jewellery/chain worked, because the child route never had the restriction.
 //
-// The cost: a NEW section or page needs a deploy before its URL exists.
-// EDITING an existing one is live within the revalidate window, which is the
-// common case by far.
-export const dynamicParams = false;
+// Re-verified below that a miss now renders a full not-found page, so the
+// restriction is buying nothing and costing a deploy per section.
+export const dynamicParams = true;
 
 export async function generateStaticParams() {
   const [tree, pages] = await Promise.all([
