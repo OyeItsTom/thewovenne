@@ -5,13 +5,16 @@ import CartDrawer from "@/components/cart/CartDrawer";
 import AskWovenne from "@/components/chat/AskWovenne";
 import PreviewBanner from "@/components/layout/PreviewBanner";
 import { previewEnabled } from "@/lib/preview";
+import { getStoreSettings } from "@/lib/storeSettings";
 
 /** Customer-facing chrome. Deliberately absent from the admin group. */
-export default function StorefrontLayout({
+export default async function StorefrontLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const settings = await getStoreSettings();
+
   return (
     <>
       {previewEnabled() && <PreviewBanner />}
@@ -19,7 +22,7 @@ export default function StorefrontLayout({
       <main className="flex-1">{children}</main>
       <Footer />
       <WhatsAppButton />
-      <AskWovenne />
+      {settings.ask_wovenne_enabled && <AskWovenne />}
       <CartDrawer />
     </>
   );

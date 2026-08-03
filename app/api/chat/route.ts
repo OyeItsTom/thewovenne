@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { streamChat, chatConfigured, type ChatMessage } from "@/lib/chat";
 import { consumeChatQuota, quotaMessage } from "@/lib/chatQuota";
+import { getStoreSettings } from "@/lib/storeSettings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,6 +40,17 @@ export async function POST(req: NextRequest) {
   );
   if (messages.length === 0) {
     return new Response("No messages provided.", { status: 400 });
+  }
+
+  // The admin switch is checked on the server, not just by hiding the widget:
+  // this endpoint is public, and a hidden widget still leaves it answering
+  // anyone who calls it directly.
+  const settings = await getStoreSettings();
+  if (!settings.ask_wovenne_enabled) {
+    return new Response(
+      "Ask Wovenne is unavailable at the moment. Please message us on WhatsApp and we'll help straight away.",
+      { status: 503 }
+    );
   }
 
   // Enforced HERE rather than in the widget. A cap the browser applies is a

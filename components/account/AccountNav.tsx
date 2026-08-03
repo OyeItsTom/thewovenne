@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 const LINKS = [
   { href: "/account/orders", label: "Orders" },
   { href: "/account/wishlist", label: "Wishlist" },
+  { href: "/account/preferences", label: "Preferences" },
 ];
 
 /** Moves between the account pages without going back up to the header. */
