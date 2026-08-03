@@ -6,6 +6,27 @@ const SUPABASE_URL =
 const SUPABASE_ANON_KEY =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key";
 
+type AdminVerdict = "admin" | "not-admin" | "unknown";
+
+/**
+ * Ask the database whether this session is an admin.
+ *
+ * Retried once: the common failure is transient — a token being refreshed, a
+ * cold start, a dropped connection — and one blip should not look the same as a
+ * revoked account.
+ */
+async function checkIsAdmin(
+  supabase: ReturnType<typeof createServerClient>
+): Promise<AdminVerdict> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { data, error } = await supabase.rpc("is_admin");
+    if (!error) return data === true ? "admin" : "not-admin";
+    console.error(`middleware is_admin (attempt ${attempt + 1}):`, error.message);
+    if (attempt === 0) await new Promise((r) => setTimeout(r, 300));
+  }
+  return "unknown";
+}
+
 /** Reachable without a session — everything else under /admin is gated. */
 const PUBLIC_ADMIN_PATHS = ["/admin/login"];
 
@@ -83,11 +104,25 @@ export async function middleware(request: NextRequest) {
 
     // Authenticated is not the same as admin — customers will authenticate
     // against this same project. Ask the database, don't infer.
-    const { data: isAdmin, error } = await supabase.rpc("is_admin");
-    if (error || isAdmin !== true) {
+    //
+    // "The answer was no" and "we couldn't ask" are different facts. Treating a
+    // failed call as a denial is what made a refresh occasionally bounce a
+    // legitimate admin to the login screen, so the two are separated and the
+    // call is retried once — the usual cause is a token refreshing mid-flight.
+    const verdict = await checkIsAdmin(supabase);
+
+    if (verdict === "not-admin") {
       const url = request.nextUrl.clone();
       url.pathname = "/admin/login";
       url.searchParams.set("denied", "1");
+      return NextResponse.redirect(url);
+    }
+    if (verdict === "unknown") {
+      // Still fails closed — no access — but says what actually happened
+      // instead of accusing a valid admin of not having permission.
+      const url = request.nextUrl.clone();
+      url.pathname = "/admin/login";
+      url.searchParams.set("retry", "1");
       return NextResponse.redirect(url);
     }
 
@@ -118,8 +153,7 @@ export async function middleware(request: NextRequest) {
 
   // A signed-in admin landing on the login page goes straight to the dashboard.
   if (pathname === "/admin/login" && user) {
-    const { data: isAdmin } = await supabase.rpc("is_admin");
-    if (isAdmin === true) {
+    if ((await checkIsAdmin(supabase)) === "admin") {
       const url = request.nextUrl.clone();
       url.pathname = "/admin/dashboard";
       url.search = "";
