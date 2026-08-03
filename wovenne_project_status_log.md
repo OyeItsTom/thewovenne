@@ -546,9 +546,12 @@ single sequence**, because that requires a real payment:
 10. Account deletion against a **real** order — the refusal and the anonymisation
     were proven against orders created for the test, not orders that came from a
     payment
+11. Reviews against a **real** purchase — the verified-purchase rule is proven,
+    but against an order inserted directly rather than one that came from a
+    payment
 
 **Recommendation:** one test-mode purchase, watched from the admin. It would
-close all ten at once.
+close all eleven at once.
 
 Use an address that is **not** an admin one — since this session, admin emails are
 rejected by the customer login form, so a partner address cannot place an order.
@@ -588,12 +591,13 @@ one currently look identical on screen.
 ## Outstanding, owner action
 
 - **Razorpay test purchase** — above
-- **`ANTHROPIC_API_KEY` in `.env.local`** — production has it; local dev doesn't
 - **Product sizes** — none set, so no Size filter appears anywhere
 - **Shipping config** — seeded Kerala free / ₹120 / free over ₹3,000; confirm
   these are the real numbers
 - **Loyalty** — switch on when ready; rates are editable
 - **Partners' first login** — `hello@` and `care@` still show `MFA: not enrolled`
 - **T&C wording** — `/policies` holds placeholder content; edit it in the admin
-- **Customer addresses** — not stored; a saved address book is a separate piece
-  of work (new table, default-address concept, checkout changes)
+- **Customer addresses** — BUILT. `0035` stores one saved address per
+  customer, editable under Settings and pre-filled at checkout. It is
+  deliberately one address rather than a book, and it cannot redirect an order
+  already placed.
