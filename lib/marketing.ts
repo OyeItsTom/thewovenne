@@ -3,14 +3,20 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 /**
  * Marketing triggers.
  *
- * Cart abandonment is deliberately absent. The cart lives in the browser's
- * local storage and never reaches the server, so there is nothing to detect —
- * it would need the cart persisting first, which is a decision about storing
- * what signed-out people browse, not a side effect of a mailing feature.
+ * Cart abandonment covers SIGNED-IN customers only. A guest's cart never leaves
+ * their browser, which is deliberate: catching them would mean recording what
+ * signed-out visitors browse, and a guest cannot be emailed anyway.
  */
-export type MarketingTrigger = "wishlist_waiting" | "low_stock";
+export type MarketingTrigger =
+  | "wishlist_waiting"
+  | "low_stock"
+  | "cart_abandoned";
 
-export const TRIGGERS: MarketingTrigger[] = ["wishlist_waiting", "low_stock"];
+export const TRIGGERS: MarketingTrigger[] = [
+  "wishlist_waiting",
+  "low_stock",
+  "cart_abandoned",
+];
 
 export interface MarketingTarget {
   user_id: string;
