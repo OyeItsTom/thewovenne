@@ -62,12 +62,21 @@ export function passwordProblem(password: string, confirm?: string): string | nu
 export async function signUp(
   email: string,
   password: string,
-  fullName: string
+  fullName: string,
+  marketingConsent = false
 ): Promise<AuthResult> {
   const { error } = await getBrowserSupabase().auth.signUp({
     email: email.trim().toLowerCase(),
     password,
-    options: { data: { full_name: fullName.trim() } },
+    options: {
+      // Read by handle_new_user (migration 0026) when it writes the profile.
+      // Sent as a string because auth metadata is JSON the client controls;
+      // the trigger tests it against 'true' explicitly, so nothing else counts.
+      data: {
+        full_name: fullName.trim(),
+        marketing_consent: marketingConsent ? "true" : "false",
+      },
+    },
   });
   return error
     ? { ok: false, error: friendlyAuthError(error.message) }
@@ -136,6 +145,37 @@ export async function setNewPassword(password: string): Promise<AuthResult> {
   const { error } = await getBrowserSupabase().auth.updateUser({ password });
   return error
     ? { ok: false, error: friendlyAuthError(error.message) }
+    : { ok: true, error: null };
+}
+
+/**
+ * Change the marketing preference for the signed-in customer.
+ *
+ * Writes to their own profile row, which RLS restricts to them and 0026's
+ * column grant limits to this field and their name. Consent is theirs to give
+ * and withdraw; nobody else can set it on their behalf.
+ */
+export async function setMarketingConsent(
+  consent: boolean
+): Promise<AuthResult> {
+  const supabase = getBrowserSupabase();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You need to be logged in." };
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({
+      marketing_consent: consent,
+      // Records when they agreed. Withdrawal clears it — an old timestamp
+      // against a false flag would misread as historic consent.
+      marketing_consent_at: consent ? new Date().toISOString() : null,
+    })
+    .eq("id", user.id);
+
+  return error
+    ? { ok: false, error: error.message }
     : { ok: true, error: null };
 }
 

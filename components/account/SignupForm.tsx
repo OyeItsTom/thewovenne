@@ -18,6 +18,9 @@ export default function SignupForm() {
     password: "",
     confirm: "",
   });
+  // Unchecked, and never pre-ticked. Under the DPDP Act consent is given, not
+  // assumed, and a pre-ticked box is not consent.
+  const [marketing, setMarketing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -34,7 +37,7 @@ export default function SignupForm() {
     if (problem) return setError(problem);
 
     setBusy(true);
-    const result = await signUp(form.email, form.password, form.fullName);
+    const result = await signUp(form.email, form.password, form.fullName, marketing);
     if (!result.ok) {
       setError(result.error);
       setBusy(false);
@@ -93,6 +96,22 @@ export default function SignupForm() {
           value={form.confirm}
           onChange={set("confirm")}
         />
+
+        <label className="flex items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={marketing}
+            onChange={(e) => setMarketing(e.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-terracotta"
+          />
+          <span className="text-ink/70">
+            I&apos;d like to receive updates and offers from THE WOVENNE.
+            <span className="mt-0.5 block text-xs text-ink/50">
+              Optional. You can change this any time from your account, and we
+              never email offers without it.
+            </span>
+          </span>
+        </label>
 
         <Button type="submit" size="lg" className="w-full" disabled={busy}>
           {busy ? (

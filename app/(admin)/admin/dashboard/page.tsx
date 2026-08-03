@@ -30,8 +30,10 @@ import PublishQueue from "@/components/admin/PublishQueue";
 import OrdersManager from "@/components/admin/OrdersManager";
 import AnalyticsDashboard from "@/components/admin/AnalyticsDashboard";
 import InsightsChat from "@/components/admin/InsightsChat";
+import StoreSettingsEditor from "@/components/admin/StoreSettingsEditor";
 
 type Tab =
+  | "settings"
   | "analytics"
   | "insights"
   | "orders"
@@ -199,6 +201,7 @@ export default function AdminDashboardPage() {
           ["orders", "Orders"],
           ["analytics", "Analytics"],
           ["insights", "Ask the data"],
+          ["settings", "Settings"],
         ] as [Tab, string][]).map(([id, label]) => (
           <button
             key={id}
@@ -240,6 +243,7 @@ export default function AdminDashboardPage() {
         {tab === "orders" && <OrdersManager />}
         {tab === "analytics" && <AnalyticsDashboard />}
         {tab === "insights" && <InsightsChat />}
+        {tab === "settings" && <StoreSettingsEditor onChange={noteEdit} />}
         {tab === "queue" && (
           <PublishQueue
             onChange={noteEdit}
