@@ -28,8 +28,10 @@ import JournalManager from "@/components/admin/JournalManager";
 import TestErrorButton from "@/components/admin/TestErrorButton";
 import PublishQueue from "@/components/admin/PublishQueue";
 import OrdersManager from "@/components/admin/OrdersManager";
+import AnalyticsDashboard from "@/components/admin/AnalyticsDashboard";
 
 type Tab =
+  | "analytics"
   | "orders"
   | "queue"
   | "products"
@@ -193,6 +195,7 @@ export default function AdminDashboardPage() {
           ["activity", "Activity"],
           ["queue", "Review & Publish"],
           ["orders", "Orders"],
+          ["analytics", "Analytics"],
         ] as [Tab, string][]).map(([id, label]) => (
           <button
             key={id}
@@ -232,6 +235,7 @@ export default function AdminDashboardPage() {
         {tab === "journal" && <JournalManager onChange={noteEdit} />}
         {tab === "activity" && <AuditLog />}
         {tab === "orders" && <OrdersManager />}
+        {tab === "analytics" && <AnalyticsDashboard />}
         {tab === "queue" && (
           <PublishQueue
             onChange={noteEdit}
