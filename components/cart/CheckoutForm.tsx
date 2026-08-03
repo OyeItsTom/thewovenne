@@ -8,6 +8,7 @@ import { Loader2 } from "lucide-react";
 import { useCartStore } from "@/lib/store";
 import { formatINR } from "@/lib/utils";
 import { EMPTY_ADDRESS, type OrderDetails } from "@/lib/orderDetails";
+import { quoteShipping, type ShippingConfig } from "@/lib/shipping";
 import Button from "@/components/ui/Button";
 
 /**
@@ -36,7 +37,11 @@ const EMPTY: OrderDetails = {
   address: { ...EMPTY_ADDRESS },
 };
 
-export default function CheckoutForm() {
+export default function CheckoutForm({
+  shipping: shippingConfig,
+}: {
+  shipping: ShippingConfig;
+}) {
   const router = useRouter();
   const items = useCartStore((s) => s.items);
   const clearCart = useCartStore((s) => s.clearCart);
@@ -45,6 +50,10 @@ export default function CheckoutForm() {
   const [error, setError] = useState<string | null>(null);
 
   const subtotal = items.reduce((sum, i) => sum + i.price_inr * i.quantity, 0);
+  // Same function the server charges with, so what is shown and what is taken
+  // cannot drift. The server still decides.
+  const shipping = quoteShipping(form.address, subtotal, shippingConfig);
+  const grandTotal = subtotal + shipping.cost;
 
   const set = (field: keyof Omit<OrderDetails, "address">) =>
     (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -152,10 +161,23 @@ export default function CheckoutForm() {
         </section>
 
         <div className="rounded-xl border border-ink/10 bg-linen/40 p-5">
-          <div className="flex items-center justify-between font-body text-lg text-ink">
-            <span>Total</span>
-            <span>{formatINR(subtotal)}</span>
-          </div>
+          <dl className="space-y-1.5 text-sm">
+            <div className="flex justify-between">
+              <dt className="text-ink/60">Items</dt>
+              <dd className="text-ink">{formatINR(subtotal)}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-ink/60">Delivery</dt>
+              <dd className={shipping.free ? "text-terracotta" : "text-ink"}>
+                {shipping.free ? "Free" : formatINR(shipping.cost)}
+              </dd>
+            </div>
+            <div className="flex justify-between border-t border-ink/10 pt-2 font-body text-lg text-ink">
+              <dt>Total</dt>
+              <dd>{formatINR(grandTotal)}</dd>
+            </div>
+          </dl>
+          <p className="mt-2 text-xs text-ink/50">{shipping.reason}</p>
           <p className="mt-1 text-xs text-ink/50">
             {items.reduce((n, i) => n + i.quantity, 0)} item
             {items.reduce((n, i) => n + i.quantity, 0) === 1 ? "" : "s"} · the
@@ -177,7 +199,7 @@ export default function CheckoutForm() {
               <Loader2 className="h-4 w-4 animate-spin" /> Opening payment…
             </span>
           ) : (
-            `Pay ${formatINR(subtotal)}`
+            `Pay ${formatINR(grandTotal)}`
           )}
         </Button>
 
