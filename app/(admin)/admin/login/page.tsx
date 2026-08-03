@@ -63,8 +63,26 @@ export default function AdminLoginPage() {
       return;
     }
 
-    setLoading(false);
-    router.push("/admin/dashboard");
+    // A FULL page load, not router.push(). Two reasons, and the second one
+    // bites in practice:
+    //
+    // Next keeps a client-side cache of RSC payloads per route. After signing
+    // out and straight back in, the dashboard from the PREVIOUS session was
+    // still in that cache, so push() rendered it with no server round trip —
+    // middleware never ran, and a session that had not done its two-factor
+    // step yet appeared to walk into the dashboard. Nothing was actually
+    // authorised (middleware and RLS still gate every real request, and a
+    // reload lands back on the 2FA prompt) but it looked like the gate had
+    // been skipped.
+    //
+    // router.refresh() looks like the fix and is not: it re-requests the
+    // CURRENT route, /admin/login, where middleware quite rightly ends a
+    // session that has not finished signing in — killing the session that was
+    // just created. Leaving the page entirely is what actually works.
+    //
+    // No setLoading(false): the button stays in its signing-in state until the
+    // new page takes over, instead of flicking back to "Sign In" first.
+    window.location.assign("/admin/dashboard");
   };
 
   return (

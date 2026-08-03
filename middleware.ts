@@ -151,14 +151,35 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // A signed-in admin landing on the login page goes straight to the dashboard.
+  // The login page, with a session already attached.
+  //
+  // A FULLY VERIFIED admin has no reason to be here — send them to the
+  // dashboard. But a session that stopped at the password step is a different
+  // thing entirely, and treating the two alike is what made signing out feel
+  // broken: the redirect sent a half-finished session to the dashboard, the
+  // dashboard bounced it to /admin/mfa, and the admin arrived at a 2FA prompt
+  // having typed nothing. It looked like the app had skipped the password step
+  // and remembered a session they had just ended.
+  //
+  // Asking for the login page means "I want to log in". So an unverified
+  // session is ended here and the form is shown. Local scope only — this
+  // clears the cookies on this device without touching other sessions.
   if (pathname === "/admin/login" && user) {
-    if ((await checkIsAdmin(supabase)) === "admin") {
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    const verified = aal?.nextLevel === "aal2" && aal.currentLevel === "aal2";
+
+    if (verified && (await checkIsAdmin(supabase)) === "admin") {
       const url = request.nextUrl.clone();
       url.pathname = "/admin/dashboard";
       url.search = "";
       return NextResponse.redirect(url);
     }
+
+    // signOut writes the cleared cookies through setAll above, which rebuilds
+    // `response`. It must be returned as-is — a redirect here would be a
+    // different response object and would drop the clearing.
+    await supabase.auth.signOut({ scope: "local" });
+    return response;
   }
 
   return response;
