@@ -6,9 +6,8 @@ Last updated: 4 August 2026 (fourth session)
 
 ## Session summary
 
-Everything below is built and merged to `main`. Migrations `0024`–`0033` are
-applied; **`0034`, `0035` and `0036` are written but NOT YET RUN** — see
-"Migrations waiting" below.
+Everything below is built, merged to `main`, and migrations `0024`–`0036` are
+applied to Supabase and verified.
 
 **One thing is not verified end to end: a real payment.** See "The gap" at the
 bottom — it is the single largest remaining risk and it cannot be closed from
@@ -301,20 +300,42 @@ PR #58
 
 ---
 
-## Migrations waiting to be run
+## Migrations 0034–0036 — applied and verified
 
-Three, in order. Everything in the section below stays dormant until they are.
+Verified by exercising the rules through **real user tokens**, not the service
+key — the service key bypasses RLS, which is the thing under test.
 
-| Migration | What it adds |
+| Check | Result |
 |---|---|
-| `0034_delivery_updates` | `orders.delivery_updates` — email or WhatsApp |
-| `0035_customer_address` | `profiles.default_address` / `default_phone` |
-| `0036_product_reviews` | reviews table, verified-purchase rule, moderation |
+| `orders.delivery_updates` accepts `whatsapp` | ✅ |
+| enum rejects `sms` | ✅ rejected |
+| `has_purchased` true for a delivered buyer | ✅ |
+| `has_purchased` false for a product they didn't buy | ✅ |
+| `has_purchased` false for a non-buyer | ✅ |
+| Review from a non-purchaser | ✅ blocked by RLS |
+| Review forged under another `user_id` | ✅ blocked |
+| Anonymous review | ✅ blocked |
+| Verified purchaser can review | ✅ |
+| Second review from the same person | ✅ blocked, `23505` |
+| Rating outside 1–5 | ✅ blocked |
+| `product_reviews_for` leaks no email | ✅ |
+| `product_rating` aggregates | ✅ 4.0 from 1 |
+| `set_review_hidden` / `admin_reviews` for a non-admin | ✅ refused |
+| Admin hides → gone from the page and the average | ✅ |
+| Hidden review invisible to its own author | ✅ |
+| Hide keeps the row and stamps who did it | ✅ |
+| Unhide restores it and clears the stamp | ✅ |
+| Admin delete | ✅ really gone |
+| Customer can save their default address | ✅ |
+| Customer cannot make themselves admin | ✅ blocked at write |
 
-**Checkout survives them not being run.** The profile read falls back to the
-old columns and the order insert retries without `delivery_updates`, because
-shipping the code before the migration would otherwise take the payment path
-down. Losing a channel preference is a far smaller harm than losing the order.
+**40 checks, 0 failures.** Three apparent failures in the first pass were the
+test calling `set_review_hidden` with the service key: `auth.uid()` is null
+there, so `is_admin()` refused it — the function working, not failing. Re-run
+through a real admin token, all passed.
+
+Test accounts and their orders were deleted afterwards. Database is back to
+**0 orders, 0 reviews**.
 
 ---
 
