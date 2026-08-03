@@ -128,7 +128,7 @@ if (found) {
     email_confirm: true, // no verification email; you're vouching for them
   });
   if (error) {
-    console.error("Could not create user:", error.message);
+    console.error("Could not create user:", error.message || error.code || JSON.stringify(error));
     process.exit(1);
   }
   userId = data.user.id;
