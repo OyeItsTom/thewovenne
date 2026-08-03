@@ -9,6 +9,7 @@ import type { Product } from "@/lib/types";
 import { formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
 import { productHref } from "@/lib/urls";
+import WishlistButton from "./WishlistButton";
 import { fadeUp } from "@/lib/motion";
 import { useCartStore } from "@/lib/store";
 import Badge from "@/components/ui/Badge";
@@ -57,6 +58,13 @@ export default function ProductCard({ product }: { product: Product }) {
               className="object-cover transition-transform duration-700 group-hover:scale-105"
             />
           )}
+
+          <WishlistButton
+            productId={product.id}
+            productName={product.name}
+            size="sm"
+            className="absolute right-3 top-3 z-10 opacity-0 transition-opacity duration-300 group-hover:opacity-100 focus-visible:opacity-100 md:opacity-0"
+          />
 
           {outOfStock ? (
             <Badge tone="danger" className="absolute left-3 top-3">
