@@ -31,9 +31,13 @@ export default function AdminHeader() {
   return (
     <header className="border-b border-ink/10 bg-cream">
       <div className="container-wovenne flex items-center justify-between gap-4 py-3">
+        {/* Emblem only, matching the storefront header. The Admin badge is the
+            label that actually earns its place here — it says which side of the
+            site you are on, which the wordmark never did. */}
         <Link
           href="/admin/dashboard"
-          className="flex items-center gap-2.5 font-heading text-xl tracking-wide text-ink"
+          aria-label="THE WOVENNE admin — dashboard"
+          className="flex items-center gap-2.5 text-ink"
         >
           <Image
             src="/logo_emblem_transparent.png"
@@ -42,10 +46,9 @@ export default function AdminHeader() {
             height={2792}
             priority
             sizes="32px"
-            className="h-7 w-auto"
+            className="h-8 w-auto"
           />
-          THE WOVENNE
-          <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-ink px-2 py-0.5 text-[10px] uppercase tracking-widest text-cream">
+          <span className="inline-flex items-center gap-1 rounded-full bg-ink px-2 py-0.5 text-[10px] uppercase tracking-widest text-cream">
             <Lock className="h-2.5 w-2.5" strokeWidth={2.5} /> Admin
           </span>
         </Link>

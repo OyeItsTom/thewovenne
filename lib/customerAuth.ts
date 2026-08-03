@@ -176,6 +176,33 @@ export async function setNewPassword(password: string): Promise<AuthResult> {
  * column grant limits to this field and their name. Consent is theirs to give
  * and withdraw; nobody else can set it on their behalf.
  */
+/**
+ * Save the address orders usually go to.
+ *
+ * A suggestion for next time, not a record of anything already ordered:
+ * every order carries its own copy of the address it was placed with, so
+ * changing this can never redirect a parcel already on its way.
+ */
+export async function setDefaultAddress(
+  address: Record<string, string>,
+  phone: string
+): Promise<AuthResult> {
+  const supabase = getBrowserSupabase();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You need to be logged in." };
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ default_address: address, default_phone: phone })
+    .eq("id", user.id);
+
+  return error
+    ? { ok: false, error: error.message }
+    : { ok: true, error: null };
+}
+
 export async function setMarketingConsent(
   consent: boolean
 ): Promise<AuthResult> {

@@ -24,7 +24,10 @@ export default async function Navbar() {
         label: child.name,
       })),
     })),
-    { href: "/#story", label: "Our Story" },
+    // /about, not /#story — the story is no longer a homepage section, and the
+    // anchor it pointed at went with it. A link that silently scrolls nowhere
+    // is the classic leftover of moving content.
+    { href: "/about", label: "Our Story" },
     { href: "/journal", label: "Journal" },
   ];
 

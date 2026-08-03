@@ -10,7 +10,7 @@ import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
 import { signUp, passwordProblem } from "@/lib/customerAuth";
 
-export default function SignupForm() {
+export default function SignupForm({ from }: { from?: string | null }) {
   const router = useRouter();
   const [form, setForm] = useState({
     fullName: "",
@@ -50,7 +50,15 @@ export default function SignupForm() {
       setBusy(false);
       return;
     }
-    router.push(`/verify?email=${encodeURIComponent(form.email.trim().toLowerCase())}`);
+    // Only relative paths are carried forward. An absolute URL here would make
+    // this an open redirect that a phishing link could point anywhere.
+    const onward =
+      from && from.startsWith("/") && !from.startsWith("//")
+        ? `&from=${encodeURIComponent(from)}`
+        : "";
+    router.push(
+      `/verify?email=${encodeURIComponent(form.email.trim().toLowerCase())}${onward}`
+    );
   }
 
   return (

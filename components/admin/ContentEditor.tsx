@@ -192,8 +192,15 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
         </p>
       </Block>
 
-      {/* Brand story */}
+      {/* Brand story — kept editable, but no longer rendered on the homepage.
+          Saying so here is the point: an editor that saves happily while
+          nothing on the site changes is how someone loses an afternoon. */}
       <Block title="Brand story" onSave={() => saveBlock("brand_story")} state={save.brand_story}>
+        <p className="rounded-lg bg-linen px-3 py-2 text-xs leading-relaxed text-ink/60">
+          No longer shown on the homepage — the story now lives on its own page.
+          Edit that under <strong className="font-medium">Pages → About</strong>.
+          This copy is kept so nothing is lost, and can be brought back.
+        </p>
         <Text label="Heading" value={story.title} onChange={(v) => setContent((c) => ({ ...c, brand_story: { ...c.brand_story, title: v } }))} />
         <Text area label="Body" value={story.body} onChange={(v) => setContent((c) => ({ ...c, brand_story: { ...c.brand_story, body: v } }))} />
       </Block>

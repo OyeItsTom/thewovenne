@@ -87,7 +87,7 @@ async function handleCreate({ items, details: rawDetails, redeemPoints }: Create
     // who they were and what they wanted, and verify then updates this row
     // rather than inserting a second one for the same order.
     const supabase = createServiceClient();
-    const { error: insertError } = await supabase.from("orders").insert({
+    const row = {
       razorpay_order_id: order.id,
       customer_email: details.email,
       customer_name: details.name,
@@ -106,7 +106,23 @@ async function handleCreate({ items, details: rawDetails, redeemPoints }: Create
         quantity: item.quantity,
         price_inr: item.price_inr,
       })),
-    });
+    };
+
+    let { error: insertError } = await supabase
+      .from("orders")
+      .insert({ ...row, delivery_updates: details.delivery_updates });
+
+    // Deploy-ordering insurance. If this code reaches production before
+    // migration 0034 does, delivery_updates is an unknown column and the
+    // insert fails — which would mean NOBODY CAN CHECK OUT until the migration
+    // runs. Losing the customer's channel preference is a far smaller harm than
+    // losing the order, so it retries without it and the order still lands.
+    if (insertError?.code === "PGRST204" || /delivery_updates/.test(insertError?.message ?? "")) {
+      console.error(
+        "orders.delivery_updates missing — run migration 0034. Recording the order without it."
+      );
+      ({ error: insertError } = await supabase.from("orders").insert(row));
+    }
 
     if (insertError) {
       // Better to stop than to take money for an order we cannot ship.

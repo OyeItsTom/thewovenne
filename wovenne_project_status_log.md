@@ -1,13 +1,14 @@
 # THE WOVENNE — project status log
 
-Last updated: 3 August 2026 (third session)
+Last updated: 4 August 2026 (fourth session)
 
 ---
 
 ## Session summary
 
-Everything below is built, merged to `main`, and deployed. Migrations `0024`–`0033`
-have been applied to Supabase.
+Everything below is built and merged to `main`. Migrations `0024`–`0033` are
+applied; **`0034`, `0035` and `0036` are written but NOT YET RUN** — see
+"Migrations waiting" below.
 
 **One thing is not verified end to end: a real payment.** See "The gap" at the
 bottom — it is the single largest remaining risk and it cannot be closed from
@@ -297,6 +298,114 @@ with the constant shortened to 20s — identical code, only the number differs, 
 it ships at 15 minutes.
 
 PR #58
+
+---
+
+## Migrations waiting to be run
+
+Three, in order. Everything in the section below stays dormant until they are.
+
+| Migration | What it adds |
+|---|---|
+| `0034_delivery_updates` | `orders.delivery_updates` — email or WhatsApp |
+| `0035_customer_address` | `profiles.default_address` / `default_phone` |
+| `0036_product_reviews` | reviews table, verified-purchase rule, moderation |
+
+**Checkout survives them not being run.** The profile read falls back to the
+old columns and the order insert retries without `delivery_updates`, because
+shipping the code before the migration would otherwise take the payment path
+down. Losing a channel preference is a far smaller harm than losing the order.
+
+---
+
+## The nine-item batch
+
+### Account submenu duplication — FIXED
+
+Orders and Wishlist each rendered their own `AccountNav` **on top of** the
+shared layout's sidebar. Both pages predate that layout and kept their own
+container, nav and eyebrow. Verified: one nav, one `h1`, all four sections.
+
+### Guest vs account at checkout
+
+A choice, not a gate — "Continue as guest" is listed first and is a real
+option. Forcing an account is the most reliable way to lose a sale that was
+otherwise made. `from` now threads through signup → verify → login, so creating
+an account returns you to the checkout instead of your profile.
+
+### Product search
+
+Icon expands below the nav; results at `/search?q=`. Scored in memory over the
+**same visibility-scoped listing every other page uses**, so a hidden category
+cannot be reached by guessing a product name. Every term must match somewhere,
+or "red saree" returns every red thing alongside every saree. Past ~1000
+products this wants a `tsvector` index.
+
+Verified on real data: `shirts` → Cotton, `sarees` → Mul Cotton, `dresses` →
+Dress 1 — all category matches rather than name matches.
+
+### Checkout stops re-asking signed-in customers
+
+Name and email come from the account and are **shown, not asked**; retyping an
+email invites a typo that sends the receipt where the account cannot see it.
+Only address and phone are asked, because those vary per parcel.
+
+**Delivery updates: email and WhatsApp. No SMS.**
+
+- **Email** is the only channel actually wired up, costs nothing on the verified
+  domain, and already carries the confirmation
+- **WhatsApp** is recorded but cannot send — `sendReply` is still a TODO and
+  needs a provider plus template approval. The checkout says so plainly rather
+  than implying a message is coming
+- **SMS** was skipped: India's DLT regime means registering the entity, sender
+  ID and every template with the operators, for the weakest of the three
+
+### Profile and Settings
+
+Profile now shows details **plus the wishlist inline with photos**. Password,
+address, preferences and deletion moved to Settings. `/account/preferences`
+308s so links in already-sent marketing emails keep working.
+
+**"Update Address" did not exist** — addresses were only ever captured per
+order. `0035` builds it: one saved address, not a book, and it can never
+redirect an order already placed, because each order keeps its own copy.
+
+### Homepage
+
+Hero → Seasonal → Curated → Instagram → Why us. Our Story removed — and the nav
+and footer links pointing at the now-deleted `/#story` anchor were repointed at
+`/about`, the dead link that moving content always leaves behind.
+
+**Personalisation uses only the wishlist.** There is no browsing or search
+history because none has ever been collected, and collecting it was deliberately
+deferred until there is a consent and retention policy for it. Guests and empty
+wishlists get new arrivals, and the heading says which one is on screen rather
+than calling new arrivals "picked for you".
+
+**It cannot fire yet.** The four current products share no colour, fabric or
+category with one another, so every customer correctly sees the fallback. It
+starts working the moment two products share an attribute. The threshold is two
+matches, kept deliberately low so it is not unreachable on a small catalogue.
+
+### Product reviews
+
+**Verified purchase is enforced by RLS, not by hiding the form**:
+`has_purchased()` requires a paid, *delivered* order containing that product.
+Compared as text rather than cast to `uuid` — this sits inside an RLS policy,
+and one malformed id in order history would start refusing reviews for
+everybody.
+
+The list renders server-side so it stays in the cached HTML for crawlers; the
+form gates itself in the browser so a per-customer check does not make every
+product page dynamic. Admins **hide** (reversible, keeps the row) or **delete**
+(asks first) — a moderation decision that leaves no trace is not a decision.
+
+### Header
+
+Emblem only, storefront and admin. The wordmark moved into the hero at full
+size beneath the mark.
+
+PR #60
 
 ---
 
