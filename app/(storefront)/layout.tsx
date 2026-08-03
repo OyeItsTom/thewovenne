@@ -2,6 +2,7 @@ import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
 import WhatsAppButton from "@/components/layout/WhatsAppButton";
 import CartDrawer from "@/components/cart/CartDrawer";
+import CartSync from "@/components/cart/CartSync";
 import AskWovenne from "@/components/chat/AskWovenne";
 import PreviewBanner from "@/components/layout/PreviewBanner";
 import { previewEnabled } from "@/lib/preview";
@@ -24,6 +25,8 @@ export default async function StorefrontLayout({
       <WhatsAppButton />
       {settings.ask_wovenne_enabled && <AskWovenne />}
       <CartDrawer />
+      {/* Server-side cart, signed-in customers only. Renders nothing. */}
+      <CartSync />
     </>
   );
 }

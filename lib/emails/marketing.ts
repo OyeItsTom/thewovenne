@@ -25,11 +25,13 @@ function esc(s: string): string {
 export const TRIGGER_SUBJECT: Record<MarketingTrigger, string> = {
   wishlist_waiting: "Still thinking it over?",
   low_stock: "Nearly gone — from your wishlist",
+  cart_abandoned: "You left something behind",
 };
 
 export const TRIGGER_LABEL: Record<MarketingTrigger, string> = {
   wishlist_waiting: "Wishlist waiting",
   low_stock: "Low stock on a saved item",
+  cart_abandoned: "Cart left behind",
 };
 
 export const TRIGGER_DESCRIPTION: Record<MarketingTrigger, string> = {
@@ -37,6 +39,8 @@ export const TRIGGER_DESCRIPTION: Record<MarketingTrigger, string> = {
     "Customers who have saved something that is still available.",
   low_stock:
     "Customers whose saved item has three or fewer left. Sent sparingly — this one has a deadline built in, and it stops being true once stock returns.",
+  cart_abandoned:
+    "Signed-in customers whose cart has sat untouched for a day and who haven't bought since. Guests aren't included — their cart never leaves their browser.",
 };
 
 function shell(body: string, siteUrl: string): string {
@@ -83,7 +87,9 @@ export function marketingHtml(
   const greeting = name?.trim() ? `Hello ${esc(name.split(" ")[0])},` : "Hello,";
 
   const intro =
-    trigger === "low_stock"
+    trigger === "cart_abandoned"
+      ? "You left these in your basket. They're still there if you'd like them — no rush, and nothing has been reserved."
+      : trigger === "low_stock"
       ? "Something you saved is nearly gone. We weave in small batches, so when a piece runs out it can be a while before it returns."
       : "You saved these a little while ago, and they're still here. No rush — we just thought you'd want to know they're still available.";
 
@@ -92,7 +98,7 @@ export function marketingHtml(
      <tr><td style="padding-bottom:20px;font-size:15px;line-height:1.6;color:${MUTED};">${intro}</td></tr>
      <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${itemList(items, siteUrl)}</table></td></tr>
      <tr><td style="padding-top:24px;">
-       <a href="${siteUrl}/account/wishlist" style="display:inline-block;background:${INK};color:#fff;text-decoration:none;padding:12px 24px;border-radius:999px;font-size:13px;letter-spacing:1px;">VIEW YOUR WISHLIST</a>
+       <a href="${siteUrl}${trigger === "cart_abandoned" ? "/cart" : "/account/wishlist"}" style="display:inline-block;background:${INK};color:#fff;text-decoration:none;padding:12px 24px;border-radius:999px;font-size:13px;letter-spacing:1px;">${trigger === "cart_abandoned" ? "VIEW YOUR BASKET" : "VIEW YOUR WISHLIST"}</a>
      </td></tr>
      <tr><td style="height:28px;"></td></tr>`,
     siteUrl
@@ -111,13 +117,17 @@ export function marketingText(
   return [
     name?.trim() ? `Hello ${name.split(" ")[0]},` : "Hello,",
     "",
-    trigger === "low_stock"
+    trigger === "cart_abandoned"
+      ? "You left these in your basket. They're still there if you'd like them."
+      : trigger === "low_stock"
       ? "Something you saved is nearly gone. We weave in small batches."
       : "You saved these a little while ago, and they're still available.",
     "",
     ...lines,
     "",
-    `Your wishlist: ${siteUrl}/account/wishlist`,
+    trigger === "cart_abandoned"
+      ? `Your basket: ${siteUrl}/cart`
+      : `Your wishlist: ${siteUrl}/account/wishlist`,
     "",
     "You're receiving this because you asked for updates when you created your",
     `account. Turn them off any time: ${siteUrl}/account/preferences`,
