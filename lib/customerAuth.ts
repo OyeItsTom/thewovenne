@@ -109,11 +109,32 @@ export async function resendSignupCode(email: string): Promise<AuthResult> {
 }
 
 export async function logIn(email: string, password: string): Promise<AuthResult> {
-  const { error } = await getBrowserSupabase().auth.signInWithPassword({
+  const supabase = getBrowserSupabase();
+  const { error } = await supabase.auth.signInWithPassword({
     email: email.trim().toLowerCase(),
     password,
   });
-  if (!error) return { ok: true, error: null };
+
+  if (!error) {
+    // Admin and customer accounts live in one Supabase project, so a correct
+    // admin password authenticates here perfectly well. That is not a hole in
+    // the database — RLS still governs everything — but it is wrong for this
+    // form: staff signing in through the shop's login lands them in a customer
+    // account area that is not theirs.
+    //
+    // The session is ended immediately and the message is the SAME as a wrong
+    // password. Saying "that's an admin account" would confirm which addresses
+    // are staff to anyone who tried a few.
+    const { data: isAdmin } = await supabase.rpc("is_admin");
+    if (isAdmin === true) {
+      await supabase.auth.signOut({ scope: "local" });
+      return {
+        ok: false,
+        error: "Incorrect email or password.",
+      };
+    }
+    return { ok: true, error: null };
+  }
   return {
     ok: false,
     error: friendlyAuthError(error.message),

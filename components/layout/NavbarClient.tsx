@@ -19,9 +19,12 @@ export interface NavItem {
   children?: NavChild[];
 }
 
-// Customer account + wishlist routes are built in Phase 4 §3. Until then these
-// links resolve to 404s.
-const ACCOUNT_HREF = "/login";
+// The account area, not the login page. This used to point at /login
+// unconditionally, so a signed-in customer clicking the person icon was sent
+// back to log in — which looked like a broken session and was really a hardcoded
+// link. Middleware sends guests from here to /login?from=, so one href serves
+// both states without the nav needing to know who is signed in.
+const ACCOUNT_HREF = "/account/profile";
 const WISHLIST_HREF = "/account/wishlist";
 
 /**

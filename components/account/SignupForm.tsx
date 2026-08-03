@@ -21,6 +21,9 @@ export default function SignupForm() {
   // Unchecked, and never pre-ticked. Under the DPDP Act consent is given, not
   // assumed, and a pre-ticked box is not consent.
   const [marketing, setMarketing] = useState(false);
+  // Required, and separate from the marketing box. Bundling the two would mean
+  // agreeing to terms also opted you into email, which is not consent to either.
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -33,6 +36,10 @@ export default function SignupForm() {
 
     // Checked here first so an obvious mismatch doesn't cost a round trip, and
     // doesn't burn one of Supabase's rate-limited signup attempts.
+    if (!acceptedTerms) {
+      return setError("Please accept the Terms & Conditions to continue.");
+    }
+
     const problem = passwordProblem(form.password, form.confirm);
     if (problem) return setError(problem);
 
@@ -100,6 +107,23 @@ export default function SignupForm() {
         <label className="flex items-start gap-3 text-sm">
           <input
             type="checkbox"
+            required
+            checked={acceptedTerms}
+            onChange={(e) => setAcceptedTerms(e.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-terracotta"
+          />
+          <span className="text-ink/70">
+            I agree to the{" "}
+            <Link href="/policies" className="text-terracotta underline underline-offset-2">
+              Terms &amp; Conditions and Privacy Policy
+            </Link>
+            .
+          </span>
+        </label>
+
+        <label className="flex items-start gap-3 text-sm">
+          <input
+            type="checkbox"
             checked={marketing}
             onChange={(e) => setMarketing(e.target.checked)}
             className="mt-0.5 h-4 w-4 shrink-0 accent-terracotta"
@@ -113,7 +137,12 @@ export default function SignupForm() {
           </span>
         </label>
 
-        <Button type="submit" size="lg" className="w-full" disabled={busy}>
+        <Button
+          type="submit"
+          size="lg"
+          className="w-full"
+          disabled={busy || !acceptedTerms}
+        >
           {busy ? (
             <span className="inline-flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin" /> Creating…
