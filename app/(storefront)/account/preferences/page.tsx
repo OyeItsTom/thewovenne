@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { createRSCClient } from "@/lib/supabaseRSC";
 import AccountNav from "@/components/account/AccountNav";
 import MarketingPreference from "@/components/account/MarketingPreference";
+import LoyaltyPanel from "@/components/account/LoyaltyPanel";
 
 export const metadata: Metadata = {
   title: "Your preferences | THE WOVENNE",
@@ -42,7 +43,9 @@ export default async function PreferencesPage() {
         <h1 className="mt-3 font-heading text-display-sm text-ink">Preferences</h1>
       </div>
 
-      <div className="mx-auto mt-12 max-w-xl">
+      <div className="mx-auto mt-12 max-w-xl space-y-6">
+        {/* Renders nothing while the scheme is off. */}
+        <LoyaltyPanel />
         <MarketingPreference initial={consent} />
       </div>
     </div>

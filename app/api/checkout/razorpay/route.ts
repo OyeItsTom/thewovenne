@@ -5,6 +5,8 @@ import { createServiceClient } from "@/lib/supabase";
 import { priceCart } from "@/lib/checkoutPricing";
 import { validateOrderDetails } from "@/lib/orderDetails";
 import { getShippingConfig, quoteShipping } from "@/lib/shipping";
+import { planRedemption } from "@/lib/loyalty";
+import { settleLoyalty } from "@/lib/settleLoyalty";
 import { sendOrderConfirmation } from "@/lib/sendOrderConfirmation";
 import type { CartItem } from "@/lib/store";
 
@@ -12,11 +14,14 @@ interface CreatePayload {
   action: "create";
   items: CartItem[];
   details: unknown;
+  /** Points the customer asked to spend. Validated and clamped server-side. */
+  redeemPoints?: number;
 }
 
 interface VerifyPayload {
   action: "verify";
   items: CartItem[];
+  redeemPoints?: number;
   razorpay_order_id: string;
   razorpay_payment_id: string;
   razorpay_signature: string;
@@ -36,7 +41,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 }
 
-async function handleCreate({ items, details: rawDetails }: CreatePayload) {
+async function handleCreate({ items, details: rawDetails, redeemPoints }: CreatePayload) {
   // Validated here, not just in the form: the form runs in a browser the
   // customer controls, and an order with no deliverable address is worse than
   // a rejected checkout.
@@ -57,7 +62,16 @@ async function handleCreate({ items, details: rawDetails }: CreatePayload) {
   // figure, but this is the one they are charged — the same rule as prices.
   const shippingConfig = await getShippingConfig();
   const shipping = quoteShipping(details.address, total, shippingConfig);
-  const grandTotal = total + shipping.cost;
+
+  // Redemption is recomputed here from the customer's real balance. The number
+  // the browser sent is a request, not a fact — treating it as one would let
+  // anyone mint a discount.
+  const redemption = await planRedemption(details.email, redeemPoints ?? 0, total);
+  if (redemption.error) {
+    return NextResponse.json({ error: redemption.error }, { status: 400 });
+  }
+
+  const grandTotal = Math.max(total + shipping.cost - redemption.discount, 1);
 
   try {
     // Razorpay expects the amount in the smallest unit — paise for INR.
@@ -81,6 +95,8 @@ async function handleCreate({ items, details: rawDetails }: CreatePayload) {
       shipping_address: details.address,
       total_inr: grandTotal,
       shipping_cost_inr: shipping.cost,
+      loyalty_points_spent: redemption.points,
+      loyalty_discount_inr: redemption.discount,
       payment_provider: "razorpay",
       payment_status: "pending",
       items: priced.map((item) => ({
@@ -106,6 +122,9 @@ async function handleCreate({ items, details: rawDetails }: CreatePayload) {
       amount: Number(order.amount),
       currency: order.currency,
       keyId: process.env.RAZORPAY_KEY_ID,
+      // Echoed back so the page can show what was actually applied, which may
+      // be less than asked for if the balance moved.
+      redeemed: { points: redemption.points, discount: redemption.discount },
       // Saves the customer retyping what they just gave us.
       prefill: {
         name: details.name,
@@ -243,6 +262,10 @@ async function handleVerify({
   if (error) {
     console.error("Order recorded with unpriced items:", error);
   }
+
+  // Points move only after payment, and only through the database functions —
+  // both are guarded so a retry cannot pay out twice or spend a balance twice.
+  await settleLoyalty(razorpay_order_id);
 
   // Sent last, and deliberately not awaited for its success: the customer has
   // paid and their confirmation page must not wait on an email provider, nor
