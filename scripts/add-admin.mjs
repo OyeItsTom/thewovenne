@@ -66,10 +66,16 @@ if (listOnly) {
     process.exit(1);
   }
   const { data: authData } = await supabase.auth.admin.listUsers();
+  // listUsers() omits `factors`, so each user is re-read individually. Without
+  // this the listing claimed "not enrolled" for accounts that were enrolled —
+  // and MFA status is the whole reason for showing this column.
   console.log("\nAccounts\n");
   for (const p of profiles) {
     const u = authData.users.find((x) => x.email === p.email);
-    const factors = (u?.factors ?? []).filter((f) => f.status === "verified").length;
+    const detail = u ? await supabase.auth.admin.getUserById(u.id) : null;
+    const factors = (detail?.data?.user?.factors ?? []).filter(
+      (f) => f.status === "verified"
+    ).length;
     console.log(
       `  ${p.email.padEnd(30)} ${p.is_admin ? "ADMIN" : "     "}  ` +
         `MFA: ${factors ? `${factors} factor(s)` : "not enrolled"}`

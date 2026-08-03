@@ -53,7 +53,17 @@ if (!user) {
   process.exit(1);
 }
 
-const factors = user.factors ?? [];
+// listUsers() does NOT populate `factors` — it comes back undefined for every
+// user, so reading it here reported "no MFA factors" for an account that had
+// one, and --delete then deleted nothing while printing success. In the one
+// situation this script exists for, that is the worst possible failure.
+// getUserById does return them.
+const { data: full, error: fetchError } = await supabase.auth.admin.getUserById(user.id);
+if (fetchError) {
+  console.error("Could not read that user:", fetchError.message);
+  process.exit(1);
+}
+const factors = full.user?.factors ?? [];
 console.log(`\n${email}  (${user.id})`);
 if (factors.length === 0) {
   console.log("  no MFA factors — this account signs in with a password alone\n");
