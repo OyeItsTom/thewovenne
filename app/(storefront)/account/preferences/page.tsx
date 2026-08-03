@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { createRSCClient } from "@/lib/supabaseRSC";
-import AccountNav from "@/components/account/AccountNav";
 import MarketingPreference from "@/components/account/MarketingPreference";
 import LoyaltyPanel from "@/components/account/LoyaltyPanel";
 
@@ -35,15 +34,13 @@ export default async function PreferencesPage() {
   const consent = (data as { marketing_consent?: boolean } | null)?.marketing_consent ?? false;
 
   return (
-    <div className="container-wovenne section-padding">
-      <AccountNav />
-
-      <div className="mt-12 text-center">
-        <p className="eyebrow">Your account</p>
-        <h1 className="mt-3 font-heading text-display-sm text-ink">Preferences</h1>
+    <div className="space-y-8">
+      <div>
+        <h1 className="font-heading text-display-sm text-ink">Preferences</h1>
+        <p className="mt-2 text-sm text-ink/60">What we may send you.</p>
       </div>
 
-      <div className="mx-auto mt-12 max-w-xl space-y-6">
+      <div className="space-y-6">
         {/* Renders nothing while the scheme is off. */}
         <LoyaltyPanel />
         <MarketingPreference initial={consent} />
