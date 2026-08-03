@@ -1,13 +1,13 @@
 # THE WOVENNE — project status log
 
-Last updated: 3 August 2026
+Last updated: 3 August 2026 (second session)
 
 ---
 
 ## Session summary
 
-Everything below is built, merged to `main`, and deployed. Migrations `0024`–`0032`
-were applied to Supabase during this session.
+Everything below is built, merged to `main`, and deployed. Migrations `0024`–`0033`
+have been applied to Supabase.
 
 **One thing is not verified end to end: a real payment.** See "The gap" at the
 bottom — it is the single largest remaining risk and it cannot be closed from
@@ -226,6 +226,103 @@ Migration `0032` · PR #54
 
 ---
 
+## Customer account system
+
+### BUG — admin credentials worked on the customer login form — FIXED
+
+Admin and customer accounts share one Supabase project, so a correct admin
+password authenticated on the shop's login form perfectly well. RLS was never at
+risk — an admin in the customer area sees only their own rows — but staff signing
+in there landed in an account area that is not theirs.
+
+The session is now ended immediately, and **the message is identical to a wrong
+password**. Saying "that's an admin account" would confirm which addresses are
+staff to anyone who tried a few.
+
+**Side effect worth knowing: admin emails can no longer shop.** Use a different
+address to place a real customer order.
+
+Files: `lib/customerAuth.ts` · PR #56
+
+### BUG — signed-in customer sent back to login — FIXED
+
+Not a session or middleware problem. `NavbarClient.tsx` read
+`const ACCOUNT_HREF = "/login"` — hardcoded, so the person icon sent everyone to
+the login page whether signed in or not.
+
+It now points at the account area, and middleware forwards guests to
+`/login?from=`, so one href serves both states without the nav needing to know
+who is signed in.
+
+Files: `components/layout/NavbarClient.tsx` · PR #56
+
+### Customer profile area
+
+A shared layout with a sidebar — Profile, Orders, Wishlist, Preferences — so a
+new section cannot arrive with the navigation subtly different.
+
+- **Email is shown but not editable.** Changing it needs re-verification at both
+  addresses; a field that quietly changed it would leave the account signing in
+  with an address nobody proved.
+- **Phone is read from the most recent order**, not stored on the profile, because
+  a delivery number legitimately differs between orders.
+- **Password change requires the current password.** Supabase's `updateUser` does
+  not ask — an open session is enough — which is too weak on a shared machine:
+  anyone finding a logged-in browser could lock the owner out.
+- **Addresses is deliberately absent from the menu.** Nothing stores a customer
+  address book; addresses exist per order, captured at checkout. Adding it means
+  a new table, a default-address concept and checkout changes. A menu item
+  leading to an empty page is worse than no menu item.
+
+Files: `app/(storefront)/account/*`, `components/account/*` · PR #56
+
+### Account deletion
+
+**Keeps the books, loses the person.** Orders are financial records the business
+must retain, so they are anonymised rather than deleted: totals, items, dates and
+status survive; name, email, phone and address are stripped, and the order is
+annotated with the deletion date.
+
+Two refusals, both deliberate:
+
+- **In-flight orders block deletion.** Stripping the address off something
+  undelivered leaves a parcel nobody can send and a customer nobody can contact.
+- **Admins cannot self-delete this way.** Losing an admin through a
+  customer-facing button is how a shop ends up with nobody able to get in.
+
+Placed last, behind a disclosure, requiring `DELETE` typed out — but one click to
+open, no ticket to raise. Deletion is a right under the DPDP Act, not a favour.
+What actually happens is spelled out before the button.
+
+**Verified through the real auth path** — password grant, then the RPC with that
+customer's own token, not the service key:
+
+| Test | Result |
+|---|---|
+| In-flight order | refused, with a readable reason |
+| Delivered order | allowed, 1 order anonymised |
+| PII on the order | email, name, phone, address all null |
+| Financial record | ₹2,000, items, status `delivered` — intact |
+| Auth account | gone |
+| In-flight account | survives |
+| Profile + saved cart | cascaded away |
+
+Migration `0033` · PR #56
+
+### Terms & Conditions at signup
+
+Required checkbox, **separate from the marketing box** — bundling them would mean
+agreeing to terms also opted you into email, which is consent to neither. Links
+to `/policies`, already an admin-editable page, so the real wording can be
+written without a deploy.
+
+**Marketing consent was already on signup** and has been since it was built. It
+is in both places; nothing was moved.
+
+Files: `components/account/SignupForm.tsx` · PR #56
+
+---
+
 ## The gap — the only remaining unverified item
 
 ### A Razorpay test-mode purchase has never been made
@@ -242,9 +339,15 @@ single sequence**, because that requires a real payment:
 7. Analytics (all panels read from orders)
 8. Loyalty accrual on a paid order
 9. Abandoned-cart suppression after purchase
+10. Account deletion against a **real** order — the refusal and the anonymisation
+    were proven against orders created for the test, not orders that came from a
+    payment
 
 **Recommendation:** one test-mode purchase, watched from the admin. It would
-close all nine at once.
+close all ten at once.
+
+Use an address that is **not** an admin one — since this session, admin emails are
+rejected by the customer login form, so a partner address cannot place an order.
 
 ### Why this matters more than it sounds
 
@@ -268,9 +371,9 @@ run.
 | Consented customers | **0** |
 | Products | 4 published |
 | Product sizes set | 0 |
-| Carts | 0 |
+| Carts | 1 (admin's own, from testing) |
 | Loyalty ledger | 0 |
-| Admins | 3, all with MFA enrolled |
+| Admins | 3 — only `admin@` has MFA enrolled |
 
 Analytics, segmentation and marketing will all correctly report **empty**. That
 is the honest state, not a fault — but it means a working feature and a broken
@@ -287,3 +390,6 @@ one currently look identical on screen.
   these are the real numbers
 - **Loyalty** — switch on when ready; rates are editable
 - **Partners' first login** — `hello@` and `care@` still show `MFA: not enrolled`
+- **T&C wording** — `/policies` holds placeholder content; edit it in the admin
+- **Customer addresses** — not stored; a saved address book is a separate piece
+  of work (new table, default-address concept, checkout changes)
