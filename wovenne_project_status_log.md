@@ -1,6 +1,6 @@
 # THE WOVENNE — project status log
 
-Last updated: 3 August 2026 (second session)
+Last updated: 3 August 2026 (third session)
 
 ---
 
@@ -223,6 +223,80 @@ Verified: stale + consent → targeted; no consent → excluded; touched → dro
 they already completed.
 
 Migration `0032` · PR #54
+
+---
+
+## Admin logout → login flow
+
+Signing out — by timeout or by the button — and logging straight back in was
+unreliable: the Sign In button looked dead, and refreshing landed on the 2FA
+prompt having never been asked for a password. **Four separate faults**, each
+reproduced in a browser against a production build before and after.
+
+### 1. The idle timer never stopped
+
+A passed deadline stays passed, so after firing once the interval re-ran the
+entire sign-out — network call, navigation, router refresh — **every second,
+indefinitely**. The layout also kept it mounted on the login page.
+
+Measured on `/admin/login?timeout=1`: **three requests per second, forever.**
+
+So whoever typed their password next had their brand-new session signed out from
+under them about a second later. **That is what made the button look dead** —
+nothing was ever wrong with the button. Measured after: two requests when it
+fires, then zero.
+
+### 2. Middleware sent a half-finished session to the dashboard
+
+The rule "signed-in admin on the login page → dashboard" did not distinguish a
+verified session from one that had only done the password step. The dashboard
+then bounced it to `/admin/mfa` — **the jump straight to 2FA**.
+
+Asking for the login page now means "I want to log in": a session that has not
+finished signing in is ended there and the form is shown.
+
+### 3. Navigation after sign-in used the client router cache
+
+`router.push()` served the dashboard **cached from the previous session** with no
+server round trip, so middleware never ran and an unverified session appeared to
+walk into the dashboard.
+
+**Nothing was actually authorised** — the token was confirmed `aal1`, middleware
+and RLS still gate every real request, and a reload went back to the 2FA prompt.
+But it looked like the gate had been skipped. Both pages now do a full page load.
+
+`router.refresh()` looks like the fix and is not: it re-requests `/admin/login`,
+where fault 2 correctly ends the session that was just created. It was tried, it
+broke the login, and that is why the fix is a hard navigation.
+
+### 4. Two GoTrue clients on one storage key
+
+The anonymous client in `lib/supabase.ts` is built in the browser by any client
+component importing the module, and shared the real session client's storage key.
+Supabase said so itself: *"Multiple GoTrueClient instances detected … may produce
+undefined behavior."* It has its own key now.
+
+### Also
+
+The 2FA page could sit on "Preparing…" forever under a "Set up two-factor"
+heading with no control on it, if `listFactors` failed. It now reports the
+failure with a retry, and does not claim you are enrolling until it knows.
+
+| Flow | Result |
+|---|---|
+| Password → 2FA → dashboard | correct URL at each hop |
+| Sign Out → re-login, **first attempt** | 2FA prompt |
+| Idle timeout → re-login, **first attempt** | 2FA → dashboard |
+| Login page with a half-finished session | shows the form |
+| Idle timer after firing | 0 further requests |
+| Duplicate GoTrue warnings | 0 |
+
+Tested with a disposable admin (own password, own TOTP secret), deleted
+afterwards; the real admin accounts were untouched. The timeout was exercised
+with the constant shortened to 20s — identical code, only the number differs, and
+it ships at 15 minutes.
+
+PR #58
 
 ---
 
