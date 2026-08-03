@@ -19,9 +19,20 @@ export const SUPABASE_ANON_KEY = supabaseAnonKey;
  *
  * Use this for anything a logged-out visitor could see. For anything that
  * depends on WHO is asking, use getBrowserSupabase() or createServerSupabase().
+ *
+ * The auth settings matter even though this client never signs anyone in. Any
+ * client component importing this module constructs it in the browser, where it
+ * defaulted to the SAME storage key as the real session client — two GoTrue
+ * instances on one key, which Supabase warns "may produce undefined behavior
+ * when used concurrently". Its own key and no refresh timer keep it out of the
+ * way of the session that matters.
  */
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: { persistSession: false },
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    storageKey: "wovenne-anon-no-session",
+  },
 });
 
 /**

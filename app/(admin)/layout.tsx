@@ -15,8 +15,8 @@ export default function AdminLayout({
       <AdminHeader />
       <main className="flex-1">{children}</main>
       {/* Renders nothing until the session is nearly idle. Sits in the layout so
-          it covers every admin screen including the login page — harmless
-          there, since a signed-out visitor has no session to end. */}
+          it covers every admin screen, and opts itself out on the login page —
+          it was NOT harmless there: it kept firing over the login form. */}
       <IdleTimeout />
     </>
   );

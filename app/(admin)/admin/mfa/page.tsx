@@ -7,7 +7,7 @@ import { ShieldCheck } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
 import Button from "@/components/ui/Button";
 
-type Mode = "loading" | "enroll" | "challenge";
+type Mode = "loading" | "enroll" | "challenge" | "failed";
 
 /**
  * Two-factor for admin. One page, two modes:
@@ -29,10 +29,16 @@ export default function AdminMfaPage() {
 
   const start = useCallback(async () => {
     const supabase = getBrowserSupabase();
+    setError(null);
+    setMode("loading");
 
     const { data, error: listError } = await supabase.auth.mfa.listFactors();
     if (listError) {
+      // Leaving mode at "loading" here left the page reading "Preparing…"
+      // under a "Set up two-factor" heading with no control on it at all —
+      // no retry, no explanation, and no clue that anything had failed.
       setError(listError.message);
+      setMode("failed");
       return;
     }
 
@@ -55,6 +61,7 @@ export default function AdminMfaPage() {
     });
     if (enrollError) {
       setError(enrollError.message);
+      setMode("failed");
       return;
     }
 
@@ -77,9 +84,8 @@ export default function AdminMfaPage() {
       factorId,
       code: code.trim(),
     });
-    setBusy(false);
-
     if (verifyError) {
+      setBusy(false);
       setError(
         verifyError.message.toLowerCase().includes("invalid")
           ? "That code didn't match. Codes change every 30 seconds — try the current one."
@@ -89,10 +95,12 @@ export default function AdminMfaPage() {
       return;
     }
 
-    // The session cookie is now aal2. refresh() makes middleware re-evaluate
-    // against the new cookie instead of a cached decision.
-    router.replace("/admin/dashboard");
-    router.refresh();
+    // A full page load, for the same reason as the login page: it guarantees
+    // middleware re-evaluates against the now-aal2 cookie, and it cannot serve
+    // a dashboard cached under the old assurance level. router.replace() left
+    // the address bar reading /admin/mfa when a refresh() raced it, and busy
+    // stays true so the button does not flick back to "Verify" on the way out.
+    window.location.assign("/admin/dashboard");
   };
 
   const signOut = async () => {
@@ -107,18 +115,44 @@ export default function AdminMfaPage() {
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-ink text-cream">
             <ShieldCheck className="h-5 w-5" strokeWidth={1.5} />
           </div>
+          {/* The heading has to wait for listFactors. Announcing "Set up
+              two-factor" while still loading told admins who already have an
+              authenticator that they were about to enrol a new one. */}
           <h1 className="mt-4 font-heading text-3xl text-ink">
-            {mode === "challenge" ? "Enter your code" : "Set up two-factor"}
+            {mode === "challenge"
+              ? "Enter your code"
+              : mode === "enroll"
+                ? "Set up two-factor"
+                : "Two-factor"}
           </h1>
           <p className="mt-1 text-sm text-ink/60">
             {mode === "challenge"
               ? "Open your authenticator app and enter the current 6-digit code."
-              : "Scan this with Microsoft Authenticator, Google Authenticator, or any TOTP app."}
+              : mode === "enroll"
+                ? "Scan this with Microsoft Authenticator, Google Authenticator, or any TOTP app."
+                : "Checking how this account is set up."}
           </p>
         </div>
 
         {mode === "loading" && (
           <p className="mt-8 text-center text-sm text-ink/50">Preparing…</p>
+        )}
+
+        {mode === "failed" && (
+          <div className="mt-8 text-center">
+            <p className="text-sm text-terracotta-dark">{error}</p>
+            <p className="mt-2 text-xs text-ink/50">
+              Your sign-in is still valid — this is only the two-factor check.
+            </p>
+            <Button
+              type="button"
+              onClick={start}
+              size="lg"
+              className="mt-4 w-full"
+            >
+              Try again
+            </Button>
+          </div>
         )}
 
         {mode === "enroll" && qr && (
@@ -136,7 +170,7 @@ export default function AdminMfaPage() {
           </div>
         )}
 
-        {mode !== "loading" && (
+        {(mode === "enroll" || mode === "challenge") && (
           <form onSubmit={submit} className="mt-6 space-y-4">
             <label className="block text-sm">
               <span className="font-medium text-ink/70">6-digit code</span>
