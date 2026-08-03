@@ -5,6 +5,7 @@ import ImageGallery from "@/components/product/ImageGallery";
 import ProductOptions from "@/components/product/ProductOptions";
 import CareAccordion from "@/components/product/CareAccordion";
 import ProductGrid from "@/components/shop/ProductGrid";
+import WishlistButton from "@/components/shop/WishlistButton";
 import type { Product } from "@/lib/types";
 import type { ProductSize } from "@/lib/sizes";
 
@@ -57,9 +58,16 @@ export default function ProductDetail({
               {product.category}
             </p>
           )}
-          <h1 className="mt-2 font-heading text-4xl text-ink sm:text-5xl">
-            {product.name}
-          </h1>
+          <div className="mt-2 flex items-start justify-between gap-4">
+            <h1 className="font-heading text-4xl text-ink sm:text-5xl">
+              {product.name}
+            </h1>
+            <WishlistButton
+              productId={product.id}
+              productName={product.name}
+              className="mt-1 shrink-0 border border-ink/10"
+            />
+          </div>
           <p className="mt-3 font-body text-2xl text-ink">
             {formatINR(price)}
             {wasPrice != null && (
