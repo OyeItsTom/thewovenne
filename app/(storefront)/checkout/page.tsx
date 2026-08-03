@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import CheckoutForm from "@/components/cart/CheckoutForm";
+import { getShippingConfig } from "@/lib/shipping";
 
 /**
  * Where the order gets a destination.
@@ -14,7 +15,9 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function CheckoutPage() {
+export default async function CheckoutPage() {
+  const shipping = await getShippingConfig();
+
   return (
     <div className="container-wovenne section-padding">
       <div className="mx-auto max-w-2xl">
@@ -23,7 +26,7 @@ export default function CheckoutPage() {
         <p className="mt-4 text-sm text-ink/60">
           We need these details to send your order and keep you updated on it.
         </p>
-        <CheckoutForm />
+        <CheckoutForm shipping={shipping} />
       </div>
     </div>
   );

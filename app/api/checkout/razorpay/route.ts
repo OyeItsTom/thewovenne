@@ -4,6 +4,7 @@ import { razorpay } from "@/lib/razorpay";
 import { createServiceClient } from "@/lib/supabase";
 import { priceCart } from "@/lib/checkoutPricing";
 import { validateOrderDetails } from "@/lib/orderDetails";
+import { getShippingConfig, quoteShipping } from "@/lib/shipping";
 import { sendOrderConfirmation } from "@/lib/sendOrderConfirmation";
 import type { CartItem } from "@/lib/store";
 
@@ -52,9 +53,15 @@ async function handleCreate({ items, details: rawDetails }: CreatePayload) {
     return NextResponse.json({ error }, { status: 400 });
   }
 
+  // Quoted here, not taken from the request. The browser shows the customer a
+  // figure, but this is the one they are charged — the same rule as prices.
+  const shippingConfig = await getShippingConfig();
+  const shipping = quoteShipping(details.address, total, shippingConfig);
+  const grandTotal = total + shipping.cost;
+
   try {
     // Razorpay expects the amount in the smallest unit — paise for INR.
-    const amount = Math.round(total * 100);
+    const amount = Math.round(grandTotal * 100);
 
     const order = await razorpay.orders.create({
       amount,
@@ -72,7 +79,8 @@ async function handleCreate({ items, details: rawDetails }: CreatePayload) {
       customer_name: details.name,
       customer_phone: details.phone,
       shipping_address: details.address,
-      total_inr: total,
+      total_inr: grandTotal,
+      shipping_cost_inr: shipping.cost,
       payment_provider: "razorpay",
       payment_status: "pending",
       items: priced.map((item) => ({
