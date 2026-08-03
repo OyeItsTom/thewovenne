@@ -4,6 +4,7 @@ import { razorpay } from "@/lib/razorpay";
 import { createServiceClient } from "@/lib/supabase";
 import { priceCart } from "@/lib/checkoutPricing";
 import { validateOrderDetails } from "@/lib/orderDetails";
+import { sendOrderConfirmation } from "@/lib/sendOrderConfirmation";
 import type { CartItem } from "@/lib/store";
 
 interface CreatePayload {
@@ -234,6 +235,14 @@ async function handleVerify({
   if (error) {
     console.error("Order recorded with unpriced items:", error);
   }
+
+  // Sent last, and deliberately not awaited for its success: the customer has
+  // paid and their confirmation page must not wait on an email provider, nor
+  // fail because one is down. A failure is logged, and the order exists
+  // regardless — it can always be re-sent from the admin.
+  void sendOrderConfirmation(razorpay_order_id).catch((e) =>
+    console.error("Order confirmation email failed:", e)
+  );
 
   return NextResponse.json({ verified: true });
 }
