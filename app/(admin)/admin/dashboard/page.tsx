@@ -29,9 +29,11 @@ import TestErrorButton from "@/components/admin/TestErrorButton";
 import PublishQueue from "@/components/admin/PublishQueue";
 import OrdersManager from "@/components/admin/OrdersManager";
 import AnalyticsDashboard from "@/components/admin/AnalyticsDashboard";
+import InsightsChat from "@/components/admin/InsightsChat";
 
 type Tab =
   | "analytics"
+  | "insights"
   | "orders"
   | "queue"
   | "products"
@@ -196,6 +198,7 @@ export default function AdminDashboardPage() {
           ["queue", "Review & Publish"],
           ["orders", "Orders"],
           ["analytics", "Analytics"],
+          ["insights", "Ask the data"],
         ] as [Tab, string][]).map(([id, label]) => (
           <button
             key={id}
@@ -236,6 +239,7 @@ export default function AdminDashboardPage() {
         {tab === "activity" && <AuditLog />}
         {tab === "orders" && <OrdersManager />}
         {tab === "analytics" && <AnalyticsDashboard />}
+        {tab === "insights" && <InsightsChat />}
         {tab === "queue" && (
           <PublishQueue
             onChange={noteEdit}
