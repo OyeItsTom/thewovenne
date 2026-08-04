@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import { uploadImage, UnsupportedImageError } from "@/lib/storage";
+import LookbookEditor from "@/components/admin/LookbookEditor";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { DEFAULT_CONTENT } from "@/lib/content";
 import type { SiteContentMap } from "@/lib/types";
@@ -37,6 +38,7 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
           why_linen: { ...DEFAULT_CONTENT.why_linen, ...((rows.get("why_linen") as object) ?? {}) },
           brand_story: { ...DEFAULT_CONTENT.brand_story, ...((rows.get("brand_story") as object) ?? {}) },
           seasonal_edit: { ...DEFAULT_CONTENT.seasonal_edit, ...((rows.get("seasonal_edit") as object) ?? {}) },
+          lookbook: { ...DEFAULT_CONTENT.lookbook, ...((rows.get("lookbook") as object) ?? {}) },
         });
         setLoading(false);
       });
@@ -46,15 +48,22 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
     setSave((s) => ({ ...s, [key]: "saving" }));
     // Writes the DRAFT only. Setting `value` here would put homepage copy live
     // the moment it saved, which is exactly what this system exists to prevent.
-    // The three blocks are seeded by migration 0007, so a row always exists to
-    // update — nothing here creates new keys.
+    //
+    // UPSERT, not update. The seeded blocks come from migration 0007, but the
+    // lookbook has no seeded row — and an UPDATE matching nothing reports
+    // success while saving nothing, so the editor would say "Saved" and the
+    // work would be gone on reload. Upserting also means the next content
+    // block added here needs no migration at all.
     const { error } = await getBrowserSupabase()
       .from("site_content")
-      .update({
-        draft_value: content[key],
-        updated_at: new Date().toISOString(),
-      })
-      .eq("key", key);
+      .upsert(
+        {
+          key,
+          draft_value: content[key],
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "key" }
+      );
     setSave((s) => ({ ...s, [key]: error ? "error" : "saved" }));
     if (!error) {
       onChange?.();
@@ -68,6 +77,7 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
   const why = content.why_linen;
   const story = content.brand_story;
   const season = content.seasonal_edit;
+  const lookbook = content.lookbook;
 
   const setSeason = (patch: Partial<typeof season>) =>
     setContent((c) => ({ ...c, seasonal_edit: { ...c.seasonal_edit, ...patch } }));
@@ -200,6 +210,15 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
           <code className="text-ink/70">/collection/onam-edit</code> for products
           you have tagged “onam-edit”, or <code className="text-ink/70">/women</code>.
         </p>
+      </Block>
+
+      {/* Lookbook — sits directly below the hero on the page, so it sits
+          directly below the hero block here too. */}
+      <Block title="Lookbook sections" onSave={() => saveBlock("lookbook")} state={save.lookbook}>
+        <LookbookEditor
+          value={lookbook}
+          onChange={(next) => setContent((c) => ({ ...c, lookbook: next }))}
+        />
       </Block>
 
       {/* Brand story — kept editable, but no longer rendered on the homepage.
