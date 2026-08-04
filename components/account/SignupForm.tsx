@@ -57,7 +57,7 @@ export default function SignupForm({ from }: { from?: string | null }) {
         ? `&from=${encodeURIComponent(from)}`
         : "";
     router.push(
-      `/verify?email=${encodeURIComponent(form.email.trim().toLowerCase())}${onward}`
+      `/in/verify?email=${encodeURIComponent(form.email.trim().toLowerCase())}${onward}`
     );
   }
 
@@ -69,7 +69,7 @@ export default function SignupForm({ from }: { from?: string | null }) {
       footer={
         <>
           Already have one?{" "}
-          <Link href="/login" className="text-terracotta hover:underline">
+          <Link href="/in/login" className="text-terracotta hover:underline">
             Log in
           </Link>
         </>
@@ -122,7 +122,7 @@ export default function SignupForm({ from }: { from?: string | null }) {
           />
           <span className="text-ink/70">
             I agree to the{" "}
-            <Link href="/policies" className="text-terracotta underline underline-offset-2">
+            <Link href="/in/policies" className="text-terracotta underline underline-offset-2">
               Terms &amp; Conditions and Privacy Policy
             </Link>
             .
@@ -164,7 +164,7 @@ export default function SignupForm({ from }: { from?: string | null }) {
             read as a convenience, not a toll gate. */}
         <p className="text-center text-xs text-ink/50">
           You can also{" "}
-          <Link href="/shop" className="underline hover:text-terracotta">
+          <Link href="/in/shop" className="underline hover:text-terracotta">
             shop without an account
           </Link>
           .

@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { DEFAULT_COUNTRY, isCountry, isUnprefixed } from "./lib/country";
 
 const SUPABASE_URL =
   process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
@@ -48,6 +49,25 @@ const MFA_PATH = "/admin/mfa";
  * server-rendered session from silently expiring mid-visit.
  */
 export async function middleware(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+
+  // ── Country prefix ────────────────────────────
+  // Anything storefront-shaped that is not already under a market is sent to
+  // the default one. This covers the bare root AND every pre-launch URL that
+  // may already be indexed or bookmarked — /shop, /women/sarees/kerala-kasavu
+  // — so nothing 404s and rankings carry across instead of starting again.
+  //
+  // 308, not 307: this is permanent, and search engines only transfer ranking
+  // signals for a permanent redirect.
+  if (!isUnprefixed(path)) {
+    const first = path.split("/")[1] ?? "";
+    if (!isCountry(first)) {
+      const url = request.nextUrl.clone();
+      url.pathname = path === "/" ? `/${DEFAULT_COUNTRY}` : `/${DEFAULT_COUNTRY}${path}`;
+      return NextResponse.redirect(url, 308);
+    }
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -75,6 +95,9 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
   const isAdminArea = pathname.startsWith("/admin");
+  // /in/account/... — the gate moved with the routes. Matching "/account"
+  // literally here would have silently stopped guarding anything.
+  const accountPath = /^\/[a-z]{2}\/account(\/|$)/.test(pathname);
   const isPublicAdminPath = PUBLIC_ADMIN_PATHS.some(
     (p) => pathname === p || pathname.startsWith(`${p}/`)
   );
@@ -83,10 +106,10 @@ export async function middleware(request: NextRequest) {
   // not an operator, and demanding an authenticator app to open a wishlist
   // would be theatre rather than security. Kept as its own branch so the
   // customer gate can never be mistaken for the admin one.
-  if (pathname.startsWith("/account")) {
+  if (accountPath) {
     if (!user) {
       const url = request.nextUrl.clone();
-      url.pathname = "/login";
+      url.pathname = `/${pathname.split("/")[1]}/login`;
       // Sends them back where they were headed once they log in, and tells the
       // login page to say why it appeared.
       url.searchParams.set("from", pathname);
@@ -209,8 +232,11 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // /account needs a session; /admin needs a session AND is_admin AND aal2.
-  // Keeping the matcher tight means the rest of the storefront pays no
-  // middleware cost, and static assets are never intercepted.
-  matcher: ["/admin/:path*", "/account/:path*"],
+  // Wider than before by necessity: the country prefix redirect must run on
+  // paths that have no route (a bare /shop), which a tight matcher would never
+  // see. /admin and /in/account are still gated inside.
+  // Everything except static assets and API routes, because the country
+  // redirect has to see paths that no longer have a route of their own.
+  // Excluding _next and files with an extension keeps the cost off assets.
+  matcher: ["/((?!api|_next/static|_next/image|.*\\.[\\w]+$).*)"],
 };

@@ -37,7 +37,7 @@ export default function CartSummary() {
             Continue to checkout
           </span>
         ) : (
-          <Link href="/checkout" className={buttonClassName("primary", "lg", "w-full")}>
+          <Link href="/in/checkout" className={buttonClassName("primary", "lg", "w-full")}>
             Continue to checkout
           </Link>
         )}

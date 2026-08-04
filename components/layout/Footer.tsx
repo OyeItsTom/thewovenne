@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { cPath } from "@/lib/country";
 import Link from "next/link";
 import { Facebook, Instagram, MessageCircle } from "lucide-react";
 import { getPublishedPages } from "@/lib/storefront";
@@ -18,7 +19,7 @@ export default async function Footer() {
 
       <div className="container-wovenne section-padding relative grid gap-12 md:grid-cols-4">
         <div className="md:col-span-2">
-          <Link href="/" className="flex items-center gap-2 font-heading text-3xl">
+          <Link href="/in" className="flex items-center gap-2 font-heading text-3xl">
             {/* The emblem is dark maroon on transparent, so it would vanish on
                 the ink footer — invert it to white to sit with the cream text. */}
             <Image
@@ -41,31 +42,31 @@ export default async function Footer() {
           <h3 className="font-heading text-lg text-gold">Explore</h3>
           <ul className="mt-4 space-y-2 text-sm text-cream/70">
             <li>
-              <Link href="/" className="transition-colors hover:text-cream">
+              <Link href="/in" className="transition-colors hover:text-cream">
                 Home
               </Link>
             </li>
             <li>
-              <Link href="/shop" className="transition-colors hover:text-cream">
+              <Link href="/in/shop" className="transition-colors hover:text-cream">
                 Shop
               </Link>
             </li>
             <li>
               {/* /about, not the old /#story anchor — that homepage section no
                   longer exists. */}
-              <Link href="/about" className="transition-colors hover:text-cream">
+              <Link href="/in/about" className="transition-colors hover:text-cream">
                 Our Story
               </Link>
             </li>
             <li>
-              <Link href="/journal" className="transition-colors hover:text-cream">
+              <Link href="/in/journal" className="transition-colors hover:text-cream">
                 Journal
               </Link>
             </li>
             {pages.map((page) => (
               <li key={page.id}>
                 <Link
-                  href={`/${page.slug}`}
+                  href={cPath(`/${page.slug}`)}
                   className="transition-colors hover:text-cream"
                 >
                   {page.title}

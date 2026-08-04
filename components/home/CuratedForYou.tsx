@@ -41,7 +41,7 @@ export default function CuratedForYou({ set }: { set: CuratedSet }) {
 
       <div className="mt-12 text-center">
         <Link
-          href="/shop"
+          href="/in/shop"
           className="inline-block border-b border-terracotta pb-1 text-xs uppercase tracking-widest text-terracotta"
         >
           See everything

@@ -1,5 +1,6 @@
 import { getNavCategoryTree } from "@/lib/storefront";
 import NavbarClient, { type NavItem } from "./NavbarClient";
+import { cPath } from "@/lib/country";
 
 /**
  * Server component: the category links are data-driven, so they're resolved on
@@ -14,21 +15,21 @@ export default async function Navbar() {
   // just those two — clean, never an empty bar.
   const navLinks: NavItem[] = [
     ...tree.map((parent) => ({
-      href: `/${parent.slug}`,
+      href: cPath(`/${parent.slug}`),
       label: parent.name,
       // The sub-categories the mega-menu opens. Already filtered upstream to
       // visible ones that actually hold products, so a menu never offers a link
       // to an empty listing.
       children: parent.children.map((child) => ({
-        href: `/${parent.slug}/${child.slug}`,
+        href: cPath(`/${parent.slug}/${child.slug}`),
         label: child.name,
       })),
     })),
     // /about, not /#story — the story is no longer a homepage section, and the
     // anchor it pointed at went with it. A link that silently scrolls nowhere
     // is the classic leftover of moving content.
-    { href: "/about", label: "Our Story" },
-    { href: "/journal", label: "Journal" },
+    { href: "/in/about", label: "Our Story" },
+    { href: "/in/journal", label: "Journal" },
   ];
 
   return <NavbarClient navLinks={navLinks} />;

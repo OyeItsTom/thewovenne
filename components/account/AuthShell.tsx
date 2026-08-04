@@ -26,7 +26,7 @@ export default function AuthShell({
     <div className="container-wovenne section-padding">
       <div className="mx-auto w-full max-w-md">
         <div className="text-center">
-          <Link href="/" aria-label="THE WOVENNE — home" className="inline-block">
+          <Link href="/in" aria-label="THE WOVENNE — home" className="inline-block">
             <Image
               src="/logo_emblem_transparent.png"
               alt=""

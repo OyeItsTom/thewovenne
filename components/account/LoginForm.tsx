@@ -56,7 +56,7 @@ export default function LoginForm({
       footer={
         <>
           New here?{" "}
-          <Link href="/signup" className="text-terracotta hover:underline">
+          <Link href="/in/signup" className="text-terracotta hover:underline">
             Create an account
           </Link>
         </>
@@ -75,7 +75,7 @@ export default function LoginForm({
               <>
                 {" "}
                 <Link
-                  href={`/verify?email=${encodeURIComponent(email)}`}
+                  href={`/in/verify?email=${encodeURIComponent(email)}`}
                   className="underline"
                 >
                   Enter your code
@@ -105,7 +105,7 @@ export default function LoginForm({
 
         <div className="text-right">
           <Link
-            href="/forgot-password"
+            href="/in/forgot-password"
             className="text-xs uppercase tracking-wider text-ink/50 hover:text-terracotta"
           >
             Forgot password?

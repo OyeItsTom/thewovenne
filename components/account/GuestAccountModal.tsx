@@ -106,14 +106,14 @@ export default function GuestAccountModal({
 
         <div className="mt-7 space-y-3">
           <Link
-            href="/signup"
+            href="/in/signup"
             onClick={onClose}
             className={buttonClassName("primary", "lg", "w-full")}
           >
             Create account
           </Link>
           <Link
-            href="/login"
+            href="/in/login"
             onClick={onClose}
             className={buttonClassName("secondary", "lg", "w-full")}
           >

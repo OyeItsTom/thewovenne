@@ -9,6 +9,7 @@ import WishlistButton from "@/components/shop/WishlistButton";
 import ProductReviews from "@/components/product/ProductReviews";
 import Stars from "@/components/product/Stars";
 import { getReviews, getRating } from "@/lib/reviews";
+import { cPath } from "@/lib/country";
 import type { Product } from "@/lib/types";
 import type { ProductSize } from "@/lib/sizes";
 
@@ -45,12 +46,12 @@ export default async function ProductDetail({
     <div className="container-wovenne section-padding pb-28 lg:pb-24">
       {breadcrumb && (
         <nav aria-label="Breadcrumb" className="mb-8 text-xs text-ink/50">
-          <Link href={`/${breadcrumb.parent.slug}`} className="hover:text-terracotta">
+          <Link href={cPath(`/${breadcrumb.parent.slug}`)} className="hover:text-terracotta">
             {breadcrumb.parent.name}
           </Link>
           <span className="mx-2">/</span>
           <Link
-            href={`/${breadcrumb.parent.slug}/${breadcrumb.child.slug}`}
+            href={cPath(`/${breadcrumb.parent.slug}/${breadcrumb.child.slug}`)}
             className="hover:text-terracotta"
           >
             {breadcrumb.child.name}

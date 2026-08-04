@@ -2,6 +2,7 @@ import type { MetadataRoute } from "next";
 import { getAllProducts } from "@/lib/products";
 import { getVisibleCategoryTree } from "@/lib/categories";
 import { productHref } from "@/lib/urls";
+import { cPath } from "@/lib/country";
 import { getPublishedPosts } from "@/lib/journal";
 import { getPublishedPages } from "@/lib/pages";
 
@@ -17,16 +18,19 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     getVisibleCategoryTree(),
   ]);
 
+  // Every entry is country-prefixed. A sitemap listing the bare paths would
+  // advertise URLs that only 308 elsewhere — telling a crawler to spend its
+  // budget on redirects instead of pages.
   const staticRoutes: MetadataRoute.Sitemap = [
-    "",
+    "/",
     "/shop",
     "/journal",
     "/cart",
   ].map((path) => ({
-    url: `${base}${path}`,
+    url: `${base}${cPath(path)}`,
     lastModified: new Date(),
     changeFrequency: "weekly",
-    priority: path === "" ? 1 : 0.7,
+    priority: path === "/" ? 1 : 0.7,
   }));
 
   const productRoutes: MetadataRoute.Sitemap = products.map((p) => ({
@@ -37,7 +41,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }));
 
   const journalRoutes: MetadataRoute.Sitemap = posts.map((post) => ({
-    url: `${base}/journal/${post.slug}`,
+    url: `${base}${cPath(`/journal/${post.slug}`)}`,
     lastModified: new Date(post.created_at),
     changeFrequency: "monthly",
     priority: 0.4,
@@ -45,7 +49,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   // Content pages are real URLs and belong in the sitemap like anything else.
   const pageRoutes: MetadataRoute.Sitemap = pages.map((page) => ({
-    url: `${base}/${page.slug}`,
+    url: `${base}${cPath(`/${page.slug}`)}`,
     lastModified: new Date(),
     changeFrequency: "monthly",
     priority: 0.5,
@@ -55,13 +59,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // product URLs hang off — a sitemap without them describes half the shop.
   const categoryRoutes: MetadataRoute.Sitemap = tree.flatMap((parent) => [
     {
-      url: `${base}/${parent.slug}`,
+      url: `${base}${cPath(`/${parent.slug}`)}`,
       lastModified: new Date(),
       changeFrequency: "weekly" as const,
       priority: 0.8,
     },
     ...parent.children.map((child) => ({
-      url: `${base}/${parent.slug}/${child.slug}`,
+      url: `${base}${cPath(`/${parent.slug}/${child.slug}`)}`,
       lastModified: new Date(),
       changeFrequency: "weekly" as const,
       priority: 0.7,

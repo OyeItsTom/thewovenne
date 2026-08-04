@@ -71,7 +71,7 @@ export default function VerifyForm({
         title="Verify your email"
         intro="We need to know which account to verify."
         footer={
-          <Link href="/signup" className="text-terracotta hover:underline">
+          <Link href="/in/signup" className="text-terracotta hover:underline">
             Start again
           </Link>
         }
@@ -92,7 +92,7 @@ export default function VerifyForm({
       footer={
         <>
           Wrong address?{" "}
-          <Link href="/signup" className="text-terracotta hover:underline">
+          <Link href="/in/signup" className="text-terracotta hover:underline">
             Sign up again
           </Link>
         </>

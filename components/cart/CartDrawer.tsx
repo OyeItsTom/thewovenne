@@ -67,7 +67,7 @@ export default function CartDrawer() {
                   <span>{formatINR(subtotal)}</span>
                 </div>
                 <Link
-                  href="/cart"
+                  href="/in/cart"
                   onClick={closeCart}
                   className={buttonClassName("primary", "lg", "w-full")}
                 >

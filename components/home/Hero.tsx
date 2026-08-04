@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { buttonClassName } from "@/components/ui/Button";
 import { DEFAULT_CONTENT } from "@/lib/content";
+import { adminHref } from "@/lib/country";
 import type { HomeHeroContent } from "@/lib/types";
 
 /**
@@ -48,7 +49,7 @@ export default function Hero({ content }: { content?: HomeHeroContent }) {
           twice. */}
       <span aria-hidden className="mt-8 h-px w-14 bg-ink/20" />
 
-      <Link href={c.cta_href} className={buttonClassName("ghost", "lg", "mt-8")}>
+      <Link href={adminHref(c.cta_href)} className={buttonClassName("ghost", "lg", "mt-8")}>
         {c.cta_label}
       </Link>
     </section>

@@ -27,7 +27,7 @@ export default function SearchField({
     e.preventDefault();
     const q = value.trim();
     if (!q) return;
-    router.push(`/search?q=${encodeURIComponent(q)}`);
+    router.push(`/in/search?q=${encodeURIComponent(q)}`);
     onSubmitted?.();
   }
 

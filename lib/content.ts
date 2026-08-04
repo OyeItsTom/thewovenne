@@ -14,7 +14,7 @@ export const DEFAULT_CONTENT: SiteContentMap = {
     subheading:
       "Authentic, handcrafted linen — sent direct from the loom houses of Kerala to your door. From the loom, to you. Nothing in between.",
     cta_label: "Explore the Collection",
-    cta_href: "/shop",
+    cta_href: "/in/shop",
   },
   why_linen: {
     title: "Why linen",

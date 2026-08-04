@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { adminHref } from "@/lib/country";
 import Link from "next/link";
 import type { SeasonalEditContent } from "@/lib/types";
 
@@ -106,7 +107,7 @@ export default function SeasonalEdit({
             )}
             {hasLink && (
               <Link
-                href={content.link_href}
+                href={adminHref(content.link_href)}
                 className="mt-7 inline-block border-b border-cream/50 pb-1 text-xs uppercase tracking-widest text-cream transition-colors hover:border-cream hover:text-white"
               >
                 {content.link_label}
