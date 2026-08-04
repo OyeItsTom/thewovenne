@@ -588,6 +588,34 @@ one currently look identical on screen.
 
 ---
 
+## Shiprocket — half built, and the half that's missing was never logged
+
+**What exists and works:** the admin Orders view, and dispatch details recorded
+by hand. An admin books the shipment on Shiprocket's own dashboard, then types
+the courier and AWB into the order. It saves (`orders.courier_name`,
+`awb_number`, `shipped_at` from `0024`), the audit log records it, and the
+customer's tracking page shows the number and carrier.
+
+**What does not exist:** any Shiprocket API integration. No API client, no
+credentials, no env vars, nothing. Specifically, the part of the original brief
+that said *"admin sees courier options for a paid order and selects one"* was
+never built — there is no call that fetches courier options or rates.
+
+**How it got here.** It was a deliberate decision, and the reasoning is sound —
+booking happens where the rates and options already are, and the API can replace
+the typing later without changing what is stored. But that decision was recorded
+**only in a code comment in `OrdersManager.tsx`**, which is the one place the
+owner would never look. It never reached this log, and it never reached the
+outstanding list. It was not dropped on purpose; it fell off the reporting.
+
+**To finish it** would need: Shiprocket API credentials, a token exchange (their
+auth expires and needs refreshing), a serviceability/rate call, an order-create
+call returning the AWB, and a webhook for status changes. The manual flow keeps
+working throughout, so this is an upgrade rather than a prerequisite for
+shipping anything.
+
+---
+
 ## Outstanding, owner action
 
 - **Razorpay test purchase** — above
@@ -597,6 +625,8 @@ one currently look identical on screen.
 - **Loyalty** — switch on when ready; rates are editable
 - **Partners' first login** — `hello@` and `care@` still show `MFA: not enrolled`
 - **T&C wording** — `/policies` holds placeholder content; edit it in the admin
+- **Shiprocket API** — not built; dispatch is typed in by hand today. See the
+  section above for what finishing it needs
 - **Customer addresses** — BUILT. `0035` stores one saved address per
   customer, editable under Settings and pre-filled at checkout. It is
   deliberately one address rather than a book, and it cannot redirect an order
