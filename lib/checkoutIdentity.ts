@@ -45,6 +45,15 @@ export async function getCheckoutIdentity(
   } = await supabase.auth.getUser();
   if (!user) return GUEST;
 
+  // A staff session checks out as a guest — the second place admin identity
+  // could surface in customer-facing UI. Middleware keeps admins out of
+  // /account, but /checkout is a shop page anyone may reach, and prefilling it
+  // would print a staff name and address into the order form. Admin emails are
+  // already refused at the customer login form, so an order placed from a
+  // staff session should carry whatever the person actually types.
+  const { data: isAdmin } = await supabase.rpc("is_admin");
+  if (isAdmin === true) return GUEST;
+
   // The wider select is tried first and falls back to the columns that have
   // always existed. This is deploy-ordering insurance, not defensive habit: if
   // this code ships before migration 0035 runs, an unknown column here would
