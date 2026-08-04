@@ -107,9 +107,9 @@ export default function CheckoutForm({
           const verifyData = await verifyRes.json();
           if (verifyData.verified) {
             clearCart();
-            router.push("/checkout/success");
+            router.push("/in/checkout/success");
           } else {
-            router.push("/checkout/cancel");
+            router.push("/in/checkout/cancel");
           }
         },
         modal: { ondismiss: () => setLoading(false) },
@@ -126,7 +126,7 @@ export default function CheckoutForm({
       <div className="mt-10 rounded-2xl border border-ink/10 bg-linen/40 p-10 text-center">
         <p className="font-heading text-2xl text-ink">Your cart is empty</p>
         <Link
-          href="/shop"
+          href="/in/shop"
           className="mt-4 inline-block border-b border-terracotta pb-1 text-xs uppercase tracking-widest text-terracotta"
         >
           Browse the collection
@@ -153,7 +153,7 @@ export default function CheckoutForm({
                 <p className="mt-2 text-xs text-ink/50">
                   From your account.{" "}
                   <Link
-                    href="/account/settings"
+                    href="/in/account/settings"
                     className="border-b border-ink/30 pb-px hover:text-ink"
                   >
                     Change your name

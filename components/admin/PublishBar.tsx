@@ -169,7 +169,7 @@ export default function PublishBar({
               it. Only useful when something is pending. */}
           {total > 0 && (
             <a
-              href="/api/preview?path=/"
+              href="/api/preview?path=/in"
               className="inline-flex items-center gap-1.5 rounded-full border border-ink/20 px-4 py-2 text-xs font-medium text-ink transition-colors hover:border-ink hover:bg-ink hover:text-cream"
             >
               <Eye className="h-3.5 w-3.5" /> Preview

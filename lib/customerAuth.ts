@@ -13,7 +13,7 @@ import { getBrowserSupabase } from "./supabase";
  */
 
 /** Where a signed-in customer lands. */
-export const AFTER_LOGIN = "/account/wishlist";
+export const AFTER_LOGIN = "/in/account/wishlist";
 
 export interface AuthResult {
   ok: boolean;

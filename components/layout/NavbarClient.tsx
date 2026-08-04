@@ -26,8 +26,8 @@ export interface NavItem {
 // back to log in — which looked like a broken session and was really a hardcoded
 // link. Middleware sends guests from here to /login?from=, so one href serves
 // both states without the nav needing to know who is signed in.
-const ACCOUNT_HREF = "/account/profile";
-const WISHLIST_HREF = "/account/wishlist";
+const ACCOUNT_HREF = "/in/account/profile";
+const WISHLIST_HREF = "/in/account/wishlist";
 
 /**
  * Long enough to cross the gap between the trigger and the panel, short enough
@@ -85,7 +85,7 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
             once at full size instead of repeated small on every page. The
             aria-label carries the name for anyone who cannot see the mark. */}
         <Link
-          href="/"
+          href="/in"
           aria-label="THE WOVENNE — home"
           className="flex items-center text-ink transition-opacity hover:opacity-70"
         >

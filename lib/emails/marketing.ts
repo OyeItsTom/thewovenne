@@ -57,7 +57,7 @@ function shell(body: string, siteUrl: string): string {
         <tr><td style="border-top:1px solid #eee;padding-top:20px;font-size:11px;line-height:1.6;color:${MUTED};">
           You're receiving this because you asked for updates when you created
           your account. You can turn them off any time in
-          <a href="${siteUrl}/account/settings" style="color:${TERRACOTTA};">your preferences</a>
+          <a href="${siteUrl}/in/account/settings" style="color:${TERRACOTTA};">your preferences</a>
           — order and delivery emails are separate and will keep arriving.
         </td></tr>
       </table>
@@ -71,7 +71,7 @@ function itemList(items: MarketingItem[], siteUrl: string): string {
     .slice(0, 5)
     .map(
       (i) => `<tr><td style="padding:8px 0;border-bottom:1px solid #eee;">
-        <a href="${siteUrl}/product/${esc(i.slug)}" style="color:${INK};text-decoration:none;font-size:15px;">${esc(i.name)}</a>
+        <a href="${siteUrl}/in/product/${esc(i.slug)}" style="color:${INK};text-decoration:none;font-size:15px;">${esc(i.name)}</a>
         ${i.stock <= 3 ? `<span style="color:${TERRACOTTA};font-size:12px;"> · only ${i.stock} left</span>` : ""}
       </td></tr>`
     )
@@ -98,7 +98,7 @@ export function marketingHtml(
      <tr><td style="padding-bottom:20px;font-size:15px;line-height:1.6;color:${MUTED};">${intro}</td></tr>
      <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${itemList(items, siteUrl)}</table></td></tr>
      <tr><td style="padding-top:24px;">
-       <a href="${siteUrl}${trigger === "cart_abandoned" ? "/cart" : "/account/wishlist"}" style="display:inline-block;background:${INK};color:#fff;text-decoration:none;padding:12px 24px;border-radius:999px;font-size:13px;letter-spacing:1px;">${trigger === "cart_abandoned" ? "VIEW YOUR BASKET" : "VIEW YOUR WISHLIST"}</a>
+       <a href="${siteUrl}${trigger === "cart_abandoned" ? "/in/cart" : "/in/account/wishlist"}" style="display:inline-block;background:${INK};color:#fff;text-decoration:none;padding:12px 24px;border-radius:999px;font-size:13px;letter-spacing:1px;">${trigger === "cart_abandoned" ? "VIEW YOUR BASKET" : "VIEW YOUR WISHLIST"}</a>
      </td></tr>
      <tr><td style="height:28px;"></td></tr>`,
     siteUrl
@@ -126,11 +126,11 @@ export function marketingText(
     ...lines,
     "",
     trigger === "cart_abandoned"
-      ? `Your basket: ${siteUrl}/cart`
-      : `Your wishlist: ${siteUrl}/account/wishlist`,
+      ? `Your basket: ${siteUrl}/in/cart`
+      : `Your wishlist: ${siteUrl}/in/account/wishlist`,
     "",
     "You're receiving this because you asked for updates when you created your",
-    `account. Turn them off any time: ${siteUrl}/account/settings`,
+    `account. Turn them off any time: ${siteUrl}/in/account/settings`,
     "Order and delivery emails are separate and will keep arriving.",
     "",
     "THE WOVENNE",

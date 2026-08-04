@@ -35,7 +35,7 @@ export default function ForgotPasswordForm() {
           : "Tell us your email and we'll send a link to set a new password."
       }
       footer={
-        <Link href="/login" className="text-terracotta hover:underline">
+        <Link href="/in/login" className="text-terracotta hover:underline">
           Back to log in
         </Link>
       }

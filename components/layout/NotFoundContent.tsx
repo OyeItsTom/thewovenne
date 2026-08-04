@@ -30,10 +30,10 @@ export default function NotFoundContent() {
       </p>
 
       <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
-        <Link href="/" className={buttonClassName("primary", "lg")}>
+        <Link href="/in" className={buttonClassName("primary", "lg")}>
           Return Home
         </Link>
-        <Link href="/journal" className={buttonClassName("ghost", "lg")}>
+        <Link href="/in/journal" className={buttonClassName("ghost", "lg")}>
           Read the Journal
         </Link>
       </div>

@@ -80,7 +80,7 @@ export default function ResetPasswordForm() {
         title="That link has expired"
         intro="Reset links last an hour, and can only be used once."
         footer={
-          <Link href="/forgot-password" className="text-terracotta hover:underline">
+          <Link href="/in/forgot-password" className="text-terracotta hover:underline">
             Send a new link
           </Link>
         }

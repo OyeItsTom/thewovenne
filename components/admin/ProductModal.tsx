@@ -139,7 +139,7 @@ export default function ProductModal({
     const slug = form.slug || "…";
     return parent && child
       ? `/${parent.slug}/${child.slug}/${slug}`
-      : `/product/${slug}`;
+      : `/in/product/${slug}`;
   })();
 
   useEffect(() => {

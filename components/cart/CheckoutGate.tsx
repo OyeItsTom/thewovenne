@@ -76,13 +76,13 @@ export default function CheckoutGate({
           {/* ?from= brings them back here with the cart intact, rather than
               landing them on the homepage to find their way back. */}
           <Link
-            href="/signup?from=/checkout"
+            href="/in/signup?from=/in/checkout"
             className={buttonClassName("secondary", "lg")}
           >
             Create account
           </Link>
           <Link
-            href="/login?from=/checkout"
+            href="/in/login?from=/in/checkout"
             className={buttonClassName("ghost", "lg")}
           >
             Log in

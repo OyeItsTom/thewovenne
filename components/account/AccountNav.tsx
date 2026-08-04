@@ -18,10 +18,10 @@ import { cn } from "@/lib/utils";
  * are gathered in one place rather than stacked under the details.
  */
 const LINKS = [
-  { href: "/account/profile", label: "Profile", icon: User },
-  { href: "/account/orders", label: "Orders", icon: Package },
-  { href: "/account/wishlist", label: "Wishlist", icon: Heart },
-  { href: "/account/settings", label: "Settings", icon: Settings },
+  { href: "/in/account/profile", label: "Profile", icon: User },
+  { href: "/in/account/orders", label: "Orders", icon: Package },
+  { href: "/in/account/wishlist", label: "Wishlist", icon: Heart },
+  { href: "/in/account/settings", label: "Settings", icon: Settings },
 ];
 
 export default function AccountNav() {

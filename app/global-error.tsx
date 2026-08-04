@@ -27,7 +27,7 @@ export default function GlobalError({
             We&apos;ve been notified. Please refresh, or head back to the shop.
           </p>
           <a
-            href="/"
+            href="/in"
             className="mt-6 inline-block rounded-full bg-terracotta px-8 py-3 text-cream transition-colors hover:bg-terracotta-dark"
           >
             Back to THE WOVENNE

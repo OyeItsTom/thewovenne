@@ -46,7 +46,7 @@ export default function WishlistButton({
     setBusy(false);
 
     if (result === "signin") {
-      router.push(`/login?from=${encodeURIComponent(pathname)}`);
+      router.push(`/in/login?from=${encodeURIComponent(pathname)}`);
     }
   }
 

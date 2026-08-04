@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { DEFAULT_CONTENT } from "@/lib/content";
+import { adminHref } from "@/lib/country";
 import type { LookbookContent, LookbookImage, LookbookSection } from "@/lib/types";
 
 /**
@@ -78,7 +79,7 @@ function Frame({
     </div>
   );
 
-  const href = image.href.trim();
+  const href = adminHref(image.href);
   if (!href) return picture;
 
   return (
