@@ -79,10 +79,10 @@ export async function middleware(request: NextRequest) {
     (p) => pathname === p || pathname.startsWith(`${p}/`)
   );
 
-  // Customer area: a session is all it takes. No is_admin check and no MFA — a
-  // shopper is not an operator, and demanding an authenticator app to open a
-  // wishlist would be theatre rather than security. Kept as its own branch so
-  // the customer gate can never be mistaken for the admin one.
+  // Customer area: a session, and NOT a staff account. No MFA — a shopper is
+  // not an operator, and demanding an authenticator app to open a wishlist
+  // would be theatre rather than security. Kept as its own branch so the
+  // customer gate can never be mistaken for the admin one.
   if (pathname.startsWith("/account")) {
     if (!user) {
       const url = request.nextUrl.clone();
@@ -92,6 +92,29 @@ export async function middleware(request: NextRequest) {
       url.searchParams.set("from", pathname);
       return NextResponse.redirect(url);
     }
+
+    // STAFF ARE NOT CUSTOMERS. Blocking admin credentials on the customer
+    // LOGIN FORM was only half the job: it stopped an admin signing in here,
+    // but not an admin who was already signed in at /admin from walking into
+    // the customer area and finding their own staff address printed in the
+    // Email field. One session, two areas — the login form was never the
+    // boundary. This is.
+    //
+    // Note it needs no aal2: a password-only admin session was enough to get
+    // in, so the check has to sit ahead of the two-factor step entirely.
+    const verdict = await checkIsAdmin(supabase);
+    if (verdict === "admin") {
+      const url = request.nextUrl.clone();
+      url.pathname = "/admin/dashboard";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+
+    // "unknown" lets them through, DELIBERATELY, and this is the opposite of
+    // how the admin gate treats it. There, failing closed costs an admin one
+    // retry. Here it would lock genuine customers out of their own orders over
+    // a network blip — and what gets through in the rare failure is an admin
+    // seeing their own row, not a customer seeing anyone else's.
     return response;
   }
 
