@@ -19,11 +19,13 @@ import type { CheckoutIdentity } from "@/lib/checkoutIdentity";
  * IT SHARES ITS WORDING AND ICONS WITH GuestAccountModal on purpose — the same
  * three choices described two different ways reads as two different features.
  *
- * What it does NOT share is which button is terracotta, and that is deliberate.
- * Terracotta marks the action this particular screen is nudging towards. Here
- * that is checking out, so "Continue as guest" carries it; in the modal the
- * customer has just reached for their account, so "Create account" does. Same
- * palette, different emphasis, because the moment is different.
+ * Button colours match the modal exactly: terracotta on "Create account", ink
+ * on "Sign in", outline on "Continue as guest". One action, one colour,
+ * wherever it appears — an accent that means "create an account" here and
+ * "skip creating an account" one screen earlier teaches nothing.
+ *
+ * Guest is still a real, prominent, full-size button and still listed first.
+ * It gives up the accent colour, not its standing.
  *
  * The account side gets the reasons rather than the insistence: what an account
  * does for them, in their terms. Signed-in customers never see this screen at
@@ -53,7 +55,7 @@ export default function CheckoutGate({
         <button
           type="button"
           onClick={() => setAsGuest(true)}
-          className={buttonClassName("primary", "lg", "mt-5 w-full sm:w-auto")}
+          className={buttonClassName("outline", "lg", "mt-5 w-full sm:w-auto")}
         >
           Continue as guest
         </button>
@@ -86,13 +88,13 @@ export default function CheckoutGate({
               landing them on the homepage to find their way back. */}
           <Link
             href="/in/signup?from=/in/checkout"
-            className={buttonClassName("secondary", "lg")}
+            className={buttonClassName("primary", "lg")}
           >
             Create account
           </Link>
           <Link
             href="/in/login?from=/in/checkout"
-            className={buttonClassName("outline", "lg")}
+            className={buttonClassName("secondary", "lg")}
           >
             Sign in
           </Link>
