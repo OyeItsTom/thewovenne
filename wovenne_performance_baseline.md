@@ -204,3 +204,83 @@ TTFB:
 curl -s -o /dev/null -w "%{time_starttransfer}\n" \
   "https://www.thewovenne.com/in?cb=$RANDOM"
 ```
+
+
+---
+
+## Follow-up investigation — what was fixed, and five dead ends
+
+Added after the baseline above. **Read this before chasing bundle size again.**
+
+### Fixed and verified
+
+**Homepage caching.** `force-dynamic` was costing 993 ms TTFB against 64–130 ms
+elsewhere. Now `revalidate = 60`, static in the build output, with
+personalisation moved to a post-paint client fetch. **993 ms → 19 ms.** This is
+the only substantial win from the whole performance effort.
+
+**ProductCard off framer-motion** (`lib/useReveal`). Category route 213 kB →
+175 kB.
+
+### The cart TBT diagnosis — solid, unfixed
+
+Lighthouse per-script attribution on the cart page (TBT ~1,130 ms):
+
+| Script | Execution |
+|---|---|
+| `1212-….js` | **1,155 ms** |
+| document | 34 ms |
+| webpack runtime | 71 ms |
+
+All three longest tasks (662 / 152 / 127 ms) come from that one chunk. Fetched
+from production it is **373 KB raw with 264 Sentry references**, and it loads on
+**every page**. It contains `rrweb`, `replayIntegration` and `recordCanvas` —
+Session Replay, which `sentry.client.config.ts` has never enabled.
+
+So: the shop downloads and parses a session recorder it never runs, on every
+page, costing about a second of main-thread time on a throttled phone.
+
+### A methodology error worth not repeating
+
+**Local builds and production builds chunk differently.** `next.config.mjs`
+gates Sentry behind a DSN check, and chunk composition diverges between the two.
+Several conclusions in this document's first half were drawn by comparing
+production Lighthouse data against locally-built chunk contents. That is how
+"Sentry is not on the critical path" was concluded — wrongly.
+
+**Measure production against production.** Route sizes from `npm run build`
+locally understate what customers actually receive.
+
+### Dead ends — all tried, all reverted, none shipped
+
+| Attempt | Result |
+|---|---|
+| `optimizePackageImports: ["lucide-react"]` | **Byte-identical.** Next 14.2 already includes lucide-react in its default list (`next/dist/server/config.js:577`). |
+| Sentry `bundleSizeOptimizations` (`excludeReplay*`, `excludeDebugStatements`) | **Byte-identical chunk hashes.** Those flags strip Replay's sub-features; they do not stop Replay being imported. |
+| Sentry explicit `integrations: [browserTracingIntegration()]` | **Byte-identical.** A runtime choice cannot remove code the bundler has already included. `rrweb` still present. |
+| `CartDrawer` off framer-motion | Class toggled `translate-x-full → translate-x-0` while the computed transform stayed at 448px. **Drawer never opened.** Route size unchanged. |
+| `CareAccordion` off framer-motion (grid-rows, then max-height) | Class toggled correctly, panel stayed at 0px in both states. **Content unreachable.** Route size unchanged. |
+
+The two framer conversions passed typecheck, lint and build. Only opening them
+in a browser caught them — and neither changed its route's bundle by a single
+byte, so they were breaking working UI for nothing.
+
+### What is actually left
+
+Removing Replay from `@sentry/nextjs` is a **build-time inclusion** problem, and
+there is no documented flag that removes it wholesale. The remaining options:
+
+1. **Sentry's CDN loader script** — defers the SDK entirely. The only approach
+   likely to work, at the cost of missing errors in the first moments of a page.
+2. **Accept it.** Desktop is 93–99 and unaffected. This is a mobile CPU cost on
+   pages customers reach with intent.
+
+Option 1 is a real trade about error coverage, not a free win.
+
+### Honest summary
+
+Four hypotheses about the ~220 kB were tested and eliminated: Sentry (initially,
+wrongly, dismissed), framer-motion (mattered only on the category route),
+lucide-react (already optimised), and the Supabase client (never confirmed, and
+absent from the homepage's critical chunks). The cause of cart TBT was found and
+precisely located. It was not removed.
