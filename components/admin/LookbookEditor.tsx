@@ -31,6 +31,27 @@ const LAYOUTS: { value: LookbookLayout; label: string; slots: number }[] = [
   { value: "split-3", label: "Three across", slots: 3 },
 ];
 
+/**
+ * Export sizes, shown next to the field rather than kept in a document nobody
+ * opens. Each is the exact ratio the slot renders at, so an image at this size
+ * fills it with nothing cropped and no bars.
+ *
+ * The desktop numbers differ per layout because the slot does: full width, a
+ * half, or a third. The MOBILE number never changes, because phones stack
+ * every layout into one full-width column.
+ */
+const DESKTOP_HINT: Record<LookbookLayout, string> = {
+  single:
+    "Export at 2400 × 1350 (16:9). This one spans the full width of the page, so it is the largest image on the site — export generously.",
+  "split-2":
+    "Export at 1800 × 2400 (3:4). Each image takes half the width on desktop, so it is tall rather than wide.",
+  "split-3":
+    "Export at 1280 × 1920 (2:3). Each image takes a third of the width on desktop, so it is taller again.",
+};
+
+const MOBILE_HINT =
+  "Export at 1200 × 1500 (4:5). The same size for every layout — on phones the images always stack full-width, one after another. Leave this blank to reuse the desktop image.";
+
 const EMPTY_IMAGE: LookbookImage = {
   image_url: "",
   image_url_mobile: "",
@@ -103,12 +124,26 @@ export default function LookbookEditor({
 
   return (
     <div className="space-y-5">
-      <p className="rounded-lg bg-linen px-3 py-2 text-xs leading-relaxed text-ink/60">
-        Full-width image blocks, shown just below the hero. On phones the images
-        always stack one under another — a three-across split would be three
-        slivers. Sections stay off the site until you tick <strong>Show</strong>,
-        and an empty section never appears at all.
-      </p>
+      <div className="space-y-2 rounded-lg bg-linen px-3 py-2.5 text-xs leading-relaxed text-ink/60">
+        <p>
+          Full-width image blocks, shown just below the hero. On phones the
+          images always stack one under another — a three-across split would be
+          three slivers. Sections stay off the site until you tick{" "}
+          <strong className="font-medium">Show</strong>, and an empty section
+          never appears at all.
+        </p>
+        <p>
+          {/* Corrects the instinct to hit a KB budget by hand. The site
+              re-encodes every image on the way out, so a pre-compressed upload
+              only gives the optimiser less to work with. */}
+          <strong className="font-medium">On file size and format:</strong>{" "}
+          upload the best quality you have — JPEG, PNG or WebP. The site resizes
+          each image and converts it to WebP or AVIF when it serves it, so
+          there&apos;s no need to compress to a target size first. Squeezing a
+          file down before uploading only makes the version customers see worse.
+          HEIC is refused; export as JPEG instead.
+        </p>
+      </div>
 
       {sections.length === 0 && (
         <p className="py-6 text-center text-sm text-ink/50">
@@ -190,6 +225,7 @@ export default function LookbookEditor({
                 key={i}
                 index={i}
                 total={section.images.length}
+                layout={section.layout}
                 image={image}
                 onChange={(changes) => patchImage(section.id, i, changes)}
               />
@@ -215,11 +251,13 @@ export default function LookbookEditor({
 function ImageSlot({
   index,
   total,
+  layout,
   image,
   onChange,
 }: {
   index: number;
   total: number;
+  layout: LookbookLayout;
   image: LookbookImage;
   onChange: (changes: Partial<LookbookImage>) => void;
 }) {
@@ -234,12 +272,13 @@ function ImageSlot({
       <div className="grid gap-3 sm:grid-cols-2">
         <UploadField
           label="Desktop"
+          hint={DESKTOP_HINT[layout]}
           url={image.image_url}
           onUploaded={(url) => onChange({ image_url: url })}
         />
         <UploadField
           label="Mobile (optional)"
-          hint="Portrait crop. Falls back to the desktop image."
+          hint={MOBILE_HINT}
           url={image.image_url_mobile}
           onUploaded={(url) => onChange({ image_url_mobile: url })}
         />
@@ -349,7 +388,11 @@ function UploadField({
         </button>
       )}
 
-      {hint && <p className="mt-1 text-xs text-ink/45">{hint}</p>}
+      {/* Sits with the field, not in a document nobody opens — whoever is
+          uploading sees the size at the moment they need it. */}
+      {hint && (
+        <p className="mt-1.5 text-xs leading-relaxed text-ink/50">{hint}</p>
+      )}
       {error && <p className="mt-1 text-xs text-terracotta-dark">{error}</p>}
     </div>
   );
