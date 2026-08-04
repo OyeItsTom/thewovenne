@@ -1,114 +1,31 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import {
-  AlertTriangle,
-  Boxes,
-  LogOut,
-  Package,
-  PlusCircle,
-  ShoppingBag,
-  KeyRound,
-} from "lucide-react";
+import { AlertTriangle, Boxes, Package, ShoppingBag } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
-import { isCurrentUserAdmin } from "@/lib/auth";
-import { getAdminProducts, getDraftProductIds } from "@/lib/products";
+import { getAdminProducts } from "@/lib/products";
 import type { Product } from "@/lib/types";
-import Button, { buttonClassName } from "@/components/ui/Button";
-import ProductTable from "@/components/admin/ProductTable";
-import ProductModal from "@/components/admin/ProductModal";
-import AuditLog from "@/components/admin/AuditLog";
-import PagesManager from "@/components/admin/PagesManager";
-import PublishBar from "@/components/admin/PublishBar";
-import CategoryManager from "@/components/admin/CategoryManager";
-import ContentEditor from "@/components/admin/ContentEditor";
-import JournalManager from "@/components/admin/JournalManager";
+import SectionGrid from "@/components/admin/SectionGrid";
 import TestErrorButton from "@/components/admin/TestErrorButton";
-import PublishQueue from "@/components/admin/PublishQueue";
-import OrdersManager from "@/components/admin/OrdersManager";
-import AnalyticsDashboard from "@/components/admin/AnalyticsDashboard";
-import InsightsChat from "@/components/admin/InsightsChat";
-import StoreSettingsEditor from "@/components/admin/StoreSettingsEditor";
-import CustomersManager from "@/components/admin/CustomersManager";
-import MarketingPanel from "@/components/admin/MarketingPanel";
-import ReviewsManager from "@/components/admin/ReviewsManager";
 
-type Tab =
-  | "customers"
-  | "reviews"
-  | "marketing"
-  | "settings"
-  | "analytics"
-  | "insights"
-  | "orders"
-  | "queue"
-  | "products"
-  | "categories"
-  | "content"
-  | "pages"
-  | "journal"
-  | "activity";
-
+/**
+ * The dashboard landing page: how the shop is doing, then where to go.
+ *
+ * The tab bar this replaced put fourteen sections on one page, which meant the
+ * page grew a little more unusable with every section added and the fourteenth
+ * tab was already scrolling off the edge. Each section now owns a URL, so it
+ * can be linked, bookmarked and opened in a second tab — none of which a tab
+ * held in React state could do.
+ *
+ * The session check and the pending-changes bar live in the layout, so they
+ * cover every section rather than only this page.
+ */
 export default function AdminDashboardPage() {
-  const router = useRouter();
-  const [checkingAuth, setCheckingAuth] = useState(true);
   const [products, setProducts] = useState<Product[] | null>(null);
   const [ordersThisWeek, setOrdersThisWeek] = useState(0);
-  const [modalOpen, setModalOpen] = useState(false);
-  // null while adding; a product while editing that product.
-  const [editing, setEditing] = useState<Product | null>(null);
-  const [tab, setTab] = useState<Tab>("products");
-  // Bumped whenever an edit lands, so the pending count re-reads without a
-  // page refresh.
-  const [publishKey, setPublishKey] = useState(0);
-  const [draftIds, setDraftIds] = useState<Set<string>>(new Set());
-  const noteEdit = () => setPublishKey((k) => k + 1);
 
   useEffect(() => {
-    let active = true;
-
-    // A session alone is not enough — customers authenticate against the same
-    // Supabase project. Admin access is decided by profiles.is_admin.
-    const verify = async () => {
-      const { data } = await getBrowserSupabase().auth.getSession();
-      if (!active) return;
-
-      if (!data.session) {
-        router.replace("/admin/login");
-        return;
-      }
-
-      const admin = await isCurrentUserAdmin();
-      if (!active) return;
-
-      if (!admin) {
-        // Signed in but not an admin: end the session rather than leave them
-        // staring at a dashboard that RLS will render empty anyway.
-        await getBrowserSupabase().auth.signOut();
-        router.replace("/admin/login");
-        return;
-      }
-
-      setCheckingAuth(false);
-    };
-
-    verify();
-
-    const { data: listener } = getBrowserSupabase().auth.onAuthStateChange((_e, session) => {
-      if (!session) router.replace("/admin/login");
-    });
-    return () => {
-      active = false;
-      listener.subscription.unsubscribe();
-    };
-  }, [router]);
-
-  useEffect(() => {
-    if (checkingAuth) return;
     getAdminProducts(getBrowserSupabase()).then(setProducts);
-    getDraftProductIds(getBrowserSupabase()).then(setDraftIds);
 
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     getBrowserSupabase()
@@ -116,50 +33,7 @@ export default function AdminDashboardPage() {
       .select("*", { count: "exact", head: true })
       .gte("created_at", weekAgo)
       .then(({ count }) => setOrdersThisWeek(count ?? 0));
-  }, [checkingAuth, publishKey]);
-
-  const handleSignOut = async () => {
-    await getBrowserSupabase().auth.signOut();
-    router.replace("/admin/login");
-  };
-
-  const handleUpdate = (updated: Product) => {
-    noteEdit();
-    setProducts((prev) =>
-      prev ? prev.map((p) => (p.id === updated.id ? updated : p)) : prev
-    );
-  };
-
-  const handleSaved = (saved: Product, isNew: boolean) => {
-    noteEdit();
-    return setProducts((prev) => {
-      if (!prev) return [saved];
-      return isNew ? [saved, ...prev] : prev.map((p) => (p.id === saved.id ? saved : p));
-    });
-  };
-
-  const handleDelete = (id: string) => {
-    noteEdit();
-    setProducts((prev) => (prev ? prev.filter((p) => p.id !== id) : prev));
-  };
-
-  const openAdd = () => {
-    setEditing(null);
-    setModalOpen(true);
-  };
-
-  const openEdit = (product: Product) => {
-    setEditing(product);
-    setModalOpen(true);
-  };
-
-  if (checkingAuth) {
-    return (
-      <div className="container-wovenne section-padding text-center text-ink/60">
-        Checking your session…
-      </div>
-    );
-  }
+  }, []);
 
   const total = products?.length ?? 0;
   // Sum of units, not a row count. Counting rows made "In Stock" equal
@@ -170,17 +44,8 @@ export default function AdminDashboardPage() {
       .length ?? 0;
 
   return (
-    <div className="container-wovenne section-padding">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="font-heading text-4xl text-ink sm:text-5xl">Dashboard</h1>
-        <div className="flex flex-wrap gap-3">
-          {tab === "products" && (
-            <Button onClick={openAdd} size="md">
-              <PlusCircle className="h-4 w-4" /> Add New Product
-            </Button>
-          )}
-        </div>
-      </div>
+    <div>
+      <h1 className="font-heading text-4xl text-ink sm:text-5xl">Dashboard</h1>
 
       <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard icon={Package} label="Products" value={total} />
@@ -189,82 +54,8 @@ export default function AdminDashboardPage() {
         <StatCard icon={ShoppingBag} label="Orders This Week" value={ordersThisWeek} />
       </div>
 
-      {/* Pending changes span every tab, so this sits above all of them. */}
-      <div className="mt-8">
-        <PublishBar refreshKey={publishKey} onReview={() => setTab("queue")} />
-      </div>
-
-      {/* Tabs */}
-      <div className="mt-10 flex gap-2 border-b border-ink/10">
-        {([
-          ["products", "Products & Stock"],
-          ["categories", "Categories"],
-          ["content", "Homepage Content"],
-          ["pages", "Pages"],
-          ["journal", "Journal"],
-          ["activity", "Activity"],
-          ["queue", "Review & Publish"],
-          ["orders", "Orders"],
-          ["reviews", "Reviews"],
-          ["customers", "Customers"],
-          ["marketing", "Marketing"],
-          ["analytics", "Analytics"],
-          ["insights", "Ask the data"],
-          ["settings", "Settings"],
-        ] as [Tab, string][]).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => {
-              setTab(id);
-              // Safety net: re-read the pending count on every tab switch, so a
-              // missed callback surfaces on navigation instead of never.
-              noteEdit();
-            }}
-            className={
-              tab === id
-                ? "border-b-2 border-terracotta px-4 py-3 text-sm font-medium text-ink"
-                : "px-4 py-3 text-sm text-ink/50 hover:text-ink"
-            }
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-8">
-        {tab === "products" &&
-          (products === null ? (
-            <p className="text-ink/60">Loading products…</p>
-          ) : (
-            <ProductTable
-              products={products}
-              onUpdate={handleUpdate}
-              onEdit={openEdit}
-              onDelete={handleDelete}
-              draftIds={draftIds}
-            />
-          ))}
-        {tab === "categories" && <CategoryManager onChange={noteEdit} />}
-        {tab === "content" && <ContentEditor onChange={noteEdit} />}
-        {tab === "pages" && <PagesManager onChange={noteEdit} />}
-        {tab === "journal" && <JournalManager onChange={noteEdit} />}
-        {tab === "activity" && <AuditLog />}
-        {tab === "orders" && <OrdersManager />}
-        {tab === "reviews" && <ReviewsManager />}
-        {tab === "analytics" && <AnalyticsDashboard />}
-        {tab === "insights" && <InsightsChat />}
-        {tab === "settings" && <StoreSettingsEditor onChange={noteEdit} />}
-        {tab === "customers" && <CustomersManager />}
-        {tab === "marketing" && <MarketingPanel />}
-        {tab === "queue" && (
-          <PublishQueue
-            onChange={noteEdit}
-            onEdit={(target) => {
-              setTab(target as Tab);
-              noteEdit();
-            }}
-          />
-        )}
+      <div className="mt-12">
+        <SectionGrid />
       </div>
 
       {/* Sentry verification */}
@@ -277,13 +68,6 @@ export default function AdminDashboardPage() {
           Fires a test error to confirm Sentry is capturing events.
         </span>
       </div>
-
-      <ProductModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        product={editing}
-        onSaved={handleSaved}
-      />
     </div>
   );
 }
