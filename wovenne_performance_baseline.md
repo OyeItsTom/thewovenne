@@ -265,17 +265,20 @@ The two framer conversions passed typecheck, lint and build. Only opening them
 in a browser caught them — and neither changed its route's bundle by a single
 byte, so they were breaking working UI for nothing.
 
-### What is actually left
+### DECIDED: Sentry stays. Cart TBT is accepted.
 
-Removing Replay from `@sentry/nextjs` is a **build-time inclusion** problem, and
-there is no documented flag that removes it wholesale. The remaining options:
+**Decision, 4 August 2026 — not an open question.** Error coverage matters more
+than a second of mobile TBT while the shop is launching. Do not re-open this to
+save bundle size; it was weighed and settled.
 
-1. **Sentry's CDN loader script** — defers the SDK entirely. The only approach
-   likely to work, at the cost of missing errors in the first moments of a page.
-2. **Accept it.** Desktop is 93–99 and unaffected. This is a mobile CPU cost on
-   pages customers reach with intent.
+The reasoning, so it holds up later: the one approach likely to work is Sentry's
+CDN loader, which defers the SDK and in exchange misses errors in the first
+moments of a page load. Those first moments are exactly when a launch breaks,
+and an unseen error during launch costs more than 1,155 ms on a page customers
+reach with intent. Desktop is 93–99 and unaffected either way.
 
-Option 1 is a real trade about error coverage, not a free win.
+**Revisit when:** the shop is past launch and stable, or mobile conversion data
+shows the cart specifically losing people. Not before.
 
 ### Honest summary
 
