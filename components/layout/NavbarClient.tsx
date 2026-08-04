@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ChevronDown, Heart, Menu, Search, ShoppingBag, User, X } from "lucide-react";
+import { ChevronDown, Heart, Menu, Search, ShoppingBag, X } from "lucide-react";
 import { useCartStore } from "@/lib/store";
+import AccountEntry from "@/components/account/AccountEntry";
 import SearchField from "@/components/shop/SearchField";
 
 export interface NavChild {
@@ -200,13 +201,9 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
             <Heart className="h-6 w-6" strokeWidth={1.5} />
           </Link>
 
-          <Link
-            href={ACCOUNT_HREF}
-            aria-label="Login or sign up"
-            className="text-ink transition-colors hover:text-terracotta"
-          >
-            <User className="h-6 w-6" strokeWidth={1.5} />
-          </Link>
+          {/* A guest gets the choice modal here rather than a silent jump to
+              the login page; a signed-in customer gets the plain link. */}
+          <AccountEntry href={ACCOUNT_HREF} />
 
           <button
             onClick={toggleCart}

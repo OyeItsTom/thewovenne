@@ -36,6 +36,9 @@ export const DEFAULT_CONTENT: SiteContentMap = {
     link_label: "",
     link_href: "",
   },
+  // Empty until the admin adds one. An array rather than a fixed set of slots:
+  // six blank sections in the editor invites filling them for the sake of it.
+  lookbook: { sections: [] },
   brand_story: {
     title: "From the loom, to you",
     body: "THE WOVENNE works directly with handloom artisans across Kerala. No middleman, no compromise — just honest cloth, woven the way it has been for generations, sent straight to you.",

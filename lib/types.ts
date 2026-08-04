@@ -159,9 +159,45 @@ export interface SeasonalEditContent {
   link_href: string;
 }
 
+/**
+ * One full-bleed lookbook block on the homepage.
+ *
+ * Desktop and mobile images are separate for the same reason the seasonal band
+ * keeps them apart: a landscape crop on a phone is a letterbox strip, and a
+ * portrait crop on a laptop is a column with two empty sides. Mobile falls
+ * back to the desktop image when left blank, so one upload still works.
+ */
+export interface LookbookImage {
+  /** Desktop / wide. Empty means this slot renders nothing. */
+  image_url: string;
+  /** Portrait crop for narrow screens. Falls back to image_url when empty. */
+  image_url_mobile: string;
+  /** Where the image goes when tapped. Empty leaves it unclickable. */
+  href: string;
+  /** Describes the picture for screen readers. Empty marks it decorative. */
+  alt: string;
+}
+
+export type LookbookLayout = "single" | "split-2" | "split-3";
+
+export interface LookbookSection {
+  /** Stable across reorders, so React keys and edits do not chase positions. */
+  id: string;
+  /** Off by default — a section with no image should never reach the site. */
+  enabled: boolean;
+  layout: LookbookLayout;
+  /** One entry for "single", two for "split-2", three for "split-3". */
+  images: LookbookImage[];
+}
+
+export interface LookbookContent {
+  sections: LookbookSection[];
+}
+
 export interface SiteContentMap {
   home_hero: HomeHeroContent;
   why_linen: WhyLinenContent;
   brand_story: BrandStoryContent;
   seasonal_edit: SeasonalEditContent;
+  lookbook: LookbookContent;
 }
