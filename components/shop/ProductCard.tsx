@@ -3,19 +3,18 @@
 import { MouseEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { motion, useReducedMotion } from "framer-motion";
 import { Plus } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
 import { productHref } from "@/lib/urls";
 import WishlistButton from "./WishlistButton";
-import { fadeUp } from "@/lib/motion";
+import { useReveal, revealClass } from "@/lib/useReveal";
 import { useCartStore } from "@/lib/store";
 import Badge from "@/components/ui/Badge";
 
 export default function ProductCard({ product }: { product: Product }) {
-  const reduced = useReducedMotion();
+  const { ref, revealed } = useReveal<HTMLDivElement>();
   const addItem = useCartStore((s) => s.addItem);
   const openCart = useCartStore((s) => s.openCart);
 
@@ -40,13 +39,7 @@ export default function ProductCard({ product }: { product: Product }) {
   };
 
   return (
-    <motion.div
-      variants={fadeUp(reduced)}
-      initial="hidden"
-      whileInView="visible"
-      viewport={{ once: true, margin: "-50px" }}
-      className="group"
-    >
+    <div ref={ref} className={`group ${revealClass(revealed)}`}>
       <Link href={productHref(product)} className="block">
         <div className="relative aspect-[4/5] overflow-hidden rounded-xl bg-linen">
           {product.image_url && (
@@ -108,6 +101,6 @@ export default function ProductCard({ product }: { product: Product }) {
           </span>
         </div>
       </Link>
-    </motion.div>
+    </div>
   );
 }
