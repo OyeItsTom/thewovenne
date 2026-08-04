@@ -1,13 +1,13 @@
 import Hero from "@/components/home/Hero";
 import WhyLinen from "@/components/home/WhyLinen";
-import CuratedForYou from "@/components/home/CuratedForYou";
-import SeasonalEdit from "@/components/home/SeasonalEdit";
-import LookbookSections from "@/components/home/LookbookSections";
 import InstagramGrid from "@/components/home/InstagramGrid";
 import WovenSeam from "@/components/weave/WovenSeam";
-import { createRSCClient } from "@/lib/supabaseRSC";
+import CuratedPersonalizer from "@/components/home/CuratedPersonalizer";
+import SeasonalEdit from "@/components/home/SeasonalEdit";
+import LookbookSections from "@/components/home/LookbookSections";
 import { getCuratedProducts } from "@/lib/curated";
 import { getContent } from "@/lib/storefront";
+
 
 /**
  * Hero → Seasonal → Lookbook → Curated → Instagram → Why us.
@@ -17,21 +17,22 @@ import { getContent } from "@/lib/storefront";
  * and the proof was asking browsers to read before they had seen anything
  * worth reading about.
  *
- * The page is dynamic rather than revalidated now: the curated set depends on
- * who is looking, and a cached homepage would serve one customer's wishlist
- * matches to everybody. The editable content it also renders is fetched the
- * same way as before; only the caching changed.
+ * CACHED, and personalised afterwards. This page was force-dynamic so the
+ * curated set could vary per customer, which cost 993 ms to first byte against
+ * 64-130 ms on every other page — paid by every first-time visitor, who has no
+ * wishlist to personalise from in the first place.
+ *
+ * Now it renders the same cached new arrivals for everyone, and a signed-in
+ * customer's browser swaps in their own set after paint. See
+ * CuratedPersonalizer.
  */
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 export default async function Home() {
-  const supabase = createRSCClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  // `null` and `false`: build the guest set. No session is read here, because
+  // reading one is exactly what made the page uncacheable.
   const [curated, hero, whyLinen, seasonal, lookbook] = await Promise.all([
-    getCuratedProducts(supabase, Boolean(user)),
+    getCuratedProducts(null, false),
     getContent("home_hero"),
     getContent("why_linen"),
     getContent("seasonal_edit"),
@@ -48,7 +49,7 @@ export default async function Home() {
       {/* Renders nothing until a section is enabled and has an image. */}
       <LookbookSections content={lookbook} />
 
-      <CuratedForYou set={curated} />
+      <CuratedPersonalizer initial={curated} />
       <WovenSeam />
 
       <InstagramGrid />

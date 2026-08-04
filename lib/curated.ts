@@ -50,7 +50,9 @@ function tally(products: Product[], key: keyof typeof ATTRIBUTE_WEIGHTS) {
 }
 
 export async function getCuratedProducts(
-  supabase: SupabaseClient,
+  // Null when building the guest set — the cached homepage passes null
+  // precisely so it never reads a session and never becomes uncacheable.
+  supabase: SupabaseClient | null,
   signedIn: boolean
 ): Promise<CuratedSet> {
   const all = await getAllProducts();
@@ -59,7 +61,9 @@ export async function getCuratedProducts(
   // new-arrivals answer with no extra work.
   const newest = all.slice(0, TARGET);
 
-  if (!signedIn) return { products: newest, reason: "new", basedOn: 0 };
+  if (!signedIn || !supabase) {
+    return { products: newest, reason: "new", basedOn: 0 };
+  }
 
   // RLS scopes this to the signed-in customer's own rows.
   const { data: rows } = await supabase.from("wishlists").select("product_id");
