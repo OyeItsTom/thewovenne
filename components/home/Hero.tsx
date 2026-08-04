@@ -32,19 +32,23 @@ export default function Hero({ content }: { content?: HomeHeroContent }) {
 
       {/* The h1 is the wordmark itself now that it is visible, rather than a
           screen-reader-only line duplicating it. */}
-      <h1 className="mt-8 text-center font-heading text-[clamp(1.75rem,6vw,3.25rem)] font-light uppercase leading-none tracking-[0.42em] text-ink">
+      {/* The floor is 1.3rem, not 1.75rem. At 0.42em tracking the wordmark is
+          326px wide at 28px — fine on a 390px iPhone, 14px too wide for a
+          360px Android, where it would clip or push the page sideways. Letting
+          6vw keep shrinking below that point is what makes it fit. */}
+      <h1 className="mt-8 text-center font-heading text-[clamp(1.3rem,6vw,3.25rem)] font-light uppercase leading-none tracking-[0.42em] text-ink">
         {/* The tracking adds a trailing gap on the last letter; the negative
             margin pulls the block back to true centre. */}
         <span className="-mr-[0.42em] inline-block">The Wovenne</span>
       </h1>
 
-      <span aria-hidden className="mt-7 h-px w-14 bg-ink/20" />
+      {/* The rule separates the mark from the action, which is the whole job it
+          has now. It used to sit above a line of text that repeated the
+          wordmark — c.heading is literally "THE WOVENNE", so the name printed
+          twice. */}
+      <span aria-hidden className="mt-8 h-px w-14 bg-ink/20" />
 
-      <p className="mt-5 max-w-md text-center text-sm leading-relaxed text-ink/60">
-        {c.heading}
-      </p>
-
-      <Link href={c.cta_href} className={buttonClassName("ghost", "lg", "mt-10")}>
+      <Link href={c.cta_href} className={buttonClassName("ghost", "lg", "mt-8")}>
         {c.cta_label}
       </Link>
     </section>
