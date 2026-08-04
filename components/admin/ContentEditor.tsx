@@ -77,9 +77,19 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
 
       {/* Hero */}
       <Block title="Homepage hero" onSave={() => saveBlock("home_hero")} state={save.home_hero}>
-        <Text label="Eyebrow" value={hero.eyebrow} onChange={(v) => setContent((c) => ({ ...c, home_hero: { ...c.home_hero, eyebrow: v } }))} />
-        <Text label="Heading" value={hero.heading} onChange={(v) => setContent((c) => ({ ...c, home_hero: { ...c.home_hero, heading: v } }))} />
-        <Text area label="Subheading" value={hero.subheading} onChange={(v) => setContent((c) => ({ ...c, home_hero: { ...c.home_hero, subheading: v } }))} />
+        {/* The hero shows the emblem, the wordmark and the button — nothing
+            else. Saying so beats letting someone rewrite the eyebrow and
+            wonder why the page looks identical. */}
+        <p className="rounded-lg bg-linen px-3 py-2 text-xs leading-relaxed text-ink/60">
+          The hero currently shows the emblem, the{" "}
+          <strong className="font-medium">THE WOVENNE</strong> wordmark and the
+          button. Eyebrow, heading and subheading are{" "}
+          <strong className="font-medium">not displayed</strong> — they are kept
+          here so the wording isn&apos;t lost if the hero changes again.
+        </p>
+        <Text label="Eyebrow (not shown)" value={hero.eyebrow} onChange={(v) => setContent((c) => ({ ...c, home_hero: { ...c.home_hero, eyebrow: v } }))} />
+        <Text label="Heading (not shown)" value={hero.heading} onChange={(v) => setContent((c) => ({ ...c, home_hero: { ...c.home_hero, heading: v } }))} />
+        <Text area label="Subheading (not shown)" value={hero.subheading} onChange={(v) => setContent((c) => ({ ...c, home_hero: { ...c.home_hero, subheading: v } }))} />
         <div className="grid gap-4 sm:grid-cols-2">
           <Text label="Button label" value={hero.cta_label} onChange={(v) => setContent((c) => ({ ...c, home_hero: { ...c.home_hero, cta_label: v } }))} />
           <Text label="Button link" value={hero.cta_href} onChange={(v) => setContent((c) => ({ ...c, home_hero: { ...c.home_hero, cta_href: v } }))} />
