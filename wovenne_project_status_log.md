@@ -1,6 +1,6 @@
 # THE WOVENNE — project status log
 
-Last updated: 4 August 2026 (fourth session)
+Last updated: 6 August 2026 (fifth session)
 
 ---
 
@@ -527,6 +527,121 @@ Files: `components/account/SignupForm.tsx` · PR #56
 
 ---
 
+## Fifth session — PRs #69–#77
+
+This section exists because the log stopped at **#68** and eight PRs landed after
+it. Anyone reading the log alone would have had no idea the storefront had moved
+URL, or that the homepage caching had been rewritten.
+
+### Homepage Content could not save at all — FIXED
+
+**Every "Save changes" button under Homepage Content failed** with "Couldn't save
+— try again". All five blocks: hero, why linen, seasonal edit, lookbook, brand
+story. The editor had been unusable since **4 August, 07:23**.
+
+The cause is one line in `ContentEditor.tsx`. #66 changed the save from
+`UPDATE ... WHERE key = ?` to an upsert, for a good reason: the new `lookbook`
+key had no seeded row, and an UPDATE matching nothing reports success, so the
+editor would have said "Saved" and lost the work on reload.
+
+But PostgREST compiles an upsert to `INSERT ... ON CONFLICT DO UPDATE`, and
+**Postgres checks NOT NULL on the proposed insert row before it resolves the
+conflict**. `site_content.value` is `NOT NULL` with no default (migration 0001)
+and cannot be sent from this editor without publishing the copy — which is the
+one thing the draft system exists to prevent. So every save returned `23502`,
+including saves to the four keys that already existed and only ever needed an
+UPDATE. The upsert fixed a trap that had never fired and broke the path that
+worked.
+
+It is now `UPDATE ... .select()`: the returned rows make a zero-row match
+**detectable**, which is what the upsert was actually reaching for, and an
+insert runs only when nothing matched. That insert seeds `value` from
+`DEFAULT_CONTENT`, not from the edit, so a first save on a brand-new key still
+cannot put anything live ahead of publish.
+
+Verified against the live database: all five keys save through the UPDATE branch;
+a key with no row takes the INSERT branch and lands with `value` ≠ `draft_value`;
+a second save on that key returns to the UPDATE branch and leaves `value`
+untouched. The publish queue stayed empty throughout.
+
+**It was not the performance work**, which is where the search started. The
+audit trigger on `site_content` records the last successful write at 07:22:15 —
+45 seconds before #66 merged — and nothing since. The perf PRs landed six hours
+later. The failure reproduces against Supabase with no application in the path
+at all, so caching, `force-dynamic`, Sentry and framer-motion could not have
+produced it.
+
+Files: `components/admin/ContentEditor.tsx` · PR #77
+
+### The other ten admin sections
+
+Checked, and **none of them can hit this**. `ContentEditor` was the only admin
+writer using an upsert; Products, Categories, Journal and Pages write to their
+`*_versions` draft tables with UPDATE, Orders and Settings use UPDATE, Reviews
+uses RPCs, Marketing posts to `/api/admin/marketing`. An UPDATE leaves omitted
+columns alone, so a NOT NULL column it never mentions cannot fail it. Every
+admin-written table was audited for the same shape — a NOT NULL column with no
+default that its writer omits — and `site_content.value` is the only one.
+
+Settings was exercised directly and saves. Orders and Reviews have no rows to
+exercise. **Products, Categories, Journal and Pages were not driven end to end**:
+their `ensure_*_draft` RPCs are `SECURITY DEFINER` and gated on `is_admin()`, so
+they cannot be reached without a signed-in admin session. The reasoning above is
+structural, not a test — and this log has already recorded three bugs that lived
+in code which read correctly and had never been run.
+
+### Storefront moved under /in — #69
+
+Every customer-facing path now carries a market prefix: `/in/shop`,
+`/in/women/sarees/kerala-kasavu`. Done before launch deliberately — moving URLs
+after they are bookmarked, shared and indexed costs rankings.
+
+**`/admin` is outside this on purpose.** One back office serves the whole
+business; prefixing it would imply a separate UK admin exists.
+
+Two consequences worth knowing. The middleware matcher is now
+**everything except `/api`, `/_next` and files with an extension** — it has to
+see paths that no longer have a route of their own, like a bare `/shop`, to
+redirect them. And admin-typed links are stored unprefixed and rewritten at
+render by `adminHref()`, so one stored link keeps working when a second market
+opens.
+
+Files: `lib/country.ts` · `lib/urls.ts` · `middleware.ts` · PR #69
+
+### Guest account modal and checkout gate — #70, #71, #72
+
+The person icon offers create / sign in / continue as guest on the spot rather
+than bouncing guests to a login form. It is portalled out of the header, because
+inside it the header's stacking context trapped it. The checkout gate was then
+matched to it in wording and button colour — they are the same decision asked
+twice and looked like two different products.
+
+Files: `components/account/GuestAccountModal.tsx` ·
+`components/cart/CheckoutGate.tsx` · PRs #70, #71, #72
+
+### Performance — #73, #74, #75, #76
+
+**Full detail is in `wovenne_performance_baseline.md`**, including five
+conversions that were tried and reverted. The headline: the homepage was
+`force-dynamic` at 993ms TTFB against 64–130ms elsewhere, because the curated set
+could vary per customer. It is `revalidate = 60` again, cached for everyone, and
+a signed-in customer's browser swaps in their own set after paint via
+`/api/curated`. Guests never make the request. 993ms → 19ms, and the build marks
+`/in` static again.
+
+`ProductCard` came off framer-motion to an IntersectionObserver
+(`lib/useReveal`), taking the category route 213kB → 175kB. `AskWovenne` is
+lazy-loaded.
+
+The reverts are the more useful record: CartDrawer, NavbarClient and CareAccordion
+were converted off framer-motion, all three broke visibly while typecheck, lint
+and build stayed clean, and none of them moved its route's bundle at all. Sentry
+was reviewed and deliberately left as is.
+
+Files: `wovenne_performance_baseline.md` · PRs #73, #74, #75, #76
+
+---
+
 ## The gap — the only remaining unverified item
 
 ### A Razorpay test-mode purchase has never been made
@@ -619,6 +734,10 @@ shipping anything.
 ## Outstanding, owner action
 
 - **Razorpay test purchase** — above
+- **Admin save check, signed in** — Products, Categories, Journal and Pages save
+  through `is_admin()`-gated RPCs that cannot be reached without an admin
+  session, so they were reasoned about rather than tested. One save in each,
+  while logged in, closes all four
 - **Product sizes** — none set, so no Size filter appears anywhere
 - **Shipping config** — seeded Kerala free / ₹120 / free over ₹3,000; confirm
   these are the real numbers
