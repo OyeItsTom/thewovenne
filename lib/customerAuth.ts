@@ -1,4 +1,5 @@
 import { getBrowserSupabase } from "./supabase";
+import { useCartStore } from "./store";
 
 /**
  * Customer-facing auth.
@@ -228,6 +229,14 @@ export async function setMarketingConsent(
 }
 
 export async function logOut(): Promise<void> {
+  // Empty the cart FIRST, and here rather than only in CartSync's auth
+  // listener. The cart lives in localStorage and outlives the session, so on a
+  // shared device it is the next person's to read. CartSync also reconciles on
+  // SIGNED_OUT, but that listener is only mounted under the storefront layout
+  // and the sign-out may be followed immediately by navigation — this is the
+  // guarantee that does not depend on either.
+  useCartStore.getState().resetForSignOut();
+
   // Local scope only: a global sign-out would end the session on every device,
   // which is not what "log out" means on a shop.
   await getBrowserSupabase().auth.signOut({ scope: "local" });
