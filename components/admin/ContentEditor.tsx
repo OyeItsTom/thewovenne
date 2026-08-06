@@ -46,26 +46,47 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
 
   async function saveBlock<K extends keyof SiteContentMap>(key: K) {
     setSave((s) => ({ ...s, [key]: "saving" }));
+    const client = getBrowserSupabase();
+
     // Writes the DRAFT only. Setting `value` here would put homepage copy live
     // the moment it saved, which is exactly what this system exists to prevent.
     //
-    // UPSERT, not update. The seeded blocks come from migration 0007, but the
-    // lookbook has no seeded row — and an UPDATE matching nothing reports
-    // success while saving nothing, so the editor would say "Saved" and the
-    // work would be gone on reload. Upserting also means the next content
-    // block added here needs no migration at all.
-    const { error } = await getBrowserSupabase()
+    // UPDATE ... SELECT, not upsert. Upserting looks like the right tool — it
+    // covers a key with no seeded row in one call — but PostgREST compiles it
+    // to INSERT ... ON CONFLICT DO UPDATE, and Postgres checks NOT NULL on the
+    // proposed insert row BEFORE it resolves the conflict. `value` is NOT NULL
+    // with no default (migration 0001) and cannot be sent here without
+    // publishing, so every save failed with 23502 — including saves to the four
+    // keys that already existed and only ever needed an UPDATE.
+    //
+    // The `.select()` is what makes this safe: an UPDATE matching nothing
+    // reports success, so without it the editor would say "Saved" and the work
+    // would be gone on reload. Returning the matched rows makes "no such key"
+    // detectable, which is the trap the upsert was reaching for.
+    const { data: updated, error } = await client
       .from("site_content")
-      .upsert(
-        {
-          key,
-          draft_value: content[key],
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "key" }
-      );
-    setSave((s) => ({ ...s, [key]: error ? "error" : "saved" }));
-    if (!error) {
+      .update({
+        draft_value: content[key],
+        updated_at: new Date().toISOString(),
+      })
+      .eq("key", key)
+      .select("key");
+
+    // No row yet — a content block added since the last migration. Seed
+    // `value` from the built-in default rather than from the edit, so a first
+    // save still cannot put anything live ahead of publish.
+    let failed = error;
+    if (!failed && !updated?.length) {
+      const { error: insertError } = await client.from("site_content").insert({
+        key,
+        value: DEFAULT_CONTENT[key],
+        draft_value: content[key],
+      });
+      failed = insertError;
+    }
+
+    setSave((s) => ({ ...s, [key]: failed ? "error" : "saved" }));
+    if (!failed) {
       onChange?.();
       setTimeout(() => setSave((s) => ({ ...s, [key]: "idle" })), 2000);
     }
