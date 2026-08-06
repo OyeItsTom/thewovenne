@@ -1,5 +1,6 @@
 import { getBrowserSupabase } from "./supabase";
 import { useCartStore } from "./store";
+import { cPath } from "./country";
 
 /**
  * Customer-facing auth.
@@ -13,8 +14,16 @@ import { useCartStore } from "./store";
  * login credentials", "Email not confirmed") is accurate but cold.
  */
 
-/** Where a signed-in customer lands. */
-export const AFTER_LOGIN = "/in/account/wishlist";
+/**
+ * Where a signed-in customer lands.
+ *
+ * The homepage, not the wishlist. Landing on a saved-items page implies the
+ * visit was about the wishlist, which it usually was not — people sign in to
+ * carry on shopping, and an empty wishlist is a poor first thing to be shown.
+ * A `?from=` on the login URL still wins, so anyone bounced off a gated page is
+ * returned to it.
+ */
+export const AFTER_LOGIN = "/in";
 
 export interface AuthResult {
   ok: boolean;
@@ -39,6 +48,14 @@ export function friendlyAuthError(message: string): string {
     return "This email hasn't been verified yet. Check your inbox for the code we sent.";
   if (m.includes("user already registered") || m.includes("already been registered"))
     return "There's already an account with this email. Try logging in, or reset your password.";
+  // Supabase sends ONE message for a wrong code and an expired one — "Token has
+  // expired or is invalid" — so the two genuinely cannot be told apart here.
+  // This must be tested BEFORE the bare "expired" check below, which used to
+  // catch it and tell someone who had simply mistyped a digit that their code
+  // had expired and to request a new one. That is advice which does not fix a
+  // typo, and it sends people round a loop of fresh codes that all "expire".
+  if (m.includes("expired or is invalid") || m.includes("invalid or has expired"))
+    return "That code isn't right, or it has expired. Check it and try again, or ask for a new one below.";
   if (m.includes("token has expired") || m.includes("expired"))
     return "That code has expired. Ask for a new one below.";
   if (m.includes("invalid token") || m.includes("token not found"))
@@ -155,7 +172,14 @@ export async function logIn(email: string, password: string): Promise<AuthResult
 export async function requestPasswordReset(email: string): Promise<AuthResult> {
   const { error } = await getBrowserSupabase().auth.resetPasswordForEmail(
     email.trim().toLowerCase(),
-    { redirectTo: `${window.location.origin}/reset-password` }
+    // cPath, not a bare "/reset-password". Since the storefront moved under a
+    // market prefix (#69) that path has no route of its own, so middleware
+    // answers it with a 308 to /in/reset-password — and Supabase carries the
+    // recovery token in the URL FRAGMENT, which a browser does not resend
+    // across a redirect. The token was being dropped in transit, the page had
+    // no session to work with, and the customer ended up on the homepage
+    // wondering where the form was.
+    { redirectTo: `${window.location.origin}${cPath("/reset-password")}` }
   );
   return error
     ? { ok: false, error: friendlyAuthError(error.message) }
@@ -194,14 +218,24 @@ export async function setDefaultAddress(
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "You need to be logged in." };
 
-  const { error } = await supabase
+  // .select() so a write that matched NOTHING is distinguishable from one that
+  // worked. An UPDATE filtered to a row RLS will not show you reports success
+  // and changes nothing, so without this the panel says "Saved" over a profile
+  // that never changed — the same trap that hid the Homepage Content bug (#77).
+  const { data, error } = await supabase
     .from("profiles")
     .update({ default_address: address, default_phone: phone })
-    .eq("id", user.id);
+    .eq("id", user.id)
+    .select("id");
 
-  return error
-    ? { ok: false, error: error.message }
-    : { ok: true, error: null };
+  if (error) return { ok: false, error: error.message };
+  if (!data?.length) {
+    return {
+      ok: false,
+      error: "We couldn't save that to your account. Please try again.",
+    };
+  }
+  return { ok: true, error: null };
 }
 
 export async function setMarketingConsent(

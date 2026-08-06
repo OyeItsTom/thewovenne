@@ -34,13 +34,13 @@ export default async function SettingsPage() {
   const { data: profile } = user
     ? await supabase
         .from("profiles")
-        .select("marketing_consent")
+        .select("marketing_consent, default_address, default_phone")
         .eq("id", user.id)
         .maybeSingle()
     : { data: null };
 
-  // The most recent order's address, which is the only address we hold. RLS
-  // scopes this to the customer's own orders.
+  // The most recent order, used ONLY as a fallback below. RLS scopes this to
+  // the customer's own orders.
   const { data: lastOrder } = user
     ? await supabase
         .from("orders")
@@ -50,8 +50,28 @@ export default async function SettingsPage() {
         .maybeSingle()
     : { data: null };
 
-  const consent =
-    (profile as { marketing_consent?: boolean } | null)?.marketing_consent ?? false;
+  const saved = profile as {
+    marketing_consent?: boolean;
+    default_address?: Record<string, string> | null;
+    default_phone?: string | null;
+  } | null;
+  const consent = saved?.marketing_consent ?? false;
+
+  // The SAVED address first — this panel writes to profiles.default_address
+  // (migration 0035), and reading it back from the last order instead meant a
+  // save was stored correctly and then never shown. With no orders yet the
+  // form came back blank every time, which is indistinguishable from the
+  // button not working, and is what it was reported as.
+  //
+  // The last order stays as a fallback, so a customer who ordered before this
+  // field existed still sees something useful to confirm rather than retype.
+  const lastOrderRow = lastOrder as {
+    shipping_address?: Record<string, string> | null;
+    customer_phone?: string | null;
+  } | null;
+  const addressForForm =
+    saved?.default_address ?? lastOrderRow?.shipping_address ?? null;
+  const phoneForForm = saved?.default_phone ?? lastOrderRow?.customer_phone ?? null;
 
   return (
     <div className="space-y-8">
@@ -64,13 +84,7 @@ export default async function SettingsPage() {
 
       <ChangePassword />
 
-      <DeliveryAddress
-        address={
-          (lastOrder as { shipping_address?: Record<string, string> | null } | null)
-            ?.shipping_address ?? null
-        }
-        phone={(lastOrder as { customer_phone?: string } | null)?.customer_phone ?? null}
-      />
+      <DeliveryAddress address={addressForForm} phone={phoneForForm} />
 
       <div className="space-y-6">
         {/* Renders nothing while the loyalty scheme is off. */}

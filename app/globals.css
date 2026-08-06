@@ -111,3 +111,20 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Password fields: one reveal control, not two ──────────────
+   Edge and Safari add their OWN eye/reveal button inside a password input, on
+   top of the one AuthField renders. Two eyes sitting side by side look like a
+   rendering fault, and the browser's own control is the one we cannot label,
+   position or style — so it is the one that goes. Ours stays, because it is
+   the one that works identically on every browser. */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+  display: none;
+}
+input[type="password"]::-webkit-credentials-auto-fill-button,
+input[type="password"]::-webkit-strong-password-auto-fill-button,
+input[type="password"]::-webkit-textfield-decoration-container {
+  visibility: hidden;
+  pointer-events: none;
+}
