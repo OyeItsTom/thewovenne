@@ -68,6 +68,28 @@ export default function LoginForm({
             Your email is verified. Log in to finish setting up.
           </AuthMessage>
         )}
+        <AuthField
+          label="Email"
+          type="email"
+          required
+          autoComplete="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <AuthField
+          label="Password"
+          type="password"
+          required
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+
+        {/* Directly under the password, not above the email field. Nearly every
+            error this shows is about the password, and at the top of the form
+            it sat off-screen on a phone once the keyboard was up: the customer
+            saw the button do nothing and tried the same password again. It
+            belongs next to the field it is talking about. */}
         {error && (
           <AuthMessage tone="error">
             {error}
@@ -85,23 +107,6 @@ export default function LoginForm({
             )}
           </AuthMessage>
         )}
-
-        <AuthField
-          label="Email"
-          type="email"
-          required
-          autoComplete="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-        <AuthField
-          label="Password"
-          type="password"
-          required
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
 
         <div className="text-right">
           <Link
