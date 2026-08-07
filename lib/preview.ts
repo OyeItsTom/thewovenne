@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies, draftMode } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -22,14 +23,59 @@ import { ANON_CTX, type ReadCtx } from "./readCtx";
  * ReadCtx instead of calling in here.
  */
 
-export function previewEnabled(): boolean {
+/**
+ * The Supabase client for THIS request, built from its cookies.
+ *
+ * Memoised per request: a storefront page calls previewCtx() several times
+ * (content, products, categories…) and each would otherwise build a client and
+ * re-ask the database the same question.
+ */
+const requestClient = cache((): SupabaseClient => {
+  const store = cookies();
+  return createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    cookies: {
+      getAll() {
+        return store.getAll();
+      },
+      // A read-only render cannot set cookies. Supabase only writes here to
+      // persist a refreshed token, which the next admin request redoes anyway.
+      setAll() {},
+    },
+  }) as unknown as SupabaseClient;
+});
+
+/**
+ * Is this request previewing?
+ *
+ * The draft cookie ALONE is not enough, and treating it as enough is what let
+ * preview leak. Next's draft cookie is independent of the Supabase session:
+ * nothing clears it when an admin signs out, and /api/preview/exit only runs if
+ * someone presses the button. So an admin who previewed and then logged out
+ * left a browser that still claimed to be previewing — and the next person to
+ * use it, guest or customer, got the banner.
+ *
+ * Preview is therefore DERIVED: the cookie says what was asked for, is_admin()
+ * says whether it is still allowed. A stale cookie is now inert rather than
+ * something to be cleaned up, which matters because the cookie cannot be
+ * cleared from a render — only from a route handler or server action.
+ *
+ * Cost is paid only by requests that actually carry the cookie. A normal
+ * visitor short-circuits on the first line and the page stays static, so the
+ * caching work in #74 is untouched.
+ */
+export const previewEnabled = cache(async (): Promise<boolean> => {
+  let flagged = false;
   try {
-    return draftMode().isEnabled;
+    flagged = draftMode().isEnabled;
   } catch {
     // Called outside a request scope (e.g. a script) — never preview.
     return false;
   }
-}
+  if (!flagged) return false;
+
+  const { data, error } = await requestClient().rpc("is_admin");
+  return !error && data === true;
+});
 
 /**
  * The context for this request.
@@ -41,20 +87,7 @@ export function previewEnabled(): boolean {
  * cookies() is only touched when previewing; calling it unconditionally would
  * make every storefront page dynamic and lose ISR for real visitors.
  */
-export function previewCtx(): ReadCtx {
-  if (!previewEnabled()) return ANON_CTX;
-
-  const store = cookies();
-  const client = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    cookies: {
-      getAll() {
-        return store.getAll();
-      },
-      // A read-only render cannot set cookies. Supabase only writes here to
-      // persist a refreshed token, which the next admin request redoes anyway.
-      setAll() {},
-    },
-  }) as unknown as SupabaseClient;
-
-  return { client, preview: true };
+export async function previewCtx(): Promise<ReadCtx> {
+  if (!(await previewEnabled())) return ANON_CTX;
+  return { client: requestClient(), preview: true };
 }

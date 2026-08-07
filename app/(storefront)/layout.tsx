@@ -26,7 +26,7 @@ export default async function StorefrontLayout({
 
   return (
     <>
-      {previewEnabled() && <PreviewBanner />}
+      {(await previewEnabled()) && <PreviewBanner />}
       <Navbar />
       <main className="flex-1">{children}</main>
       <Footer />
