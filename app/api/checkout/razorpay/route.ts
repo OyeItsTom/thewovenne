@@ -6,6 +6,7 @@ import { priceCart } from "@/lib/checkoutPricing";
 import { validateOrderDetails } from "@/lib/orderDetails";
 import { getShippingConfig, quoteShipping } from "@/lib/shipping";
 import { planRedemption } from "@/lib/loyalty";
+import { applyCoupon } from "@/lib/coupons";
 import { settleLoyalty } from "@/lib/settleLoyalty";
 import { sendOrderConfirmation } from "@/lib/sendOrderConfirmation";
 import type { CartItem } from "@/lib/store";
@@ -16,12 +17,15 @@ interface CreatePayload {
   details: unknown;
   /** Points the customer asked to spend. Validated and clamped server-side. */
   redeemPoints?: number;
+  /** The code typed at checkout. Re-read and re-priced server-side. */
+  couponCode?: string;
 }
 
 interface VerifyPayload {
   action: "verify";
   items: CartItem[];
   redeemPoints?: number;
+  couponCode?: string;
   razorpay_order_id: string;
   razorpay_payment_id: string;
   razorpay_signature: string;
@@ -41,7 +45,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 }
 
-async function handleCreate({ items, details: rawDetails, redeemPoints }: CreatePayload) {
+async function handleCreate({ items, details: rawDetails, redeemPoints, couponCode }: CreatePayload) {
   // Validated here, not just in the form: the form runs in a browser the
   // customer controls, and an order with no deliverable address is worse than
   // a rejected checkout.
@@ -58,20 +62,48 @@ async function handleCreate({ items, details: rawDetails, redeemPoints }: Create
     return NextResponse.json({ error }, { status: 400 });
   }
 
+  // Re-read and recomputed from the server-priced subtotal. The code is the
+  // customer's claim about WHICH promotion they want; what it is worth is
+  // decided here, like every other number on this order.
+  //
+  // A bad code does not fail the checkout. The customer is told at the point
+  // they enter it, and an expired code discovered at payment time should not
+  // throw away an order they still want at full price.
+  const coupon = couponCode
+    ? await applyCoupon(couponCode, total, details.email)
+    : null;
+  const couponDiscount = coupon?.ok ? coupon.discount : 0;
+
   // Quoted here, not taken from the request. The browser shows the customer a
   // figure, but this is the one they are charged — the same rule as prices.
+  //
+  // Quoted on the PRE-COUPON subtotal, deliberately. Free delivery over the
+  // threshold is a promise about the size of the order someone placed, and
+  // re-testing it after a discount means applying a code can make a delivery
+  // charge appear — which reads as a penalty for using the promotion. The cost
+  // is that a large enough coupon can carry free shipping below the threshold.
   const shippingConfig = await getShippingConfig();
   const shipping = quoteShipping(details.address, total, shippingConfig);
+
+  // Coupon first, then points, so the points are spent against what is actually
+  // left to pay. Passing the pre-coupon total here would let someone redeem
+  // points they cannot use and watch the balance disappear into a floor.
+  const afterCoupon = Math.max(total - couponDiscount, 0);
 
   // Redemption is recomputed here from the customer's real balance. The number
   // the browser sent is a request, not a fact — treating it as one would let
   // anyone mint a discount.
-  const redemption = await planRedemption(details.email, redeemPoints ?? 0, total);
+  const redemption = await planRedemption(details.email, redeemPoints ?? 0, afterCoupon);
   if (redemption.error) {
     return NextResponse.json({ error: redemption.error }, { status: 400 });
   }
 
-  const grandTotal = Math.max(total + shipping.cost - redemption.discount, 1);
+  // Floored at ₹1: Razorpay will not create an order for zero, and a fully
+  // discounted basket still has to become a payment to become an order.
+  const grandTotal = Math.max(
+    afterCoupon + shipping.cost - redemption.discount,
+    1
+  );
 
   try {
     // Razorpay expects the amount in the smallest unit — paise for INR.
@@ -97,6 +129,10 @@ async function handleCreate({ items, details: rawDetails, redeemPoints }: Create
       shipping_cost_inr: shipping.cost,
       loyalty_points_spent: redemption.points,
       loyalty_discount_inr: redemption.discount,
+      // Recorded even though total_inr is already net of it, so the invoice can
+      // show the line and the admin can see which promotion won the order.
+      coupon_code: coupon?.ok ? coupon.code : null,
+      coupon_discount_inr: couponDiscount,
       payment_provider: "razorpay",
       payment_status: "pending",
       items: priced.map((item) => ({
@@ -112,16 +148,36 @@ async function handleCreate({ items, details: rawDetails, redeemPoints }: Create
       .from("orders")
       .insert({ ...row, delivery_updates: details.delivery_updates });
 
-    // Deploy-ordering insurance. If this code reaches production before
-    // migration 0034 does, delivery_updates is an unknown column and the
-    // insert fails — which would mean NOBODY CAN CHECK OUT until the migration
-    // runs. Losing the customer's channel preference is a far smaller harm than
-    // losing the order, so it retries without it and the order still lands.
-    if (insertError?.code === "PGRST204" || /delivery_updates/.test(insertError?.message ?? "")) {
+    // Deploy-ordering insurance, and it now guards two migrations rather than
+    // one. This code ships the moment a PR merges; migrations are applied by
+    // hand afterwards, so there is always a window where a column this insert
+    // names does not exist yet — and an unknown column fails the whole insert,
+    // which would mean NOBODY CAN CHECK OUT until the migration runs.
+    //
+    // Losing a channel preference (0034) or the record of which coupon won the
+    // order (0037) is a far smaller harm than losing the order itself. The
+    // AMOUNT is never at risk: grandTotal is already computed and already sent
+    // to Razorpay, so a customer who used a valid code still pays the
+    // discounted price even if this row cannot say so.
+    const missingColumn = (e: typeof insertError, column: string) =>
+      e?.code === "PGRST204" || new RegExp(column).test(e?.message ?? "");
+
+    if (missingColumn(insertError, "delivery_updates")) {
       console.error(
         "orders.delivery_updates missing — run migration 0034. Recording the order without it."
       );
       ({ error: insertError } = await supabase.from("orders").insert(row));
+    }
+
+    if (missingColumn(insertError, "coupon_(code|discount_inr)")) {
+      console.error(
+        "orders.coupon_* missing — run migration 0037. Recording the order without the coupon record; " +
+          `the customer was still charged the discounted amount (₹${grandTotal}).`
+      );
+      const { coupon_code, coupon_discount_inr, ...withoutCoupon } = row;
+      void coupon_code;
+      void coupon_discount_inr;
+      ({ error: insertError } = await supabase.from("orders").insert(withoutCoupon));
     }
 
     if (insertError) {
@@ -141,6 +197,10 @@ async function handleCreate({ items, details: rawDetails, redeemPoints }: Create
       // Echoed back so the page can show what was actually applied, which may
       // be less than asked for if the balance moved.
       redeemed: { points: redemption.points, discount: redemption.discount },
+      // Echoed so the page can show what was applied — or say why it was not.
+      coupon: coupon
+        ? { ok: coupon.ok, code: coupon.code, discount: couponDiscount, message: coupon.message }
+        : null,
       // Saves the customer retyping what they just gave us.
       prefill: {
         name: details.name,
@@ -282,6 +342,70 @@ async function handleVerify({
   // Points move only after payment, and only through the database functions —
   // both are guarded so a retry cannot pay out twice or spend a balance twice.
   await settleLoyalty(razorpay_order_id);
+
+  // The coupon use is claimed HERE, not at checkout-start. handleCreate writes
+  // a pending row before the customer has paid, and counting a use there would
+  // let abandoned payment modals burn a launch code's entire allowance.
+  //
+  // The trade-off is the same window reserve_stock accepts above: for a few
+  // seconds more people can be mid-payment than there are uses left, so a
+  // "first 50" can overshoot slightly. Overshooting a promotion is a rounding
+  // error. Refusing someone who has already paid is not, so this NEVER fails
+  // the confirmation — a use that cannot be claimed is logged and the order
+  // stands, because the money has already moved at the discounted price.
+  //
+  // redeem_coupon() is idempotent per order, so a retried verification counts
+  // once.
+  const paidOrderId = updated?.[0]?.id ?? null;
+  if (paidOrderId) {
+    const { data: order } = await supabase
+      .from("orders")
+      .select("coupon_code, coupon_discount_inr, customer_email")
+      .eq("id", paidOrderId)
+      .maybeSingle();
+
+    const used = order as {
+      coupon_code?: string | null;
+      coupon_discount_inr?: number | null;
+      customer_email?: string | null;
+    } | null;
+
+    if (used?.coupon_code) {
+      const { data: claimed, error: redeemError } = await supabase.rpc("redeem_coupon", {
+        p_code: used.coupon_code,
+        p_order_id: paidOrderId,
+        p_email: used.customer_email ?? "",
+        p_discount: used.coupon_discount_inr ?? 0,
+      });
+      if (redeemError) {
+        console.error(
+          `Could not record coupon ${used.coupon_code} for paid order ${razorpay_order_id}: ${redeemError.message}`
+        );
+      } else if (claimed === false) {
+        // Exhausted or withdrawn between checkout and payment. The customer
+        // keeps their discount — they were charged it — and this is a note for
+        // whoever reconciles the promotion, not a problem to push back at them.
+        console.error(
+          `Coupon ${used.coupon_code} could not be claimed for paid order ${razorpay_order_id} ` +
+            `(exhausted or withdrawn mid-payment). Discount was honoured.`
+        );
+      }
+    }
+
+    // The invoice NUMBER is assigned now; the PDF is rendered on demand. A
+    // number identifies a financial event, so it belongs to the moment the
+    // payment succeeded — but rendering a document here would put a PDF
+    // between the customer and their confirmation page, which is the same
+    // reason the confirmation email is not awaited.
+    const { error: invoiceError } = await supabase.rpc("assign_invoice_number", {
+      p_order_id: paidOrderId,
+    });
+    if (invoiceError) {
+      console.error(
+        `Could not assign an invoice number to paid order ${razorpay_order_id}: ${invoiceError.message}`
+      );
+    }
+  }
 
   // Sent last, and deliberately not awaited for its success: the customer has
   // paid and their confirmation page must not wait on an email provider, nor
