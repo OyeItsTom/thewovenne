@@ -12,6 +12,7 @@ import {
   type Order,
   type OrderStatus,
 } from "@/lib/orders";
+import InvoiceLink from "@/components/order/InvoiceLink";
 
 /**
  * Every order, and the controls to move one along.
@@ -224,6 +225,11 @@ export default function OrdersManager() {
                       Payment: {order.payment_status}
                       {order.payment_provider ? ` · ${order.payment_provider}` : ""}
                     </p>
+                    <InvoiceLink
+                      orderId={order.id}
+                      paid={order.payment_status === "paid"}
+                      invoiceNumber={order.invoice_number}
+                    />
                   </div>
                 </div>
 
