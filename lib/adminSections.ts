@@ -9,6 +9,7 @@ import {
   Package,
   Receipt,
   Rocket,
+  TrendingUp,
   Settings,
   ShoppingBag,
   Star,
@@ -123,6 +124,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: "/admin/dashboard/marketing",
     blurb: "Send wishlist, low-stock and basket emails",
     icon: Mail,
+  },
+  {
+    id: "profit-loss",
+    label: "Profit & Loss",
+    href: "/admin/dashboard/profit-loss",
+    blurb: "Revenue, costs and what is actually left",
+    icon: TrendingUp,
   },
   {
     id: "expenses",
