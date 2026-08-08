@@ -11,6 +11,7 @@ import {
   Rocket,
   TrendingUp,
   Settings,
+  Sheet,
   ShoppingBag,
   Star,
   Ticket,
@@ -124,6 +125,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: "/admin/dashboard/marketing",
     blurb: "Send wishlist, low-stock and basket emails",
     icon: Mail,
+  },
+  {
+    id: "export",
+    label: "Export",
+    href: "/admin/dashboard/export",
+    blurb: "Excel files for accounting, analysis and records",
+    icon: Sheet,
   },
   {
     id: "profit-loss",
