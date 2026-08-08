@@ -113,6 +113,62 @@ export const EXPORT_DATASETS: ExportDataset[] = [
     ],
   },
   {
+    id: "coupons",
+    label: "Discount codes",
+    // One row per CODE, not per redemption — the opposite grain to orders, and
+    // deliberately so. The question this answers is "did that promotion work?",
+    // which needs the codes that were never used to appear at all. A row per
+    // redemption would silently omit every code that got no traction, which is
+    // exactly the result worth knowing.
+    blurb: "Every code with its usage — including the ones nobody used",
+    dateField: null,
+    columns: [
+      col("code", "Code"),
+      col("discount", "Discount"),
+      col("min_order_inr", "Minimum order", "money", false),
+      col("expires_at", "Expires", "date"),
+      col("max_uses", "Use limit", "number", false),
+      col("times_used", "Times used", "number"),
+      col("total_discounted_inr", "Total discounted", "money"),
+      col("state", "Status"),
+      col("once_per_customer", "One per customer", "text", false),
+      col("created_at", "Created", "date", false),
+      col("order_refs", "Orders used on", "text", false),
+    ],
+  },
+  {
+    id: "reviews",
+    label: "Reviews",
+    blurb: "What customers wrote, and whether it is visible",
+    dateField: "created_at",
+    columns: [
+      col("created_at", "Date", "date"),
+      col("product_name", "Product"),
+      col("rating", "Rating", "number"),
+      col("body", "Review"),
+      col("author", "Customer"),
+      col("author_email", "Email", "text", false),
+      col("visibility", "Visibility"),
+      col("hidden_at", "Hidden on", "date", false),
+    ],
+  },
+  {
+    id: "stock_movements",
+    label: "Stock movements",
+    blurb: "Every change in stock, with the reason it moved",
+    dateField: "created_at",
+    columns: [
+      col("created_at", "When", "datetime"),
+      col("product_name", "Product"),
+      col("sku", "SKU", "text", false),
+      col("size_label", "Size"),
+      col("delta", "Change", "number"),
+      col("reason", "Reason"),
+      col("note", "Note"),
+      col("order_ref", "Order", "text", false),
+    ],
+  },
+  {
     id: "expenses",
     label: "Expenses",
     blurb: "Business costs, by category",

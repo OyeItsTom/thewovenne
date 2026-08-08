@@ -154,6 +154,9 @@ async function fetchRows(
   if (dataset.id === "products") return fetchProducts(supabase);
   if (dataset.id === "customers") return fetchCustomers(supabase);
   if (dataset.id === "expenses") return fetchExpenses(supabase, from, to);
+  if (dataset.id === "coupons") return fetchCoupons(supabase);
+  if (dataset.id === "reviews") return fetchReviews(supabase, from, to);
+  if (dataset.id === "stock_movements") return fetchStockMovements(supabase, from, to);
   return [];
 }
 
@@ -291,6 +294,129 @@ async function fetchExpenses(supabase: Client, from?: string, to?: string): Prom
     ...e,
     category: categoryLabel(String(e.category)),
   }));
+}
+
+async function fetchCoupons(supabase: Client): Promise<Row[]> {
+  const { data, error } = await supabase
+    .from("coupons")
+    .select(
+      "id, code, discount_type, discount_value, min_order_inr, expires_at, max_uses, " +
+        "times_used, once_per_customer, is_active, created_at"
+    )
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+
+  // Redemptions carry the money actually taken off, which is not derivable from
+  // the coupon: a 10% code is worth a different amount on every order.
+  const { data: redemptions } = await supabase
+    .from("coupon_redemptions")
+    .select("coupon_id, discount_inr, order_id");
+
+  const byCoupon = new Map<string, { total: number; orders: string[] }>();
+  for (const r of (redemptions ?? []) as unknown as Row[]) {
+    const key = String(r.coupon_id);
+    if (!byCoupon.has(key)) byCoupon.set(key, { total: 0, orders: [] });
+    const entry = byCoupon.get(key)!;
+    entry.total += Number(r.discount_inr ?? 0);
+    if (r.order_id) entry.orders.push(String(r.order_id).slice(0, 8));
+  }
+
+  const now = new Date();
+  return ((data ?? []) as unknown as Row[]).map((c) => {
+    const used = byCoupon.get(String(c.id));
+    const expired = Boolean(c.expires_at && new Date(String(c.expires_at)) <= now);
+    const exhausted =
+      c.max_uses !== null && Number(c.times_used) >= Number(c.max_uses);
+    return {
+      code: c.code,
+      discount:
+        c.discount_type === "percent"
+          ? `${Number(c.discount_value)}%`
+          : `₹${Number(c.discount_value)}`,
+      min_order_inr: c.min_order_inr,
+      expires_at: c.expires_at,
+      max_uses: c.max_uses,
+      times_used: c.times_used,
+      total_discounted_inr: used?.total ?? 0,
+      // The same wording the admin screen shows, so a code reported as Expired
+      // in the file is the one reported as Expired on screen.
+      state: !c.is_active
+        ? "Withdrawn"
+        : expired
+          ? "Expired"
+          : exhausted
+            ? "Fully claimed"
+            : "Active",
+      once_per_customer: c.once_per_customer ? "Yes" : "No",
+      created_at: c.created_at,
+      order_refs: used?.orders.join(", ") ?? null,
+    };
+  });
+}
+
+async function fetchReviews(supabase: Client, from?: string, to?: string): Promise<Row[]> {
+  // The same RPC the Reviews screen reads, hidden ones included — an export
+  // that quietly dropped the hidden ones would be a record of the flattering
+  // half only.
+  const { data, error } = await supabase.rpc("admin_reviews", {
+    p_include_hidden: true,
+  });
+  if (error) throw new Error(error.message);
+
+  return ((data ?? []) as unknown as Row[])
+    .filter((r) => {
+      const at = new Date(String(r.created_at));
+      if (from && at < new Date(from)) return false;
+      if (to && at >= new Date(nextDay(to))) return false;
+      return true;
+    })
+    .map((r) => ({
+      ...r,
+      visibility: r.hidden_at ? "Hidden" : "Visible",
+    }));
+}
+
+async function fetchStockMovements(supabase: Client, from?: string, to?: string): Promise<Row[]> {
+  let query = supabase
+    .from("stock_movements")
+    .select("created_at, size_label, delta, reason, note, product_id, order_id")
+    .order("created_at", { ascending: false });
+  if (from) query = query.gte("created_at", from);
+  if (to) query = query.lt("created_at", nextDay(to));
+
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []) as unknown as Row[];
+
+  // Names are resolved separately rather than joined: product_id is ON DELETE
+  // SET NULL, so a movement outlives the product it refers to and a join would
+  // drop exactly the history that matters most — what happened to something no
+  // longer in the catalogue.
+  const ids = [...new Set(rows.map((r) => r.product_id).filter(Boolean))] as string[];
+  const names = new Map<string, { name: string; sku: string | null }>();
+  if (ids.length > 0) {
+    const { data: products } = await supabase
+      .from("products")
+      .select("id, name, sku")
+      .in("id", ids);
+    for (const p of (products ?? []) as unknown as Row[]) {
+      names.set(String(p.id), { name: String(p.name), sku: (p.sku as string) ?? null });
+    }
+  }
+
+  return rows.map((r) => {
+    const product = r.product_id ? names.get(String(r.product_id)) : undefined;
+    return {
+      created_at: r.created_at,
+      product_name: product?.name ?? "(product deleted)",
+      sku: product?.sku ?? null,
+      size_label: r.size_label,
+      delta: r.delta,
+      reason: String(r.reason).replace(/^./, (c) => c.toUpperCase()),
+      note: r.note,
+      order_ref: r.order_id ? String(r.order_id).slice(0, 8) : null,
+    };
+  });
 }
 
 /**
