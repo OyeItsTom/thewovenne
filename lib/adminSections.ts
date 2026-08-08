@@ -13,6 +13,7 @@ import {
   Settings,
   Sheet,
   ShoppingBag,
+  Upload,
   Star,
   Ticket,
   Users,
@@ -132,6 +133,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: "/admin/dashboard/export",
     blurb: "Excel files for accounting, analysis and records",
     icon: Sheet,
+  },
+  {
+    id: "import",
+    label: "Import",
+    href: "/admin/dashboard/import",
+    blurb: "Bulk product, courier cost and expense uploads",
+    icon: Upload,
   },
   {
     id: "profit-loss",
