@@ -21,6 +21,14 @@ export interface PricedItem {
   quantity: number;
   /** Authoritative unit price, from the database. */
   price_inr: number;
+  /**
+   * What this piece costs US, as at this moment. Snapshotted onto the order so
+   * a later change to the product's cost cannot rewrite historical margin.
+   * Null when no cost has been recorded — a real absence, not a zero, because
+   * zero would read as "free to make" in a P&L.
+   */
+  cost_price_inr: number | null;
+  sku: string | null;
 }
 
 export interface PricingResult {
@@ -67,6 +75,8 @@ export async function priceCart(items: CartItem[]): Promise<PricingResult> {
         product_id: string;
         name: string;
         price_inr: number;
+        cost_price_inr: number | null;
+        sku: string | null;
         in_stock: boolean;
       }[]
     ).map((r) => [r.product_id, r])
@@ -113,6 +123,12 @@ export async function priceCart(items: CartItem[]): Promise<PricingResult> {
       size: typeof item.size === "string" ? item.size.slice(0, 40) : "One Size",
       quantity: item.quantity,
       price_inr: Number(row.price_inr),
+      // Null stays null. Coercing an unrecorded cost to 0 would report a 100%
+      // margin on a piece nobody has costed, which is worse than reporting none.
+      cost_price_inr: row.cost_price_inr === null || row.cost_price_inr === undefined
+        ? null
+        : Number(row.cost_price_inr),
+      sku: row.sku ?? null,
     });
   }
 

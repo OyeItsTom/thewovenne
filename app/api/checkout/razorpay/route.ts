@@ -133,6 +133,19 @@ async function handleCreate({ items, details: rawDetails, redeemPoints, couponCo
       // show the line and the admin can see which promotion won the order.
       coupon_code: coupon?.ok ? coupon.code : null,
       coupon_discount_inr: couponDiscount,
+      // Snapshotted, not looked up later: what these pieces cost US as at this
+      // sale, so a renegotiated cost cannot rewrite historical margin.
+      //
+      // A line with NO recorded cost adds nothing to this total, which means
+      // the P&L will read it as pure margin. That is a real overstatement and
+      // it is not hidden: the per-line cost_price_inr is preserved as null in
+      // `items` below, so a report can find the orders it cannot trust and say
+      // so. The alternative — refusing to sell an uncosted piece — would fail
+      // checkouts over a bookkeeping gap.
+      cogs_inr: priced.reduce(
+        (sum, i) => sum + (i.cost_price_inr ?? 0) * i.quantity,
+        0
+      ),
       payment_provider: "razorpay",
       payment_status: "pending",
       items: priced.map((item) => ({
@@ -141,6 +154,8 @@ async function handleCreate({ items, details: rawDetails, redeemPoints, couponCo
         size: item.size,
         quantity: item.quantity,
         price_inr: item.price_inr,
+        cost_price_inr: item.cost_price_inr,
+        sku: item.sku,
       })),
     };
 
@@ -167,6 +182,16 @@ async function handleCreate({ items, details: rawDetails, redeemPoints, couponCo
         "orders.delivery_updates missing — run migration 0034. Recording the order without it."
       );
       ({ error: insertError } = await supabase.from("orders").insert(row));
+    }
+
+    if (missingColumn(insertError, "cogs_inr")) {
+      console.error(
+        "orders.cogs_inr missing — run migration 0038. Recording the order without cost capture; " +
+          "this order will show no COGS in the P&L and cannot be backfilled."
+      );
+      const { cogs_inr, ...withoutCost } = row;
+      void cogs_inr;
+      ({ error: insertError } = await supabase.from("orders").insert(withoutCost));
     }
 
     if (missingColumn(insertError, "coupon_(code|discount_inr)")) {
@@ -255,6 +280,34 @@ async function handleVerify({
     console.error("Could not fetch Razorpay order for amount:", e);
   }
 
+  // What Razorpay actually took. Read here, at verification, because it is only
+  // knowable once a payment exists — and it is a real cost of every sale that
+  // would otherwise never appear in the P&L, quietly overstating profit on
+  // every order.
+  //
+  // Fee and tax stay separate: they are separate lines on Razorpay's settlement,
+  // and netting them together loses the input credit once GST registration
+  // happens. Both arrive in paise.
+  //
+  // Never fatal. A fee we could not read is a reporting gap; failing a
+  // confirmation the customer has already paid for is not.
+  let gatewayFeeInr: number | null = null;
+  let gatewayTaxInr: number | null = null;
+  try {
+    const payment = await razorpay.payments.fetch(razorpay_payment_id);
+    if (payment?.fee !== undefined && payment.fee !== null) {
+      gatewayFeeInr = Number(payment.fee) / 100;
+    }
+    if (payment?.tax !== undefined && payment.tax !== null) {
+      gatewayTaxInr = Number(payment.tax) / 100;
+    }
+  } catch (e) {
+    console.error(
+      `Could not read Razorpay fees for payment ${razorpay_payment_id} — this order will show no gateway cost:`,
+      e
+    );
+  }
+
   const supabase = createServiceClient();
 
   // Stock comes out HERE, after payment is confirmed, and atomically —
@@ -266,6 +319,16 @@ async function handleVerify({
   // failed — they have paid, and refusing their confirmation over our stock
   // arithmetic would be indefensible. The order is flagged instead, so a human
   // can refund or restock deliberately.
+  // Read BEFORE the stock comes out: reserve_stock records a movement per line
+  // and that movement is far more useful attached to the order that caused it —
+  // particularly for a return, which has to know what to put back and why.
+  const { data: pendingRow } = await supabase
+    .from("orders")
+    .select("id")
+    .eq("razorpay_order_id", razorpay_order_id)
+    .maybeSingle();
+  const orderRowId = (pendingRow as { id?: string } | null)?.id ?? null;
+
   let stockShort = false;
   try {
     const { error: stockError } = await supabase.rpc("reserve_stock", {
@@ -274,6 +337,7 @@ async function handleVerify({
         size: i.size,
         quantity: i.quantity,
       })),
+      p_order_id: orderRowId,
     });
     if (stockError) {
       stockShort = true;
@@ -299,12 +363,16 @@ async function handleVerify({
       total_inr:
         capturedInr ??
         priced.reduce((sum, item) => sum + item.price_inr * item.quantity, 0),
+      gateway_fee_inr: gatewayFeeInr,
+      gateway_tax_inr: gatewayTaxInr,
       items: priced.map((item) => ({
         id: item.id,
         name: item.name,
         size: item.size,
         quantity: item.quantity,
         price_inr: item.price_inr,
+        cost_price_inr: item.cost_price_inr,
+        sku: item.sku,
       })),
     })
     .eq("razorpay_order_id", razorpay_order_id)
@@ -332,6 +400,8 @@ async function handleVerify({
         size: item.size,
         quantity: item.quantity,
         price_inr: item.price_inr,
+        cost_price_inr: item.cost_price_inr,
+        sku: item.sku,
       })),
     });
   }
