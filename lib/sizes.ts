@@ -114,21 +114,26 @@ export async function saveProductSizes(
     seen.add(key);
   }
 
-  const { error: deleteError } = await client
-    .from("product_sizes")
-    .delete()
-    .eq("product_id", productId);
-  if (deleteError) return deleteError.message;
+  // One database call, in one transaction, rather than DELETE-then-INSERT from
+  // here. Two reasons, and the second is the serious one:
+  //
+  // 1. Only the database can see what the stock WAS, so only it can work out
+  //    what changed and write the movement rows. A hand correction is exactly
+  //    the entry you want in the log when the counts disagree with the shelf.
+  //
+  // 2. The old sequence deleted every size row and then inserted the new set.
+  //    An insert that failed after the delete succeeded left the product with
+  //    NO SIZES AND NO STOCK, and nothing to restore it from.
+  const { error } = await client.rpc("save_product_sizes", {
+    p_product_id: productId,
+    p_sizes: clean,
+  });
 
-  if (clean.length === 0) return null;
+  if (!error) return null;
 
-  const { error: insertError } = await client.from("product_sizes").insert(
-    clean.map((s, i) => ({
-      product_id: productId,
-      label: s.label,
-      sort_order: i,
-      stock_quantity: s.stock_quantity,
-    }))
-  );
-  return insertError?.message ?? null;
+  // The function raises this rather than letting the unique index produce a
+  // message with an index name in it.
+  const duplicate = /DUPLICATE_SIZE:(.+)/.exec(error.message);
+  if (duplicate) return `"${duplicate[1].trim()}" is listed twice.`;
+  return error.message;
 }

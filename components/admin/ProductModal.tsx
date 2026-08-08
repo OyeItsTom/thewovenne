@@ -33,6 +33,7 @@ const emptyForm = {
   slug: "",
   description: "",
   price_inr: "",
+  cost_price_inr: "",
   fabric: "",
   colour: "",
   stock_quantity: "",
@@ -80,6 +81,7 @@ const formFromProduct = (p: Product): FormState => ({
   slug: p.slug,
   description: p.description ?? "",
   price_inr: String(p.price_inr),
+  cost_price_inr: p.cost_price_inr === null || p.cost_price_inr === undefined ? "" : String(p.cost_price_inr),
   fabric: p.fabric ?? "",
   colour: p.colour ?? "",
   stock_quantity: String(p.stock_quantity),
@@ -140,6 +142,29 @@ export default function ProductModal({
     return parent && child
       ? `/${parent.slug}/${child.slug}/${slug}`
       : `/in/product/${slug}`;
+  })();
+
+  /**
+   * Margin, worked out live under the cost field.
+   *
+   * A cost typed a decimal place out looks like a plausible number and reads as
+   * an absurd margin, so this is the check that actually catches it. Silence
+   * when there is nothing to say — an empty cost is a legitimate state meaning
+   * "not costed yet", not an error to nag about.
+   */
+  const marginHint = (() => {
+    const price = Number(form.price_inr);
+    const cost = Number(form.cost_price_inr);
+    if (!form.cost_price_inr.trim()) {
+      return "Blank means not costed yet — it will show as full margin in the P&L.";
+    }
+    if (!Number.isFinite(cost) || cost < 0) return "That cost isn't a number.";
+    if (!Number.isFinite(price) || price <= 0) return "Set a selling price to see the margin.";
+    if (cost > price) {
+      return `Selling below cost — losing ₹${Math.round(cost - price).toLocaleString("en-IN")} a piece.`;
+    }
+    const margin = ((price - cost) / price) * 100;
+    return `Margin ₹${Math.round(price - cost).toLocaleString("en-IN")} · ${margin.toFixed(1)}%`;
   })();
 
   useEffect(() => {
@@ -334,6 +359,9 @@ export default function ProductModal({
       slug: form.slug,
       description: form.description || null,
       price_inr: Number(form.price_inr),
+      // Blank stays NULL, never 0. A zero cost reads as "free to make" and
+      // would show a 100% margin in the P&L for a piece nobody has costed yet.
+      cost_price_inr: form.cost_price_inr.trim() === "" ? null : Number(form.cost_price_inr),
       category_id: subCategoryId,
       fabric: form.fabric || null,
       colour: form.colour || null,
@@ -372,7 +400,7 @@ export default function ProductModal({
       .from("product_versions")
       .update(isEdit ? payload : { ...payload, is_active: true })
       .eq("id", versionId)
-      .select("product_id, name, slug, description, price_inr, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at")
+      .select("product_id, name, slug, description, price_inr, cost_price_inr, sku, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at")
       .single();
 
     if (saveError) {
@@ -475,7 +503,7 @@ export default function ProductModal({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field
-            label="Price (₹ INR)"
+            label="Selling price (₹ INR)"
             type="number"
             step="0.01"
             min="0"
@@ -483,6 +511,24 @@ export default function ProductModal({
             value={form.price_inr}
             onChange={update("price_inr")}
           />
+          <div>
+            <Field
+              label="Cost price (₹ INR)"
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="What it costs us"
+              value={form.cost_price_inr}
+              onChange={update("cost_price_inr")}
+            />
+            {/* Worked out as you type, because a cost entered a decimal place
+                out is invisible as a number and obvious as a margin. Left
+                blank deliberately means "not costed yet" — see the payload. */}
+            <p className="mt-1 text-xs text-ink/50">{marginHint}</p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field
             label="Fabric"
             placeholder="Handloom Cotton-Linen"

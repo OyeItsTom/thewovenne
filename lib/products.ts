@@ -156,7 +156,10 @@ export async function getAdminProducts(
   const cats = await categoryMap(client);
   const { data, error } = await client
     .from("product_versions")
-    .select(`${PRODUCT_SELECT}, state, pending_delete`)
+    // cost_price_inr and sku are added HERE and never to PRODUCT_SELECT: this
+    // is the admin path, and the storefront must not carry what a piece costs
+    // us in its page payload.
+    .select(`${PRODUCT_SELECT}, state, pending_delete, cost_price_inr, sku`)
     .in("state", ["published", "draft"])
     .order("created_at", { ascending: false });
 
