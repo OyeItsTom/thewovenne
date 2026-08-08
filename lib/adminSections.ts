@@ -7,6 +7,7 @@ import {
   Mail,
   MessageSquareText,
   Package,
+  Receipt,
   Rocket,
   Settings,
   ShoppingBag,
@@ -122,6 +123,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: "/admin/dashboard/marketing",
     blurb: "Send wishlist, low-stock and basket emails",
     icon: Mail,
+  },
+  {
+    id: "expenses",
+    label: "Expenses",
+    href: "/admin/dashboard/expenses",
+    blurb: "What the business spends, so profit means something",
+    icon: Receipt,
   },
   {
     id: "analytics",
