@@ -5,6 +5,7 @@ import { getMyOrders, orderRef, STATUS_LABEL, STATUS_BLURB } from "@/lib/orders"
 import { formatINR } from "@/lib/utils";
 import { buttonClassName } from "@/components/ui/Button";
 import OrderStatusTrail from "@/components/account/OrderStatusTrail";
+import InvoiceLink from "@/components/order/InvoiceLink";
 
 export const metadata: Metadata = {
   title: "Your orders | THE WOVENNE",
@@ -190,6 +191,11 @@ export default async function OrdersPage() {
                       <p className="mt-3 text-xs text-ink/50">
                         Payment {order.payment_status}
                       </p>
+                      <InvoiceLink
+                        orderId={order.id}
+                        paid={order.payment_status === "paid"}
+                        invoiceNumber={order.invoice_number}
+                      />
                     </div>
                   </div>
                 </section>

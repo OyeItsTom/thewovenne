@@ -79,13 +79,19 @@ export interface Order {
   delivered_at: string | null;
   admin_note: string | null;
   razorpay_order_id: string | null;
+  /** Null until the order is paid — assigned by 0037's assign_invoice_number. */
+  invoice_number: string | null;
+  /** Coupon applied at checkout, if any. Kept for the invoice and reporting. */
+  coupon_code: string | null;
+  coupon_discount_inr: number;
 }
 
 const ORDER_SELECT =
   "id, created_at, customer_email, customer_name, customer_phone, " +
   "shipping_address, items, total_inr, shipping_cost_inr, payment_provider, " +
   "payment_status, status, needs_review, courier_name, awb_number, " +
-  "shipped_at, delivered_at, admin_note, razorpay_order_id";
+  "shipped_at, delivered_at, admin_note, razorpay_order_id, invoice_number, " +
+  "coupon_code, coupon_discount_inr";
 
 function mapOrder(row: Record<string, unknown>): Order {
   return {
@@ -93,6 +99,7 @@ function mapOrder(row: Record<string, unknown>): Order {
     items: Array.isArray(row.items) ? (row.items as OrderItem[]) : [],
     total_inr: Number(row.total_inr ?? 0),
     shipping_cost_inr: Number(row.shipping_cost_inr ?? 0),
+    coupon_discount_inr: Number(row.coupon_discount_inr ?? 0),
   };
 }
 

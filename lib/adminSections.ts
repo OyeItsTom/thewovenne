@@ -11,6 +11,7 @@ import {
   Settings,
   ShoppingBag,
   Star,
+  Ticket,
   Users,
 } from "lucide-react";
 
@@ -100,6 +101,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: "/admin/dashboard/reviews",
     blurb: "Read, hide or remove customer reviews",
     icon: Star,
+  },
+  {
+    id: "coupons",
+    label: "Discount Codes",
+    href: "/admin/dashboard/coupons",
+    blurb: "Run a promotion, and see what each code has done",
+    icon: Ticket,
   },
   {
     id: "customers",
