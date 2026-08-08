@@ -21,6 +21,20 @@ export interface Product {
   slug: string;
   description: string | null;
   price_inr: number;
+  /**
+   * What this piece costs US, today. Null means it has never been costed —
+   * distinct from zero, which would claim it is free to make. The P&L reads a
+   * null line as full margin and flags it; see migration 0038.
+   *
+   * OPTIONAL BECAUSE THE STOREFRONT MUST NOT HAVE IT. PRODUCT_SELECT does not
+   * fetch it, so a product on a customer-facing page genuinely has no cost
+   * attached — what it costs us is nobody's business but ours, and a field
+   * that is merely hidden in the UI still ships in the page payload. Only the
+   * admin queries ask for it.
+   */
+  cost_price_inr?: number | null;
+  /** Stable identifier for spreadsheets and bulk import. Admin-only, like cost. */
+  sku?: string | null;
   category_id: string | null;
   // Derived from the joined categories row (name/slug) — not stored on products.
   // Kept so display code can show the category name without a second lookup.
