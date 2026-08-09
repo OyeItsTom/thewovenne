@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Download } from "lucide-react";
 import { createRSCClient } from "@/lib/supabaseRSC";
 import { getMyOrders, orderRef, STATUS_LABEL, STATUS_BLURB } from "@/lib/orders";
 import { formatINR } from "@/lib/utils";
@@ -49,6 +50,39 @@ export default async function OrdersPage() {
   // JWT. Filtering here as well would imply the policy were optional.
   const orders = await getMyOrders(supabase);
 
+  // Credit notes against those orders, so a cancellation is downloadable here
+  // and not only in the email that announced it. Read with the customer's own
+  // client — 0043 lets them see notes against their own orders and nobody
+  // else's, so no id filtering is done here either.
+  //
+  // A failure is not fatal, exactly as the admin invoice list treats it: an
+  // order history should not become a stack trace because a migration is
+  // pending. The orders simply come back without a credit note link.
+  const { data: creditRows } = await supabase
+    .from("credit_notes")
+    .select("id, credit_note_number, order_id, amount_inr")
+    .order("issued_at", { ascending: false });
+
+  const creditsByOrder = new Map<
+    string,
+    { id: string; credit_note_number: string; amount_inr: number }[]
+  >();
+  for (const row of (creditRows ?? []) as {
+    id: string;
+    credit_note_number: string;
+    order_id: string | null;
+    amount_inr: number | string;
+  }[]) {
+    if (!row.order_id) continue;
+    const list = creditsByOrder.get(row.order_id) ?? [];
+    list.push({
+      id: row.id,
+      credit_note_number: row.credit_note_number,
+      amount_inr: Number(row.amount_inr ?? 0),
+    });
+    creditsByOrder.set(row.order_id, list);
+  }
+
   // No sidebar, no page padding and no "Your account" eyebrow here: the account
   // layout supplies all three. This page predated that layout and still carried
   // its own, so selecting Orders rendered the whole menu a second time inside
@@ -74,6 +108,7 @@ export default async function OrdersPage() {
           <div className="space-y-6">
             {orders.map((order) => {
               const goods = order.total_inr - order.shipping_cost_inr;
+              const credits = creditsByOrder.get(order.id) ?? [];
               return (
                 <section
                   key={order.id}
@@ -196,6 +231,21 @@ export default async function OrdersPage() {
                         paid={order.payment_status === "paid"}
                         invoiceNumber={order.invoice_number}
                       />
+                      {/* The invoice stays exactly as issued and the credit note
+                          sits beside it, which is the pair a customer's records
+                          need. Offered here as well as in the cancellation email,
+                          because an email is easy to lose. */}
+                      {credits.map((c) => (
+                        <a
+                          key={c.id}
+                          href={`/api/credit-note/${c.id}`}
+                          className="mt-2 flex items-center gap-1.5 text-xs uppercase tracking-wider text-ink/55 transition-colors hover:text-terracotta"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Credit note {c.credit_note_number} · −
+                          {formatINR(c.amount_inr)}
+                        </a>
+                      ))}
                     </div>
                   </div>
                 </section>
