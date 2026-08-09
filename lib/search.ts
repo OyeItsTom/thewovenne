@@ -1,4 +1,4 @@
-import { getAllProducts } from "./products";
+import { getAllBrandKnowledge, getAllProducts, type BrandKnowledge } from "./products";
 import { ANON_CTX, type ReadCtx } from "./readCtx";
 import type { Product } from "./types";
 
@@ -84,6 +84,57 @@ export function parseQuery(raw: string): string[] {
 export interface SearchResult {
   products: Product[];
   terms: string[];
+}
+
+/**
+ * The same search, over the brand knowledge rather than the catalogue fields.
+ *
+ * SEPARATE FROM searchProducts ON PURPOSE. Heritage and craft notes are long
+ * prose, and folding them into the catalogue scorer would let a passing mention
+ * of "linen" in one piece's history outrank a linen shirt for the word linen.
+ * Two questions — "what do you sell that matches this" and "what do you know
+ * about pieces like this" — deserve two answers.
+ *
+ * Every term must still match somewhere, the same rule the product search uses:
+ * "kerala kasavu" should not return every piece whose notes mention Kerala.
+ */
+export interface BrandKnowledgeResult {
+  entries: BrandKnowledge[];
+  terms: string[];
+}
+
+export async function searchBrandKnowledge(
+  raw: string,
+  ctx: ReadCtx = ANON_CTX,
+  limit = 5
+): Promise<BrandKnowledgeResult> {
+  const terms = parseQuery(raw);
+  const all = await getAllBrandKnowledge(ctx);
+
+  // No query means "what has been written up at all" — a useful question, and
+  // the honest answer when the shop has only written up a few pieces.
+  if (terms.length === 0) return { entries: all.slice(0, limit), terms };
+
+  const ranked = all
+    .map((entry) => {
+      let total = 0;
+      for (const term of terms) {
+        const hit =
+          fieldScore(entry.name, term, WEIGHTS.name) +
+          fieldScore(entry.heritage, term, WEIGHTS.description) +
+          fieldScore(entry.craft, term, WEIGHTS.description) +
+          fieldScore(entry.care, term, WEIGHTS.description);
+        if (hit === 0) return { entry, score: 0 };
+        total += hit;
+      }
+      return { entry, score: total };
+    })
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((r) => r.entry);
+
+  return { entries: ranked, terms };
 }
 
 export async function searchProducts(

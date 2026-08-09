@@ -24,6 +24,13 @@ export const getFeaturedProducts = async (limit = 4) =>
 
 export const getAllProducts = async () => products.getAllProducts(await previewCtx());
 
+/**
+ * Heritage, craft and care for one piece — preview-aware, so an admin editing
+ * the notes sees the draft on the real product page before publishing.
+ */
+export const getBrandKnowledge = async (ref: { slug?: string; productId?: string }) =>
+  products.getBrandKnowledge(ref, await previewCtx());
+
 export const getProductsByCollection = async (collection: string) =>
   products.getProductsByCollection(collection, await previewCtx());
 

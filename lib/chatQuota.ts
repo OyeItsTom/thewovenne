@@ -19,6 +19,23 @@ import { createServiceClient } from "./supabase";
  * here rather than a different mechanism — that is the whole upgrade path.
  */
 export const ANON_MESSAGE_LIMIT = 10;
+
+/**
+ * And what a signed-in customer gets.
+ *
+ * THE UPGRADE PATH THE ORIGINAL COMMENT PROMISED. Until now the cap was the same
+ * number for everybody — a customer who had created an account, verified an email
+ * and bought something was rate-limited exactly like a passing scraper, and the
+ * "full access requires login" behaviour did not actually exist anywhere in the
+ * code. It does now, and it is the same mechanism with a different number rather
+ * than a second system: a login raises the allowance, it does not unlock a
+ * different concierge.
+ *
+ * Not unlimited. An account costs an email address and nothing else, so an
+ * uncapped signed-in tier is one signup away from being an uncapped anonymous
+ * tier. Forty is a long conversation and a poor harvesting tool.
+ */
+export const SIGNED_IN_MESSAGE_LIMIT = 40;
 export const QUOTA_WINDOW_HOURS = 1;
 
 /**
@@ -53,6 +70,41 @@ export function ipHash(req: NextRequest): string {
     .digest("hex");
 }
 
+/**
+ * Who is asking, and what they are allowed.
+ *
+ * The quota key is opaque to the database — chat_consume takes text — so a
+ * signed-in customer is keyed by their own id rather than their address. That
+ * matters in both directions: two customers behind one office NAT no longer eat
+ * each other's allowance, and someone who signs out cannot start again on a fresh
+ * count, because the anonymous key was never the one being spent.
+ */
+export interface ChatCaller {
+  key: string;
+  limit: number;
+  signedIn: boolean;
+}
+
+/** A visitor we know nothing about: keyed on the address, low allowance. */
+export function anonymousCaller(req: NextRequest): ChatCaller {
+  return { key: `ip:${ipHash(req)}`, limit: ANON_MESSAGE_LIMIT, signedIn: false };
+}
+
+/**
+ * A signed-in customer: keyed on their own id, higher allowance.
+ *
+ * The id comes from a verified Supabase session read on the server, never from
+ * anything the browser sent — a caller who could name a user id would otherwise
+ * be able to claim the larger allowance by typing one.
+ */
+export function signedInCaller(userId: string): ChatCaller {
+  return {
+    key: `user:${crypto.createHash("sha256").update(IP_SALT + userId).digest("hex")}`,
+    limit: SIGNED_IN_MESSAGE_LIMIT,
+    signedIn: true,
+  };
+}
+
 export interface QuotaResult {
   allowed: boolean;
   remaining: number;
@@ -66,14 +118,16 @@ export interface QuotaResult {
  * counter is unreachable is a worse outcome than a few uncounted messages, and
  * the error is logged for Sentry either way.
  */
-export async function consumeChatQuota(
-  req: NextRequest,
-  limit: number = ANON_MESSAGE_LIMIT
-): Promise<QuotaResult> {
+export async function consumeChatQuota(caller: ChatCaller): Promise<QuotaResult> {
+  const limit = caller.limit;
   try {
     const supabase = createServiceClient();
     const { data, error } = await supabase.rpc("chat_consume", {
-      p_ip_hash: ipHash(req),
+      // Still called p_ip_hash in the database (migration 0019) and now carrying
+      // either an address digest or a customer digest. Renaming the parameter
+      // would mean a migration to change a word; the prefix in the key says
+      // which it is.
+      p_ip_hash: caller.key,
       p_limit: limit,
       p_window: `${QUOTA_WINDOW_HOURS} hours`,
     });

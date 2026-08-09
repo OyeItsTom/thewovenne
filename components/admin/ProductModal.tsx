@@ -36,6 +36,9 @@ const emptyForm = {
   price_inr: "",
   cost_price_inr: "",
   video_youtube_id: "",
+  heritage_note: "",
+  craft_note: "",
+  care_note: "",
   fabric: "",
   colour: "",
   stock_quantity: "",
@@ -85,6 +88,9 @@ const formFromProduct = (p: Product): FormState => ({
   price_inr: String(p.price_inr),
   cost_price_inr: p.cost_price_inr === null || p.cost_price_inr === undefined ? "" : String(p.cost_price_inr),
   video_youtube_id: p.video_youtube_id ?? "",
+  heritage_note: p.heritage_note ?? "",
+  craft_note: p.craft_note ?? "",
+  care_note: p.care_note ?? "",
   fabric: p.fabric ?? "",
   colour: p.colour ?? "",
   stock_quantity: String(p.stock_quantity),
@@ -384,6 +390,12 @@ export default function ProductModal({
       // Normalised to an ID here, not stored as whatever was pasted. Blank
       // clears it; anything unparseable is refused above before we get here.
       video_youtube_id: form.video_youtube_id.trim() === "" ? null : youtubeId(form.video_youtube_id),
+      // Blank means "not written up yet", which is a different thing from an
+      // empty string: the concierge and the product page both check for null to
+      // decide whether to say anything at all.
+      heritage_note: form.heritage_note.trim() || null,
+      craft_note: form.craft_note.trim() || null,
+      care_note: form.care_note.trim() || null,
       category_id: subCategoryId,
       fabric: form.fabric || null,
       colour: form.colour || null,
@@ -422,7 +434,7 @@ export default function ProductModal({
       .from("product_versions")
       .update(isEdit ? payload : { ...payload, is_active: true })
       .eq("id", versionId)
-      .select("product_id, name, slug, description, price_inr, cost_price_inr, sku, video_youtube_id, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at")
+      .select("product_id, name, slug, description, price_inr, cost_price_inr, sku, video_youtube_id, heritage_note, craft_note, care_note, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at")
       .single();
 
     if (saveError) {
@@ -566,6 +578,59 @@ export default function ProductModal({
             value={form.fabric}
             onChange={update("fabric")}
           />
+        </div>
+
+        {/* BRAND KNOWLEDGE — its own section, not three more fields in the row
+            above, because this is the only part of the form that is writing
+            rather than filling in. Three boxes with room to think in, each
+            labelled with the question it answers.
+
+            Nothing here is generated or suggested. The concierge quotes this
+            text to customers as fact about the cloth, so a placeholder somebody
+            forgot to replace would be a claim the shop cannot stand behind. */}
+        <div className="space-y-4 rounded-xl border border-ink/10 bg-linen/30 p-4">
+          <div>
+            <h3 className="font-heading text-lg text-ink">Brand knowledge</h3>
+            <p className="mt-1 text-xs text-ink/55">
+              What the description can&apos;t carry. Shown on the product page
+              under &ldquo;Heritage &amp; care&rdquo;, and it is what Ask Wovenne
+              answers questions out of — so write it as you would say it. Leave a
+              box empty and nothing is shown or claimed for it.
+            </p>
+          </div>
+          <Field
+            as="textarea"
+            rows={3}
+            label="Heritage — where it comes from"
+            placeholder="The weaving tradition, the region, what it is called locally."
+            value={form.heritage_note}
+            onChange={update("heritage_note")}
+          />
+          <Field
+            as="textarea"
+            rows={3}
+            label="Craft — how it was made"
+            placeholder="The loom, the technique, what makes this piece distinctive."
+            value={form.craft_note}
+            onChange={update("craft_note")}
+          />
+          <div>
+            <Field
+              as="textarea"
+              rows={3}
+              label="Care — how to look after it"
+              placeholder="Washing, drying, ironing, storing."
+              value={form.care_note}
+              onChange={update("care_note")}
+            />
+            {/* Said here because it is not obvious: the product page falls back
+                to fabric-generic advice, and writing this replaces it. */}
+            <p className="mt-1 text-xs text-ink/50">
+              {form.care_note.trim()
+                ? "This replaces the general fabric care advice on the product page."
+                : "Empty: the product page shows the general advice for this fabric."}
+            </p>
+          </div>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">

@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { supabase, createServiceClient } from "./supabase";
 import { getAllCategories, getVisibleCategoryIds } from "./categories";
 import { effectivePrice } from "./pricing";
+import { CHAT_TOOLS, runChatTool } from "./chatTools";
 
 // Current Sonnet — strong English + Malayalam, Sonnet-tier latency/cost.
 // (The brief's "claude-sonnet-4-6" is the previous generation; this is current.)
@@ -29,8 +30,22 @@ export function chatConfigured(): boolean {
   return key.startsWith("sk-ant-") && key.length > 40;
 }
 
-/** Compact catalogue context so the assistant can answer fabric/sizing/care/price questions. */
-async function getProductContext(): Promise<string> {
+/**
+ * The catalogue as an INDEX, not as a briefing.
+ *
+ * Before tools, this string carried everything: fabric, colour, stock, the lot.
+ * It now carries only what the model needs in order to know the shop exists and
+ * to name the right slug when it looks something up — name, slug, price, whether
+ * it can be bought at all. Fabric, sizes, live stock, description and every word
+ * of heritage now come from a tool call, which means they are read at the moment
+ * they are quoted rather than pasted in at the top of the conversation and
+ * trusted three turns later.
+ *
+ * Kept rather than dropped entirely because a model that cannot see that a piece
+ * exists has to guess a search term to discover it, and guesses badly on a
+ * four-product catalogue with names like "001".
+ */
+async function getCatalogueIndex(): Promise<string> {
   // Same visibility scope as the storefront — the concierge must never offer
   // something a shopper can't actually reach.
   const visibleIds = await getVisibleCategoryIds();
@@ -40,7 +55,7 @@ async function getProductContext(): Promise<string> {
   // whatever is sitting in drafts.
   const { data, error } = await supabase
     .from("product_versions")
-    .select("name, price_inr, category_id, fabric, colour, stock_quantity, " +
+    .select("name, slug, price_inr, category_id, stock_quantity, " +
             "discount_type, discount_value, discount_starts_at, discount_ends_at")
     .eq("state", "published")
     .eq("is_active", true)
@@ -52,10 +67,9 @@ async function getProductContext(): Promise<string> {
   // type, so name the shape here.
   const rows = data as unknown as {
     name: string;
+    slug: string;
     price_inr: number;
     category_id: string | null;
-    fabric: string | null;
-    colour: string | null;
     stock_quantity: number;
     discount_type: "percent" | "flat" | null;
     discount_value: number | null;
@@ -83,7 +97,7 @@ async function getProductContext(): Promise<string> {
         wasPrice == null
           ? `₹${price.toLocaleString("en-IN")}`
           : `₹${price.toLocaleString("en-IN")} (reduced from ₹${wasPrice.toLocaleString("en-IN")})`;
-      return `- ${p.name} — ${priceText} · ${category} · ${p.fabric ?? "—"} · ${p.colour ?? "—"} · ${p.stock_quantity > 0 ? "in stock" : "out of stock"}`;
+      return `- ${p.name} (slug: ${p.slug}) — ${priceText} · ${category} · ${p.stock_quantity > 0 ? "available" : "sold out"}`;
     })
     .join("\n");
 }
@@ -139,38 +153,136 @@ Voice: warm, proud, artisanal, and concise. Answer in 1–3 short paragraphs. Al
 Language: reply in the SAME language the customer writes in. You natively support English and Malayalam — detect which the customer used and match it.
 
 You can help with:
-- Product questions (fabric, sizing, care, availability) — use the catalogue below.
+- Product questions (fabric, sizing, care, availability) — look them up with your tools.
+- Heritage and craft questions — look them up with search_brand_knowledge.
 - Order tracking — only when order details are provided in context below.
 - General shop help (shipping within India, returns, "is this real handloom linen from Kerala").
 
-If you cannot resolve something, warmly suggest continuing on WhatsApp.
-Never invent order details, stock levels, or prices that aren't in the context below.
+LOOK IT UP RATHER THAN RECALLING IT. You have four read-only tools. Use them:
+- Before quoting any price, size or stock level, call the tool that has it. The
+  index below is a list of what exists, not a source for details, and an answer
+  that was true earlier in this conversation may not be true now.
+- For anything about how the cloth was made, where it comes from, whether it is
+  genuine handloom, or how to wash it: call search_brand_knowledge. That is the
+  shop's own written record and it is the ONLY acceptable source for those
+  answers.
+- If a tool returns nothing, say we do not have that or have not written it up,
+  and offer WhatsApp. Never fill the gap from general knowledge about Indian
+  textiles — a plausible sentence about a weaving tradition we did not write is a
+  claim this shop cannot stand behind, and provenance is what customers are
+  buying.
 
-Current catalogue:
+If you cannot resolve something, warmly suggest continuing on WhatsApp.
+Never invent order details, stock levels, or prices.
+
+What the shop sells (an index — call a tool for any detail):
 ${products}
 ${order ? `\nThe customer's verified order:\n${order}` : ""}`;
 }
 
 /**
- * Shared chat core — used by both the web /api/chat route and (later) the
- * WhatsApp webhook, so both channels answer identically in English or Malayalam.
- * Returns an Anthropic streaming message.
+ * How many times the concierge may look something up before it has to answer.
+ *
+ * Four is enough for the real shapes — search, then details, then stock, then
+ * heritage — and low enough that a confused turn cannot sit there calling tools
+ * while a customer watches a blinking cursor.
  */
-export async function streamChat(
+const MAX_TOOL_ROUNDS = 4;
+
+/**
+ * Shared chat core — used by both the web /api/chat route and the WhatsApp
+ * webhook, so both channels answer identically in English or Malayalam.
+ *
+ * ══ IT YIELDS TEXT NOW, RATHER THAN RETURNING A STREAM ══
+ *
+ * It used to hand back one Anthropic stream for the caller to read. With tools
+ * there is no single stream to hand back: one customer message becomes several
+ * model calls with lookups in between. So this owns the loop and emits the text
+ * as it arrives; the web route pipes it to the browser and the WhatsApp path
+ * concatenates it. Neither caller knows how many rounds happened.
+ *
+ * ══ ADAPTIVE THINKING, LOW EFFORT ══
+ *
+ * Thinking was disabled here for latency. With tools that is the wrong setting:
+ * on this model a thinking-off turn reaches for tools noticeably less, which is
+ * precisely the behaviour the tools exist to get. Adaptive at low effort keeps
+ * replies quick and restores the tool calls. Thinking text is never forwarded —
+ * only text deltas are yielded — so the customer sees an answer, not reasoning.
+ */
+export async function* streamChat(
   messages: ChatMessage[],
-  opts: { orderId?: string | null; email?: string | null } = {}
-) {
+  opts: {
+    orderId?: string | null;
+    email?: string | null;
+    /**
+     * Told about every lookup, so a caller can log them. Worth having for the
+     * misses in particular: "search_brand_knowledge found nothing" is the shop
+     * being asked about a piece nobody has written up, which is a content task
+     * arriving as a log line rather than as a customer complaint.
+     */
+    onTool?: (name: string, found: boolean) => void;
+  } = {}
+): AsyncGenerator<string, void, void> {
   const [products, order] = await Promise.all([
-    getProductContext(),
+    getCatalogueIndex(),
     lookupOrder(opts.orderId ?? null, opts.email ?? null),
   ]);
 
-  return anthropic.messages.stream({
-    model: CHAT_MODEL,
-    max_tokens: 1024,
-    // Latency-sensitive concierge — thinking off for snappy replies.
-    thinking: { type: "disabled" },
-    system: buildSystemPrompt(products, order),
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
-  });
+  const system = buildSystemPrompt(products, order);
+  const turns: Anthropic.MessageParam[] = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    // The last round is asked WITHOUT tools rather than simply cut off. A
+    // customer who asked a question gets an answer built from whatever was
+    // gathered, instead of silence because the budget ran out mid-lookup.
+    const exhausted = round === MAX_TOOL_ROUNDS;
+
+    const stream = anthropic.messages.stream({
+      model: CHAT_MODEL,
+      max_tokens: 1024,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "low" },
+      system,
+      tools: CHAT_TOOLS,
+      ...(exhausted ? { tool_choice: { type: "none" as const } } : {}),
+      messages: turns,
+    });
+
+    for await (const event of stream) {
+      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+        yield event.delta.text;
+      }
+    }
+
+    const reply = await stream.finalMessage();
+    if (reply.stop_reason !== "tool_use" || exhausted) return;
+
+    // The whole content array, not just the text: dropping the tool_use blocks
+    // here would leave the next request with tool results answering nothing.
+    turns.push({ role: "assistant", content: reply.content });
+
+    const calls = reply.content.filter(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+    );
+
+    // Run them together, and return every result in ONE user message. Splitting
+    // results across messages teaches the model to stop asking for tools in
+    // parallel, which is the opposite of what a three-lookup answer needs.
+    const results: Anthropic.ToolResultBlockParam[] = await Promise.all(
+      calls.map(async (call) => {
+        const outcome = await runChatTool(call.name, call.input);
+        opts.onTool?.(call.name, outcome.found);
+        return {
+          type: "tool_result" as const,
+          tool_use_id: call.id,
+          content: outcome.text,
+        };
+      })
+    );
+
+    turns.push({ role: "user", content: results });
+  }
 }

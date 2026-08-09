@@ -1,6 +1,12 @@
 import { NextRequest } from "next/server";
 import { streamChat, chatConfigured, type ChatMessage } from "@/lib/chat";
-import { consumeChatQuota, quotaMessage } from "@/lib/chatQuota";
+import {
+  anonymousCaller,
+  consumeChatQuota,
+  quotaMessage,
+  signedInCaller,
+} from "@/lib/chatQuota";
+import { createRSCClient } from "@/lib/supabaseRSC";
 import { getStoreSettings } from "@/lib/storeSettings";
 
 export const runtime = "nodejs";
@@ -59,7 +65,28 @@ export async function POST(req: NextRequest) {
   //
   // Checked after validation but before the model call, so a rejected request
   // costs nothing, and a malformed one doesn't spend the caller's allowance.
-  const quota = await consumeChatQuota(req);
+  //
+  // WHO IS ASKING IS DECIDED FROM THE SESSION COOKIE, NOT FROM THE BODY. A
+  // signed-in customer gets the larger allowance; the browser cannot claim it by
+  // sending a user id, because nothing here reads one. A failed session read is
+  // treated as anonymous — the cautious direction, and the same conflation the
+  // admin middleware was fixed for is not a risk here, since the consequence is
+  // a smaller allowance rather than a denial.
+  //
+  // ONE MESSAGE COSTS ONE MESSAGE, whatever the concierge does next. A reply that
+  // needs three lookups is three model calls and still a single spend — the cap
+  // is on what the customer asked for, not on how hard the answer was to find.
+  let caller = anonymousCaller(req);
+  try {
+    const {
+      data: { user },
+    } = await createRSCClient().auth.getUser();
+    if (user) caller = signedInCaller(user.id);
+  } catch (err) {
+    console.error("chat: session read failed, treating as anonymous:", err);
+  }
+
+  const quota = await consumeChatQuota(caller);
   if (!quota.allowed) {
     return new Response(quotaMessage(quota.resetAt), {
       status: 429,
@@ -68,9 +95,16 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const claudeStream = await streamChat(messages, {
+    const replyStream = streamChat(messages, {
       orderId: body.orderId,
       email: body.email,
+      // Only the misses are logged. A tool that found what it was asked for is
+      // the system working; a tool that found nothing is either a gap in the
+      // catalogue or a piece whose story nobody has written yet, and both are
+      // worth seeing without reading every transcript.
+      onTool: (name, found) => {
+        if (!found) console.warn(`concierge: ${name} found nothing`);
+      },
     });
 
     const encoder = new TextEncoder();
@@ -78,11 +112,13 @@ export async function POST(req: NextRequest) {
       async start(controller) {
         let sentAnything = false;
         try {
-          claudeStream.on("text", (delta: string) => {
+          // A generator now, not one Anthropic stream: a single customer message
+          // can become several model calls with lookups between them, and this
+          // side neither knows nor cares how many. Text arrives in order.
+          for await (const delta of replyStream) {
             sentAnything = true;
             controller.enqueue(encoder.encode(delta));
-          });
-          await claudeStream.finalMessage();
+          }
           controller.close();
         } catch (err) {
           // The status line has already gone out, so erroring the stream just

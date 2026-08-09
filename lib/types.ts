@@ -41,6 +41,17 @@ export interface Product {
    * storefront query too.
    */
   video_youtube_id?: string | null;
+  /**
+   * Brand knowledge — heritage, craft and care, written by hand (migration
+   * 0051). Customer-facing, but NOT on the storefront listing query: three
+   * paragraphs per product on every category page, for text only the product
+   * page and the concierge read, is weight those routes were deliberately
+   * stripped of. The admin editor fetches them; the product page and Ask Wovenne
+   * read them through getBrandKnowledge, one piece at a time.
+   */
+  heritage_note?: string | null;
+  craft_note?: string | null;
+  care_note?: string | null;
   category_id: string | null;
   // Derived from the joined categories row (name/slug) — not stored on products.
   // Kept so display code can show the category name without a second lookup.
