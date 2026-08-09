@@ -13,6 +13,7 @@ import {
   Settings,
   Scroll,
   Sheet,
+  Store,
   ShoppingBag,
   Upload,
   Star,
@@ -127,6 +128,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: "/admin/dashboard/marketing",
     blurb: "Send wishlist, low-stock and basket emails",
     icon: Mail,
+  },
+  {
+    id: "manual-order",
+    label: "Record a sale",
+    href: "/admin/dashboard/manual-order",
+    blurb: "An order taken in person, with a real invoice",
+    icon: Store,
   },
   {
     id: "invoices",
