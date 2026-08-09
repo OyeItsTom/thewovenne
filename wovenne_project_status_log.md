@@ -1099,8 +1099,8 @@ customers. All three had changed by this morning; this is the state now.
 
 | | |
 |---|---|
-| Orders | **1** — the 14:26 one, needing a decision |
-| Credit notes | 0 |
+| Orders | **1** — the 14:26 one, cancelled and credited |
+| Credit notes | **1** — `CN-2026-0008` |
 | Customer accounts | 4 |
 | Consented customers | 4 |
 | Admins | 3 |
@@ -1115,11 +1115,10 @@ customers. All three had changed by this morning; this is the state now.
 **No `sale` movement exists anywhere**, which is the same fact as "no order has
 ever taken stock". The 14:26 order is paid and has none.
 
-The credit note sequence sits at 5 with no credit notes in the table: `CN-2026-0001`
-to `0005` were consumed by verification transactions that were rolled back, and a
-sequence does not roll back with them. Harmless — the series only promises it does
-not reuse a number — but worth knowing before someone asks why the first real
-credit note is not `0001`.
+The first real credit note is **`CN-2026-0008`**, not `0001`: numbers 1 to 7 were
+consumed by verification transactions that were rolled back, and a sequence does
+not roll back with them. Harmless — the series only ever promises not to reuse a
+number — but worth knowing before someone asks where the first seven went.
 
 ---
 
