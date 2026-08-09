@@ -6,6 +6,14 @@ import InvoiceDocument from "@/components/invoice/InvoiceDocument";
 import { buildInvoice, INVOICE_SELECT } from "@/lib/invoice";
 import { sendEmail } from "@/lib/email";
 import { OFFLINE_METHODS, type PaymentMethod } from "@/lib/paymentMethods";
+import {
+  findShortages,
+  shortageMessage,
+  validateCustomer,
+  validateLines,
+  type Availability,
+  type SellableProduct,
+} from "@/lib/manualOrder";
 
 /**
  * An order taken in person.
@@ -25,6 +33,16 @@ import { OFFLINE_METHODS, type PaymentMethod } from "@/lib/paymentMethods";
  * WHAT IS NOT OVERRIDABLE is cost. COGS is snapshotted from the catalogue, so
  * a generous discount shows up as thin margin in the P&L rather than quietly
  * rewriting what the piece cost to make.
+ *
+ * STOCK IS CHECKED BEFORE THE ORDER IS WRITTEN, and this is a change. It used
+ * to record the sale, watch reserve_stock refuse it, flag the order and carry
+ * on — which is right for an online payment, where the money has already left
+ * the customer's account and refusing to record it would lose the order. In
+ * person it is the wrong way round: the operator is holding the piece and can
+ * look at the shelf, and the far more likely reading of "no stock" is a size
+ * left unchosen or a count nobody has updated. So a shortage stops the sale and
+ * says which line is short; recording it anyway is still available, but it is
+ * now a decision someone made rather than a message they read afterwards.
  */
 export const runtime = "nodejs";
 
@@ -44,6 +62,12 @@ interface ManualOrderRequest {
   paymentMethod: PaymentMethod;
   note?: string;
   shippingCostInr?: number;
+  /**
+   * "The shelf and the count disagree, and the shelf is right." Set only by an
+   * operator who has been shown exactly what is short and has said to record it
+   * regardless. Never a default, and never inferred.
+   */
+  allowShort?: boolean;
 }
 
 export async function POST(request: NextRequest) {
@@ -59,13 +83,17 @@ export async function POST(request: NextRequest) {
   if (!OFFLINE_METHODS.some((m) => m.id === body.paymentMethod)) {
     return NextResponse.json({ error: "Choose how it was paid for." }, { status: 400 });
   }
-  for (const item of body.items) {
-    if (!item.productId || !Number.isInteger(item.quantity) || item.quantity < 1) {
-      return NextResponse.json({ error: "Every line needs a whole quantity of at least one." }, { status: 400 });
-    }
-    if (!Number.isFinite(item.priceInr) || item.priceInr < 0) {
-      return NextResponse.json({ error: "Every line needs a price of zero or more." }, { status: 400 });
-    }
+
+  // Same rules the form applies, applied again here. The form's copy exists so
+  // the operator is told while the customer is still standing there; this one is
+  // what actually decides, because a form is not an authority on anything.
+  const customerProblem = validateCustomer({
+    name: body.customerName ?? "",
+    email: body.customerEmail ?? "",
+    phone: body.customerPhone ?? "",
+  });
+  if (customerProblem) {
+    return NextResponse.json({ error: customerProblem }, { status: 400 });
   }
 
   // Service role from here: reserve_stock and assign_invoice_number are
@@ -89,6 +117,86 @@ export async function POST(request: NextRequest) {
   );
   if (byId.size !== ids.length) {
     return NextResponse.json({ error: "One of those products no longer exists." }, { status: 400 });
+  }
+
+  // What is on the shelf, read the same way reserve_stock reads it: per size
+  // where a product has sizes, and from the PUBLISHED version's own count where
+  // it has none. Reading products.stock_quantity instead would look right and
+  // answer a different question — that column is not the one a sale decrements.
+  const [{ data: sizeRows }, { data: versionRows }] = await Promise.all([
+    db
+      .from("product_sizes")
+      .select("product_id, label, stock_quantity")
+      .in("product_id", ids)
+      .order("sort_order"),
+    db
+      .from("product_versions")
+      .select("product_id, stock_quantity")
+      .in("product_id", ids)
+      .eq("state", "published"),
+  ]);
+
+  const sizes = ((sizeRows ?? []) as unknown as {
+    product_id: string;
+    label: string;
+    stock_quantity: number | string;
+  }[]);
+
+  const sizesByProduct = new Map<string, string[]>();
+  for (const row of sizes) {
+    sizesByProduct.set(row.product_id, [
+      ...(sizesByProduct.get(row.product_id) ?? []),
+      row.label,
+    ]);
+  }
+
+  const catalogue: SellableProduct[] = ids.map((id) => ({
+    id,
+    name: String(byId.get(id)!.name),
+    sizes: sizesByProduct.get(id) ?? [],
+  }));
+
+  const availability: Availability[] = [
+    ...sizes.map((row) => ({
+      productId: row.product_id,
+      size: row.label,
+      available: Number(row.stock_quantity ?? 0),
+    })),
+    // Only for products with no size rows — where a product has both, the size
+    // rows are the truth and the version count is a leftover.
+    ...((versionRows ?? []) as unknown as { product_id: string; stock_quantity: number | string }[])
+      .filter((row) => !sizesByProduct.has(row.product_id))
+      .map((row) => ({
+        productId: row.product_id,
+        size: "",
+        available: Number(row.stock_quantity ?? 0),
+      })),
+  ];
+
+  const lines = body.items.map((i) => ({
+    productId: i.productId,
+    size: i.size ?? "",
+    quantity: i.quantity,
+    priceInr: i.priceInr,
+  }));
+
+  const lineProblem = validateLines(lines, catalogue);
+  if (lineProblem) {
+    return NextResponse.json({ error: lineProblem }, { status: 400 });
+  }
+
+  const shortages = findShortages(lines, catalogue, availability);
+  if (shortages.length > 0 && body.allowShort !== true) {
+    // 409, not 400: nothing about the request is malformed. The shelf and the
+    // count disagree, and which of them is right is not ours to decide from
+    // here — so it goes back to the person who can see both.
+    return NextResponse.json(
+      {
+        error: `Not enough stock — ${shortageMessage(shortages)}.`,
+        shortages,
+      },
+      { status: 409 }
+    );
   }
 
   const items = body.items.map((i) => {
@@ -148,9 +256,17 @@ export async function POST(request: NextRequest) {
     p_order_id: orderId,
   });
   if (stockError) {
-    // The sale already happened — refusing to record it because our count is
-    // short would lose the order rather than fix the shelf. Flagged instead,
-    // exactly as the online path does.
+    // Reaching here now means one of two things: the operator was shown the
+    // shortage and chose to record the sale anyway, or the count moved between
+    // the check above and this call. Either way the sale has happened, so it is
+    // recorded and flagged rather than refused.
+    //
+    // NOTHING IS DECREMENTED, INCLUDING THE LINES THAT WERE IN STOCK.
+    // reserve_stock is one call and one transaction, and per-line calls would
+    // be worse than this: 0045 returns stock on cancellation only when a 'sale'
+    // movement exists for the order, so an order that had reserved SOME of its
+    // lines would be credited back in full and invent the difference. The
+    // counts are corrected by hand instead, which 0039 logs.
     console.error(`Manual order ${orderId}: stock not reserved — ${stockError.message}`);
     await db.from("orders").update({ needs_review: true }).eq("id", orderId);
   }

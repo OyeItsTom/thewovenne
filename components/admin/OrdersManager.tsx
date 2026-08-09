@@ -26,11 +26,48 @@ import { paymentMethodLabel } from "@/lib/paymentMethods";
  * already are; this records the outcome. The API integration can replace the
  * typing later without changing what is stored.
  */
+/**
+ * Which orders are on screen.
+ *
+ * CANCELLED IS ITS OWN VIEW AND IS NOT IN ANY OTHER. It used to sit in one long
+ * list among the live ones, struck through and easy to miss — and a cancelled
+ * order looks exactly like work still to do until you read the pill. It is not
+ * hidden: every view carries its count, so nothing appears to have vanished.
+ */
+type Filter = "open" | "delivered" | "cancelled" | "attention" | "all";
+
+const FILTER_LABEL: Record<Filter, string> = {
+  open: "To fulfil",
+  delivered: "Delivered",
+  cancelled: "Cancelled",
+  attention: "Needs attention",
+  all: "All",
+};
+
+const OPEN_STATUSES: OrderStatus[] = ["placed", "confirmed", "shipped"];
+
+function matches(order: Order, filter: Filter): boolean {
+  switch (filter) {
+    case "open":
+      return OPEN_STATUSES.includes(order.status);
+    case "delivered":
+      return order.status === "delivered";
+    case "cancelled":
+      return order.status === "cancelled";
+    case "attention":
+      return order.needs_review;
+    case "all":
+      return true;
+  }
+}
+
 export default function OrdersManager() {
   const [orders, setOrders] = useState<Order[] | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>("open");
 
   const load = useCallback(async () => {
     setOrders(await getAllOrders(getBrowserSupabase()));
@@ -43,32 +80,50 @@ export default function OrdersManager() {
   /**
    * Cancel, which is never an edit of the invoice.
    *
-   * One RPC, because a cancellation is four things that must all happen or
-   * none: credit note, stock back, status, timestamp. The original invoice is
-   * untouched — a credit note is the only correct way to undo one.
+   * THROUGH A ROUTE RATHER THAN THE RPC DIRECTLY, and the difference is the
+   * customer. cancel_order() does everything the books need — credit note,
+   * stock back, status, timestamp, all or none — and nothing the customer
+   * needs; a browser cannot send email, so the call moved server-side and the
+   * cancellation email goes out where the cancellation happens.
    */
   async function cancel(order: Order) {
     const reason = window.prompt(
-      `Cancel order ${orderRef(order.id)}?\n\nThis issues a CREDIT NOTE against invoice ${order.invoice_number ?? "(none)"} and returns the stock. The invoice itself is never changed or deleted.\n\nReason (optional):`
+      `Cancel order ${orderRef(order.id)}?\n\nThis issues a CREDIT NOTE against invoice ${order.invoice_number ?? "(none)"}, returns the stock, and emails the customer with the credit note attached. The invoice itself is never changed or deleted.\n\nReason (shown to the customer, optional):`
     );
     if (reason === null) return;
 
     setBusy(order.id);
     setError(null);
-    const { data, error: rpcError } = await getBrowserSupabase().rpc("cancel_order", {
-      p_order_id: order.id,
-      p_reason: reason || null,
-    });
-    setBusy(null);
-    if (rpcError) return setError(rpcError.message);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/admin/orders/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: order.id, reason: reason || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Could not cancel that order.");
 
-    const result = data as { credit_note?: { credit_note_number?: string }; stock_note?: string | null };
-    // Surfaced rather than logged: an order whose stock never came out is
-    // unusual, and the admin should be told rather than left to notice.
-    if (result?.stock_note) {
-      setError(`${result.credit_note?.credit_note_number ?? "Credit note"} issued. ${result.stock_note}`);
+      // Every part of the outcome is said out loud. Stock that could not be
+      // returned, and a customer who was not told, are both things an admin
+      // should be handed rather than left to notice.
+      setNotice(
+        [
+          `${data.creditNoteNumber ?? "Credit note"} issued.`,
+          data.stockNote ?? (data.stockReturned ? "Stock returned." : null),
+          data.emailed
+            ? "The customer has been emailed the credit note."
+            : `The customer was NOT emailed — ${data.emailProblem ?? "no reason given"}`,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not cancel that order.");
+    } finally {
+      setBusy(null);
+      await load();
     }
-    await load();
   }
 
   async function patch(order: Order, changes: Partial<Order>) {
@@ -93,6 +148,11 @@ export default function OrdersManager() {
       changes.shipped_at = new Date().toISOString();
     if (status === "delivered" && !order.delivered_at)
       changes.delivered_at = new Date().toISOString();
+    // Only ever an unpaid order by the time this runs — a paid one goes through
+    // cancel() and its credit note. Stamped here as well as by 0049's trigger so
+    // the column is right whether or not that migration has been applied yet.
+    if (status === "cancelled" && !order.cancelled_at)
+      changes.cancelled_at = new Date().toISOString();
     return patch(order, changes);
   }
 
@@ -111,12 +171,22 @@ export default function OrdersManager() {
   }
 
   const flagged = orders.filter((o) => o.needs_review).length;
+  const counts = Object.fromEntries(
+    (Object.keys(FILTER_LABEL) as Filter[]).map((f) => [
+      f,
+      orders.filter((o) => matches(o, f)).length,
+    ])
+  ) as Record<Filter, number>;
+  const shown = orders.filter((o) => matches(o, filter));
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h2 className="font-heading text-2xl text-ink">
-          {orders.length} order{orders.length === 1 ? "" : "s"}
+          {/* Says which view is on screen, rather than a count that would look
+              like the whole shop's order book. */}
+          {shown.length} {FILTER_LABEL[filter].toLowerCase()}
+          {filter === "all" ? "" : ` · ${orders.length} in total`}
         </h2>
         <button
           onClick={load}
@@ -124,6 +194,26 @@ export default function OrdersManager() {
         >
           <RefreshCw className="h-3.5 w-3.5" /> Refresh
         </button>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {(Object.keys(FILTER_LABEL) as Filter[]).map((f) => {
+          const active = f === filter;
+          return (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              aria-pressed={active}
+              className={
+                active
+                  ? "rounded-full bg-ink px-4 py-1.5 text-xs text-cream"
+                  : "rounded-full border border-ink/15 px-4 py-1.5 text-xs text-ink/70 transition-colors hover:border-ink/40"
+              }
+            >
+              {FILTER_LABEL[f]} ({counts[f]})
+            </button>
+          );
+        })}
       </div>
 
       {flagged > 0 && (
@@ -141,7 +231,17 @@ export default function OrdersManager() {
         </p>
       )}
 
-      {orders.map((order) => {
+      {notice && (
+        <p className="rounded-lg bg-linen px-4 py-3 text-sm text-ink">{notice}</p>
+      )}
+
+      {shown.length === 0 && (
+        <p className="rounded-2xl border border-ink/10 bg-linen/40 p-8 text-center text-sm text-ink/60">
+          Nothing under {FILTER_LABEL[filter].toLowerCase()}.
+        </p>
+      )}
+
+      {shown.map((order) => {
         const open = openId === order.id;
         const working = busy === order.id;
         const goods = order.total_inr - order.shipping_cost_inr;
@@ -273,7 +373,8 @@ export default function OrdersManager() {
                 />
 
                 {/* Paid and not already cancelled. An unpaid order has nothing
-                    to credit, and a cancelled one is already done. */}
+                    to credit — it is cancelled outright in the controls above —
+                    and a cancelled one is already done. */}
                 {order.payment_status === "paid" && order.status !== "cancelled" && (
                   <div className="mt-4 border-t border-ink/10 pt-4">
                     <button
@@ -285,11 +386,27 @@ export default function OrdersManager() {
                     </button>
                     <p className="mt-1.5 text-xs text-ink/50">
                       Issues a credit note against{" "}
-                      {order.invoice_number ?? "this order"} and returns the
-                      stock. The invoice itself is never changed or deleted.
+                      {order.invoice_number ?? "this order"}, returns the stock,
+                      and emails the customer with the credit note attached. The
+                      invoice itself is never changed or deleted.
                       {" "}Paid by {paymentMethodLabel(order.payment_method)}.
                     </p>
                   </div>
+                )}
+
+                {order.status === "cancelled" && (
+                  <p className="mt-4 border-t border-ink/10 pt-4 text-xs text-ink/50">
+                    Cancelled
+                    {order.cancelled_at
+                      ? ` on ${new Date(order.cancelled_at).toLocaleDateString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}`
+                      : ""}
+                    . The credit note is listed against this order under
+                    Invoices, and the original invoice still stands as issued.
+                  </p>
                 )}
               </div>
             )}
@@ -419,16 +536,35 @@ function StatusControls({
             </button>
           )}
 
-          {!cancelled && (
+          {/* UNPAID ONLY, and this is the fix for a real hole rather than a
+              tidy-up. This button set status = 'cancelled' with a plain UPDATE.
+              On a paid order that produced the exact state credit notes exist to
+              prevent: no credit note, so the P&L still counted the revenue; no
+              stock returned; no cancelled_at; and an invoice left standing for
+              money being given back. It sat directly above the correct control,
+              looked like the obvious one, and was one click.
+
+              A paid order now goes through "Cancel & issue credit note" below,
+              and 0049 refuses the plain UPDATE in the database so removing the
+              button is not the only thing standing between the two. */}
+          {!cancelled && order.payment_status !== "paid" && (
             <button
               onClick={() => onAdvance("cancelled")}
               disabled={busy}
               className="text-xs text-terracotta-dark hover:underline disabled:opacity-40"
             >
-              Cancel this order
+              Cancel this unpaid order
             </button>
           )}
         </div>
+
+        {!cancelled && order.payment_status === "paid" && (
+          <p className="mt-2 text-xs text-ink/50">
+            To cancel this order, use &ldquo;Cancel &amp; issue credit note&rdquo;
+            below. It is paid, so undoing it means issuing a credit note — the
+            invoice cannot be edited away.
+          </p>
+        )}
 
         {next === "shipped" && !awb.trim() && (
           <p className="mt-2 text-xs text-ink/50">

@@ -31,6 +31,8 @@ interface InvoiceRow {
 }
 
 interface CreditNote {
+  /** Needed for the download — a credit note is fetched by id, not by number. */
+  id: string;
   credit_note_number: string;
   order_id: string | null;
   amount_inr: number;
@@ -74,7 +76,7 @@ export default function InvoiceManager() {
     // Separate query, and a failure here is not fatal — see the header.
     const { data: cn, error: cnError } = await client
       .from("credit_notes")
-      .select("credit_note_number, order_id, amount_inr, kind, issued_at");
+      .select("id, credit_note_number, order_id, amount_inr, kind, issued_at");
     if (cnError) {
       setCreditNotesAvailable(false);
       return;
@@ -217,10 +219,17 @@ export default function InvoiceManager() {
                       {credits.length === 0 ? (
                         <span className="text-ink/35">—</span>
                       ) : (
+                        // Downloadable, like the invoice it credits. A customer
+                        // asking for one is asking for a document, and the pair
+                        // is only useful together.
                         credits.map((c) => (
-                          <span key={c.credit_note_number} className="block">
+                          <a
+                            key={c.id}
+                            href={`/api/credit-note/${c.id}`}
+                            className="block hover:text-terracotta"
+                          >
                             {c.credit_note_number} · −{formatINR(Number(c.amount_inr))}
-                          </span>
+                          </a>
                         ))
                       )}
                     </td>

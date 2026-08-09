@@ -1,6 +1,12 @@
 # THE WOVENNE — project status log
 
-Last updated: 9 August 2026 (sixth session)
+Last updated: 9 August 2026 (seventh session)
+
+> **Read the seventh-session section at the bottom first.** The shop took its
+> first ever order today, through the in-person screen, and three of the bugs
+> fixed in that section all fired on it. One order in the database is still in a
+> state that needs a decision from you — it is described under "The first real
+> order, and what happened to it".
 
 ---
 
@@ -834,8 +840,175 @@ shipping anything.
 
 ---
 
+## Seventh session — the in-person order and cancellation fixes
+
+Two PRs, split by urgency: what could put the books wrong, then what makes the
+screen usable.
+
+### The first real order, and what happened to it — NEEDS A DECISION
+
+At **14:26 today** an order was recorded through the in-person screen. It is the
+**first order this shop has ever had**, and it exercised three of the bugs below
+at once. It is still in the database, and putting it right is a call for the
+owner rather than something to do quietly:
+
+| | |
+|---|---|
+| Invoice | `WOV-2026-0005`, ₹182,289 |
+| Recorded | 2 lines — `001` size M × 4, `Dress 1` × 111 |
+| Stock taken | **none at all**, for either line |
+| Status | `cancelled` |
+| Credit note | **none** |
+| `cancelled_at` | **null** |
+
+What happened, in order:
+
+1. **`Dress 1` × 111 was sold against 8 in stock.** `reserve_stock` is one call
+   and one transaction, so the whole reservation was refused — **including the
+   `001` line, which had 9 in stock and was perfectly sellable**. The order was
+   written anyway and flagged, which is what the old code did on purpose.
+2. **The review flag was then cleared**, which is what that button is for — but
+   the stock was still never taken.
+3. **It was cancelled with the old "Cancel this order" button**, which set the
+   status and nothing else. So there is no credit note, `cancelled_at` is null,
+   and the P&L still counts ₹182,289 of revenue and ₹210,900 of cost against a
+   sale that is marked cancelled and was never dispatched.
+
+**Nothing has been changed about this order.** The correct repair is to set it
+back to `confirmed` and cancel it properly, which issues a credit note for the
+full amount, leaves the invoice standing, and stamps the date — and correctly
+returns **no** stock, because none ever came out. That takes two clicks once this
+is merged, and the P&L then reads net zero for it. Deleting the row instead would
+mean deleting an issued invoice, which this shop's whole numbering scheme exists
+to prevent. Say which and it is done.
+
+### The bypass button — REMOVED, and refused by the database
+
+`StatusControls` kept a **"Cancel this order"** button from before credit notes
+existed. It ran a plain `UPDATE ... set status = 'cancelled'`, which admins are
+allowed to run because they are allowed to move an order along. It sat directly
+above the correct control, looked like the obvious one, and was one click — and
+it is what cancelled the order above.
+
+It is now shown **only for unpaid orders**, where there is no invoice and no money
+and therefore nothing to credit.
+
+**Removing the button is half the fix.** The `UPDATE` is still available to
+anything holding an admin session, and "we removed the button" lasts until the
+next screen is written. Migration **`0049`** refuses it in the database: a paid
+order cannot enter `cancelled` unless a credit note exists against it. It also
+stamps `cancelled_at`, so that column is right whichever path did the cancelling.
+
+`0049` is **applied and verified** — 21 assertions inside a transaction that was
+rolled back, with the guard itself created and dropped inside it, so the rule was
+exercised against the real database before being added to it. A plain UPDATE is
+refused with a message naming what to use instead; dispatch details still save
+and status still moves forward, so the guard did not turn Orders into a read-only
+page; `cancel_order()` still works and stamps everything; an unpaid order is
+still cancellable by hand.
+
+The verification also **found the broken order above** — its first version
+asserted the orders table was empty afterwards, which had been true until this
+morning. The assertion now reads a baseline first, because a test that assumes an
+empty database reports a fault in the shop instead of one in itself.
+
+Files: `supabase/migrations/0049_cancel_needs_a_credit_note.sql` ·
+`scripts/cancel-guard.verify.mjs` · `components/admin/OrdersManager.tsx`
+
+### The cancellation email — IT DID NOT EXIST
+
+Cancelling issued a credit note, put the stock back, marked the order — and told
+the customer **nothing**. They had already had a confirmation and an invoice; the
+next thing they would have known about it is a parcel that never came, or a
+refund appearing with no explanation.
+
+The call moved from the browser to `/api/admin/orders/cancel`, because email
+cannot be sent from a browser. It uses the **admin's own session, not the service
+key**: `cancel_order()` is gated on `is_admin()` and stamps `issued_by` from
+`auth.uid()`, and with the service key that is null.
+
+- **The credit note is now a document**, rendered like the invoice and attached to
+  the email. `CreditNoteDocument` deliberately shares the invoice's typesetting —
+  a customer holding both should be in no doubt they came from the same shop.
+- **It is downloadable** from the admin invoice list and from the customer's own
+  Orders page, because an email is easy to lose. Authorised by RLS rather than by
+  a hand-written check, exactly as the invoice route is.
+- **The email never says "you have been refunded"**, and `STATUS_BLURB` no longer
+  says it either. A credit note records what is owed; the money moves in Razorpay
+  or in cash and nothing here can see it land. An in-person sale is told plainly
+  that someone will be in touch, because there is no gateway payment to reverse.
+- **The email failing is never fatal.** By the time it is attempted the
+  cancellation has happened; failing the request would say it had not, and a
+  second press would be refused as already-cancelled. The outcome is reported on
+  screen instead — including "the customer was NOT emailed", said out loud.
+
+Verified by rendering the document and **looking at it**, which is how the missing
+rupee glyph was found last session: `scripts/credit-note-preview.ts`. Also
+rendered for an anonymised order with no item snapshot, which is what a deletion
+request (`0033`) leaves behind.
+
+### Cancelled orders had nowhere to go — FILTERED
+
+Orders was one long list. A cancelled order sat among the live ones, struck
+through, looking exactly like work still to do until you read the pill. There are
+now five views — **To fulfil, Delivered, Cancelled, Needs attention, All** —
+opening on To fulfil, each carrying its own count so nothing appears to have
+vanished, and the heading says which one is on screen.
+
+### Stock enforcement on in-person sales — NOW CHECKED FIRST
+
+The old flow recorded the sale, watched `reserve_stock` refuse it, flagged the
+order and carried on. That is right for an online payment: the money has already
+left the customer's account, and refusing to record it would lose the order
+rather than fix the shelf.
+
+**In person it is the wrong way round.** The operator is holding the piece and can
+look at the shelf, and the far likelier reading of "no stock" is a size left
+unchosen or a count nobody has updated — which is exactly what happened at 14:26.
+
+Availability is now read **before the order is written**, the same way
+`reserve_stock` reads it: per size where a product has sizes, from the published
+version's own count where it has none. `products.stock_quantity` looks like the
+right column and is not the one a sale decrements.
+
+- Quantities are **summed per product and size first**. Two lines of the same size
+  can each sit inside the count and be over it together, and a per-line check
+  would wave that through — then the whole order is refused at the till.
+- A product with **no count on record reads as none**, not as unlimited. That is
+  the direction that avoids overselling.
+- **Recording it anyway is still possible**, and is now a decision rather than a
+  message read afterwards: the shortage is named, and a checkbox has to be ticked
+  before the sale submits. The order is then flagged, and the screen says plainly
+  that **no** stock came off — for any line, not just the short one.
+- **Per-line reservation was considered and rejected.** `0045` returns stock on
+  cancellation only where a `sale` movement exists, so an order that reserved
+  some of its lines would be credited back in full and invent the difference.
+
+### Mandatory fields — A NAME, A CONTACT, AND A REAL SIZE
+
+- **Name** was optional while being printed on the invoice.
+- **Email or phone**, one of the two. Neither means no way to reach someone about
+  a return, and a stall is the one moment they are standing in front of you.
+  Either will do, so nobody is made to hand over an address they would rather not.
+- **A size, where the product has sizes.** The form offered "One Size" as the
+  default for every product including sized ones, and nothing refused it —
+  `reserve_stock` looks a size row up by label, so a sized piece sold as "One
+  Size" matched nothing and the sale was recorded as if the shelf were empty.
+
+The rules live in `lib/manualOrder.ts` as pure functions and run in **both** the
+form and the route: the form's copy exists so the operator finds out while the
+customer is still there, the route's copy is what decides. **39 assertions**,
+headless, `npx tsx scripts/manual-order.test.ts` — including the two-lines-of-one-size
+case and the "One Size" one that fired this morning.
+
+PR #97
+
+---
+
 ## Outstanding, owner action
 
+- **The 14:26 order** — decide how it is put right; see the seventh-session
+  section. Nothing has been changed about it
 - **Razorpay test purchase** — above
 - **Admin save check, signed in** — Products, Categories, Journal and Pages save
   through `is_admin()`-gated RPCs that cannot be reached without an admin

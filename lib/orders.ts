@@ -48,7 +48,12 @@ export const STATUS_BLURB: Record<OrderStatus, string> = {
   confirmed: "Payment confirmed. We're preparing your order for dispatch.",
   shipped: "On its way. Track it with the number below.",
   delivered: "Delivered. We hope you love it.",
-  cancelled: "This order was cancelled. Any payment has been refunded.",
+  // NOT "has been refunded". A cancellation issues a credit note, which records
+  // what is owed; the refund itself is made in Razorpay or in cash and nothing
+  // here can see it land. Telling someone their money is back when it may not be
+  // is the one sentence on this page they would remember.
+  cancelled:
+    "This order was cancelled and nothing will be sent. A credit note has been issued and your refund follows the way you paid.",
 };
 
 export interface OrderItem {
