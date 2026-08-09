@@ -4,12 +4,14 @@ import { effectivePrice } from "@/lib/pricing";
 import ImageGallery from "@/components/product/ImageGallery";
 import ProductOptions from "@/components/product/ProductOptions";
 import CareAccordion from "@/components/product/CareAccordion";
+import BrandKnowledgePanel from "@/components/product/BrandKnowledgePanel";
 import ProductVideo from "@/components/product/ProductVideo";
 import ProductGrid from "@/components/shop/ProductGrid";
 import WishlistButton from "@/components/shop/WishlistButton";
 import ProductReviews from "@/components/product/ProductReviews";
 import Stars from "@/components/product/Stars";
 import { getReviews, getRating } from "@/lib/reviews";
+import { getBrandKnowledge } from "@/lib/storefront";
 import { cPath } from "@/lib/country";
 import type { Product } from "@/lib/types";
 import type { ProductSize } from "@/lib/sizes";
@@ -38,9 +40,17 @@ export default async function ProductDetail({
   breadcrumb?: { parent: { slug: string; name: string }; child: { slug: string; name: string } };
 }) {
   const { price, wasPrice } = effectivePrice(product);
-  const [reviews, rating] = await Promise.all([
+  // Fetched HERE for the same reason reviews are: both routes render this file,
+  // and a read done in one route and not the other is how two pages start
+  // showing different things about one product.
+  //
+  // A query of its own rather than a column on the listing payload — see
+  // getBrandKnowledge. One extra read on the one page that shows it, instead of
+  // three paragraphs per product on every category page.
+  const [reviews, rating, knowledge] = await Promise.all([
     getReviews(product.id),
     getRating(product.id),
+    getBrandKnowledge({ productId: product.id }),
   ]);
 
   return (
@@ -114,7 +124,10 @@ export default async function ProductDetail({
             <ProductOptions product={product} sizes={sizes} />
           </div>
 
-          <CareAccordion fabric={product.fabric} />
+          {/* The written care note takes precedence over the fabric-generic
+              advice — a piece somebody has written care instructions for should
+              not be described by a lookup table. */}
+          <CareAccordion fabric={product.fabric} careNote={knowledge?.care ?? null} />
         </div>
       </div>
 
@@ -124,6 +137,8 @@ export default async function ProductDetail({
       {product.video_youtube_id && (
         <ProductVideo videoId={product.video_youtube_id} productName={product.name} />
       )}
+
+      <BrandKnowledgePanel knowledge={knowledge} productName={product.name} />
 
       {related.length > 0 && (
         <div className="mt-24">

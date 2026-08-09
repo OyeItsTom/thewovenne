@@ -50,10 +50,13 @@ export async function POST(req: NextRequest) {
   if (!parsed) return NextResponse.json({ ok: true });
 
   try {
-    const stream = await streamChat(parsed.messages);
-    const reply = (await stream.finalMessage()).content
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .join("");
+    // WhatsApp has no streaming to speak of, so the same generator the widget
+    // renders live is simply concatenated here. Both channels therefore run the
+    // identical tool loop — the whole reason this core is shared.
+    let reply = "";
+    for await (const delta of streamChat(parsed.messages)) {
+      reply += delta;
+    }
 
     // TODO(whatsapp): send `reply` back to `parsed.from` via the provider's API.
     await sendReply(parsed.from, reply);

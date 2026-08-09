@@ -1122,6 +1122,172 @@ number — but worth knowing before someone asks where the first seven went.
 
 ---
 
+## Ask Wovenne knows what it is selling — PR #99
+
+The concierge used to be told the catalogue and then trusted to remember it. It
+now looks things up: four read-only tools, and a per-product field holding the
+part of the story a price and a fabric name cannot carry.
+
+**This is an upgrade to the existing design, not a new one.** Three of the four
+tools wrap read helpers that already existed — `searchProducts` from `/search`,
+`getProductBySlug`, `getProductSizes` — which is why they inherit the property
+that matters: they read PUBLISHED versions inside `getVisibleCategoryIds()`, so a
+hidden category cannot be reached by asking the concierge nicely.
+
+### Brand knowledge — migration `0051`, applied and verified
+
+Three hand-written fields per product: **heritage** (the tradition, the region),
+**craft** (loom, technique, what makes this piece distinctive), **care** (how to
+wash, dry, store this piece). Three columns rather than one JSONB blob — each is
+separately diffable in the publish queue and can be handed to the concierge as a
+named field instead of a shape it has to parse.
+
+They live on `product_versions`, so they inherit draft/publish for free: written,
+previewable on the real product page, published with the rest of an edit.
+
+**Both carry-through points are named, and the migration asserts it.** A
+`product_versions` column reaches `products` by two separate explicit routes — the
+column list inside `ensure_product_draft`, and `0038`'s publish trigger. `0037`
+missed both with `hsn_code`; `0046` documented the trap. `0051` re-declares both
+functions and its verify block fails if either stops mentioning all three columns.
+
+**13 assertions** in a rolled-back transaction (`scripts/brand-knowledge.verify.mjs`),
+including the two that matter: publishing copies all three onto `products`, and a
+draft forked from that published version still carries them.
+
+**Nothing is generated and nothing is backfilled.** All four products read null,
+which is true — nobody has written them up yet. The concierge is told to say so
+rather than improvise, and the tests assert that instruction is present.
+
+### The bug this turned up: every product edit was wiping its cost price
+
+`getAdminProducts` fetched `cost_price_inr` and `sku`, and `mapProduct` — which
+builds its result field by field — never copied either. `Product` declares both
+optional, so nothing type-checked wrong. The cost price therefore arrived in the
+product editor as `undefined`, rendered as an empty box, and **the form saves what
+it shows**: opening a product to fix a typo in its description silently un-costed
+it, and the P&L then read that piece as pure margin.
+
+It is the same failure as #94's missing video, one layer over, and it would have
+happened to brand knowledge too — the new fields load by exactly the same route.
+
+Fixed with a second mapper, `mapAdminProduct`, kept OUT of `mapProduct` on
+purpose: that one is the storefront allow-list, and what a piece costs us must not
+ride a public page payload even as a null.
+`scripts/product-mapping.test.ts` now covers the admin columns as well — **46
+assertions**, including that `mapProduct` still refuses to carry cost or heritage.
+
+### On the product page, and in the admin
+
+- A **&ldquo;The story of this piece&rdquo;** section renders heritage and craft below the
+  video. A server component with no JavaScript — it is prose about cloth, there is
+  nothing to toggle. It renders nothing at all when both are empty: a heading with
+  no content reads as a shop that forgot, and a placeholder paragraph about
+  tradition nobody wrote would be worse than silence.
+- **The care note replaces the fabric-generic advice** in `CareAccordion` rather
+  than sitting beside it. Advice from a lookup table under advice from a person
+  invites the two to contradict each other, with no way for a customer to know
+  which to follow. The admin form says which one is in force as you type.
+- **Not added to `PRODUCT_SELECT`.** Three paragraphs per product on every category
+  page, for text only the product page and the concierge read, is the weight
+  #73–#76 spent four PRs removing. One extra query on the one page that shows it.
+
+### The four tools
+
+| Tool | Wraps | Notes |
+|---|---|---|
+| `search_products` | `lib/search.ts` | Same scorer as `/search`; returns the slugs the other tools take |
+| `get_product_details` | `getProductBySlug` + sizes | Says explicitly that heritage is elsewhere, so it looks it up instead of composing it |
+| `check_availability` | `getProductSizes` | **Per size, then the published version's count** — the way `reserve_stock` reads it |
+| `search_brand_knowledge` | `0051` + a new scorer | By slug, or across every piece's notes |
+
+`check_availability` deliberately does not read `products.stock_quantity`. That
+column looks like the right one and is not the one a sale decrements — quoting it
+would let the concierge promise a size the till then refuses. Same trap as #97.
+
+**Read-only structurally, not by convention.** Every executor uses `ANON_CTX` —
+the anonymous client, under RLS. Not "we didn't write an UPDATE": the client it
+holds cannot write and cannot see a hidden category, so neither can the
+concierge. No SQL is generated anywhere; tools take typed parameters and build
+PostgREST queries. The one privileged read in the chat path (an order, matched on
+exact id **and** email, service key) stays in `lib/chat.ts` and is **not** a tool —
+the model must not be able to decide to go looking for orders. The test asserts
+`lib/chatTools.ts` contains no service client and no writer at all.
+
+### The loop, and one model setting that mattered
+
+`streamChat` yields text now instead of returning one Anthropic stream: a single
+customer message becomes several model calls with lookups in between. The web
+route pipes it to the browser, the WhatsApp path concatenates it, and neither
+knows how many rounds happened — so both channels run the identical loop.
+
+**Thinking was disabled here for latency, and that is the wrong setting for a
+tool-using concierge:** on this model a thinking-off turn reaches for tools
+noticeably less, which is exactly the behaviour the tools exist to produce. It is
+adaptive thinking at **low** effort now. Thinking text is never forwarded.
+
+Bounded at four lookups; the final round is asked with tools switched **off**
+rather than simply cut off, so a customer who asked a question gets an answer
+built from what was gathered instead of silence. **20 assertions** drive the loop
+with a fake model (`scripts/chat-loop.test.ts`), covering the parts that fail
+silently: text from every round reaching the caller, the assistant's `tool_use`
+blocks being appended before the results, **all** results returning in ONE user
+message (splitting them teaches the model to stop asking in parallel), and
+termination.
+
+### Signed-in customers get a bigger allowance — the tier that did not exist
+
+The log has claimed a login tier for a while. There wasn't one: the cap was
+10 messages an hour for everybody, and a customer who had created an account,
+verified an email and bought something was limited exactly like a passing
+scraper. `SIGNED_IN_MESSAGE_LIMIT = 40` now applies, decided from the **session
+cookie server-side** — the browser cannot claim it by sending a user id, because
+nothing reads one — and keyed on the customer's own id rather than their address,
+so two customers behind one office NAT no longer eat each other's allowance.
+
+Not unlimited: an account costs an email address, so an uncapped signed-in tier is
+one signup away from an uncapped anonymous one.
+
+**One message still costs one message** whatever the concierge does next. A reply
+needing three lookups is three model calls and a single spend — the cap is on what
+the customer asked for, not on how hard the answer was to find.
+
+### Verified, and what is not
+
+- `0051` applied; **13** database assertions in a rolled-back transaction
+- **35** tool assertions against the real anonymous client
+  (`scripts/chat-tools.test.ts`) — every refusal path included
+- **20** loop assertions with a fake model (`scripts/chat-loop.test.ts`)
+- **46** mapping assertions, now covering the admin columns
+- typecheck, lint and build clean; `/in` still builds static
+
+**NOT VERIFIED: whether the live model actually reaches for the tools.** That is a
+property of the prompt and the model, not of the code, and it cannot be checked
+from here — `.env.local` holds the placeholder key, so the real one only exists in
+Vercel. `scripts/concierge-live.ts` exists for exactly this and prints which tools
+were called:
+
+```
+npx tsx scripts/concierge-live.ts "is this real handloom, and how do I wash it?"
+```
+
+Run it after any edit to the system prompt or a tool description. A change that
+reads like an improvement and quietly stops the lookups happening is the failure
+mode, and the script says `NO TOOLS WERE CALLED` when it happens.
+
+### Also worth knowing
+
+- **Latency and cost per message go up.** Each lookup is a round trip: expect
+  +1–3s on questions that need one, and 2–4 model calls where there was one.
+- **Order tracking is still unreachable in practice.** `lookupOrder` wants an
+  order id *and* an email and the widget sends neither. Now that the route reads
+  the session, passing that customer's verified email through is a one-line
+  change — deliberately not made here, since it was not asked for.
+
+PR #99
+
+---
+
 ## Outstanding, owner action
 
 - ~~**The 14:26 order**~~ — DONE, repaired at 18:12 with credit note
@@ -1140,6 +1306,13 @@ number — but worth knowing before someone asks where the first seven went.
 - **Loyalty** — switch on when ready; rates are editable
 - **Partners' first login** — `hello@` and `care@` still show `MFA: not enrolled`
 - **T&C wording** — `/policies` holds placeholder content; edit it in the admin
+- **Brand knowledge** — the three fields ship EMPTY on all four products. Until
+  you write them, Ask Wovenne is no better informed about heritage or care than it
+  was, and the product page shows no story section. This is the one item on this
+  list where the value arrives with your text rather than with a merge
+- **One live concierge run** — `npx tsx scripts/concierge-live.ts "…"` with a real
+  `ANTHROPIC_API_KEY` in `.env.local`, to confirm the model actually calls the
+  tools. Everything else about them is tested; that part cannot be
 - **Shiprocket API** — not built; dispatch is typed in by hand today. See the
   section above for what finishing it needs
 - **Customer addresses** — BUILT. `0035` stores one saved address per

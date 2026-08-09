@@ -13,7 +13,14 @@
  *
  *   npx tsx scripts/product-mapping.test.ts
  */
-import { PRODUCT_SELECT, mapProduct, type ProductVersionRow } from "../lib/products";
+import {
+  ADMIN_ONLY_SELECT,
+  PRODUCT_SELECT,
+  mapAdminProduct,
+  mapProduct,
+  type AdminProductRow,
+  type ProductVersionRow,
+} from "../lib/products";
 
 let pass = 0;
 let fail = 0;
@@ -63,6 +70,59 @@ const withoutVideo = mapProduct(
 ) as unknown as Record<string, unknown>;
 t("a product with no video maps to null, not undefined",
   withoutVideo.video_youtube_id === null, String(withoutVideo.video_youtube_id));
+
+// ── The admin path, which had the same bug and nobody was looking ──
+//
+// getAdminProducts asks for columns the storefront never does. It used to map
+// them with mapProduct, which drops them — so cost_price_inr arrived from the
+// database and reached the product editor as undefined. The editor showed an
+// empty box and, because it saves what it shows, wrote null back on the next
+// save: opening a product to fix a typo silently un-costed it.
+//
+// Same assertion as above, over the admin mapper and the admin columns.
+console.log(`\n=== ADMIN_ONLY_SELECT fetches ${ADMIN_ONLY_SELECT.split(",").length} more ===`);
+
+const adminColumns = ADMIN_ONLY_SELECT.split(",").map((c) => c.trim()).filter(Boolean);
+const adminRow = {
+  ...(row as unknown as Record<string, unknown>),
+  state: "draft",
+  pending_delete: false,
+  ...Object.fromEntries(adminColumns.map((c) => [c, `VALUE_${c}`])),
+} as unknown as AdminProductRow;
+
+const adminMapped = mapAdminProduct(adminRow, new Map()) as unknown as Record<string, unknown>;
+
+for (const column of adminColumns) {
+  const ok = adminMapped[column] === `VALUE_${column}`;
+  t(column, ok, ok ? "" : "FETCHED BUT DROPPED BY mapAdminProduct");
+}
+
+console.log("\n=== the admin mapper still carries the storefront columns ===");
+for (const column of columns) {
+  const key = RENAMED[column] ?? column;
+  t(`${column} survives mapAdminProduct`, key in adminMapped && adminMapped[key] !== undefined);
+}
+
+// Null must stay null here too, and for the same reason as the video: the editor
+// treats undefined and null identically on the way in, and then writes null on
+// the way out. That is how a real cost price gets erased by a save.
+const uncosted = mapAdminProduct(
+  { ...(adminRow as unknown as Record<string, unknown>), cost_price_inr: null } as unknown as AdminProductRow,
+  new Map()
+);
+t("an uncosted product maps to null, not undefined",
+  uncosted.cost_price_inr === null, String(uncosted.cost_price_inr));
+
+console.log("\n=== cost stays off the storefront ===");
+// The storefront mapper must NOT pick these up even when the row happens to
+// carry them: what a piece costs us has no business in a public page payload.
+const storefrontFromAdminRow = mapProduct(
+  adminRow as unknown as ProductVersionRow,
+  new Map()
+) as unknown as Record<string, unknown>;
+t("mapProduct does not copy cost_price_inr", storefrontFromAdminRow.cost_price_inr === undefined);
+t("mapProduct does not copy the brand knowledge", storefrontFromAdminRow.heritage_note === undefined,
+  "the product page reads it through getBrandKnowledge, one piece at a time");
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

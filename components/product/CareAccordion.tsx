@@ -45,8 +45,25 @@ const DEFAULT_CARE = [
   "Handcrafted — slight variations are natural, not flaws",
 ];
 
-export default function CareAccordion({ fabric }: { fabric: string | null }) {
+/**
+ * Material and care.
+ *
+ * TWO SOURCES, IN ORDER. `careNote` is what somebody wrote about THIS piece
+ * (migration 0051) and wins outright; the fabric table below is the fallback for
+ * pieces nobody has written up yet. They are never shown together — advice from
+ * a lookup table sitting under advice from a person invites the two to contradict
+ * each other, and the customer has no way to know which to follow.
+ */
+export default function CareAccordion({
+  fabric,
+  careNote = null,
+}: {
+  fabric: string | null;
+  /** Written per product in the admin. Takes precedence over the fabric table. */
+  careNote?: string | null;
+}) {
   const [open, setOpen] = useState(false);
+  const written = careNote?.trim() || null;
   const careLines = (fabric && CARE_BY_FABRIC[fabric]) || DEFAULT_CARE;
 
   return (
@@ -73,14 +90,25 @@ export default function CareAccordion({ fabric }: { fabric: string | null }) {
             transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
             className="overflow-hidden"
           >
-            <ul className="mt-4 space-y-2 pb-2 text-sm text-ink/70">
-              {fabric && (
-                <li className="font-medium text-ink">Fabric: {fabric}</li>
-              )}
-              {careLines.map((line) => (
-                <li key={line}>• {line}</li>
-              ))}
-            </ul>
+            {written ? (
+              <div className="mt-4 pb-2 text-sm text-ink/70">
+                {fabric && (
+                  <p className="font-medium text-ink">Fabric: {fabric}</p>
+                )}
+                {/* whitespace-pre-line so the paragraph breaks somebody typed
+                    survive, without running the text through a renderer. */}
+                <p className="mt-2 whitespace-pre-line leading-relaxed">{written}</p>
+              </div>
+            ) : (
+              <ul className="mt-4 space-y-2 pb-2 text-sm text-ink/70">
+                {fabric && (
+                  <li className="font-medium text-ink">Fabric: {fabric}</li>
+                )}
+                {careLines.map((line) => (
+                  <li key={line}>• {line}</li>
+                ))}
+              </ul>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

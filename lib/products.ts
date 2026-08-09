@@ -106,6 +106,55 @@ export function mapProduct(row: ProductVersionRow, categories: Map<string, Categ
   };
 }
 
+/**
+ * Columns the ADMIN asks for and the storefront never does.
+ *
+ * Named once, here, because the select string and the mapper below have to agree
+ * and there is no type that makes them — see mapAdminProduct.
+ */
+export const ADMIN_ONLY_SELECT =
+  "cost_price_inr, sku, heritage_note, craft_note, care_note";
+
+export type AdminProductRow = ProductVersionRow & {
+  state: string;
+  pending_delete: boolean;
+  cost_price_inr: number | null;
+  sku: string | null;
+  heritage_note: string | null;
+  craft_note: string | null;
+  care_note: string | null;
+};
+
+/**
+ * A product for an admin screen: everything the storefront sees, plus the
+ * columns only we see.
+ *
+ * THIS EXISTS BECAUSE mapProduct SILENTLY DROPPED THEM. getAdminProducts fetched
+ * cost_price_inr and sku, mapProduct built its result field by field and never
+ * copied either, and Product declares both optional so nothing type-checked
+ * wrong. The cost price therefore loaded as undefined into the product editor,
+ * showed as an empty box, and — because the form writes what it shows — SAVED
+ * BACK AS NULL. Opening a product to fix a typo in its description silently
+ * un-costed it, and the P&L would then read that piece as pure margin.
+ *
+ * Kept OUT of mapProduct rather than added to it: that mapper is the storefront
+ * allow-list, and what a piece costs us must not ride a public page payload
+ * even as a null. Two mappers, one of which is allowed to know more.
+ */
+export function mapAdminProduct(
+  row: AdminProductRow,
+  categories: Map<string, Category>
+): Product {
+  return {
+    ...mapProduct(row, categories),
+    cost_price_inr: row.cost_price_inr ?? null,
+    sku: row.sku ?? null,
+    heritage_note: row.heritage_note ?? null,
+    craft_note: row.craft_note ?? null,
+    care_note: row.care_note ?? null,
+  };
+}
+
 /** category id -> published category, for resolving display names. */
 async function categoryMap(client?: SupabaseClient, ctx?: ReadCtx) {
   const all = await getAllCategories(client, { drafts: ctx?.preview });
@@ -168,10 +217,7 @@ export async function getAdminProducts(
   const cats = await categoryMap(client);
   const { data, error } = await client
     .from("product_versions")
-    // cost_price_inr and sku are added HERE and never to PRODUCT_SELECT: this
-    // is the admin path, and the storefront must not carry what a piece costs
-    // us in its page payload.
-    .select(`${PRODUCT_SELECT}, state, pending_delete, cost_price_inr, sku`)
+    .select(`${PRODUCT_SELECT}, state, pending_delete, ${ADMIN_ONLY_SELECT}`)
     .in("state", ["published", "draft"])
     .order("created_at", { ascending: false });
 
@@ -182,9 +228,8 @@ export async function getAdminProducts(
 
   // A draft supersedes the published version of the same product, so the admin
   // always sees what it will look like once published.
-  const rows =
-    (data as unknown as (ProductVersionRow & { state: string; pending_delete: boolean })[]) ?? [];
-  const byProduct = new Map<string, (typeof rows)[number]>();
+  const rows = (data as unknown as AdminProductRow[]) ?? [];
+  const byProduct = new Map<string, AdminProductRow>();
   for (const row of rows) {
     const seen = byProduct.get(row.product_id);
     if (!seen || row.state === "draft") byProduct.set(row.product_id, row);
@@ -192,7 +237,7 @@ export async function getAdminProducts(
 
   // A product whose only draft deletes it is still live, so it stays listed —
   // marked, not hidden. Hiding it would make the pending deletion invisible.
-  return [...byProduct.values()].map((r) => mapProduct(r, cats));
+  return [...byProduct.values()].map((r) => mapAdminProduct(r, cats));
 }
 
 /** Product ids with unpublished changes — for "not yet live" markers. */
@@ -397,6 +442,126 @@ export async function getProductBySlug(
   // Not maybeSingle(): in preview a product with a draft matches twice, and
   // maybeSingle errors on more than one row.
   return finish(data, cats)[0] ?? null;
+}
+
+/**
+ * What we know about a piece beyond what sells it: where it comes from, how it
+ * was made, how to look after it. Migration 0051.
+ */
+export interface BrandKnowledge {
+  productId: string;
+  name: string;
+  slug: string;
+  heritage: string | null;
+  craft: string | null;
+  care: string | null;
+}
+
+/** The three columns, named once. Deliberately NOT part of PRODUCT_SELECT. */
+export const BRAND_KNOWLEDGE_SELECT =
+  "product_id, name, slug, heritage_note, craft_note, care_note";
+
+export type BrandKnowledgeRow = {
+  product_id: string;
+  name: string;
+  slug: string;
+  heritage_note: string | null;
+  craft_note: string | null;
+  care_note: string | null;
+};
+
+export function mapBrandKnowledge(row: BrandKnowledgeRow): BrandKnowledge {
+  return {
+    productId: row.product_id,
+    name: row.name,
+    slug: row.slug,
+    heritage: row.heritage_note,
+    craft: row.craft_note,
+    care: row.care_note,
+  };
+}
+
+/** True when nobody has written anything up yet — worth saying out loud. */
+export function hasBrandKnowledge(k: BrandKnowledge | null): boolean {
+  return Boolean(k && (k.heritage || k.craft || k.care));
+}
+
+/**
+ * Brand knowledge for one product, by slug or by stable product id.
+ *
+ * A QUERY OF ITS OWN, AND NOT IN PRODUCT_SELECT. Three paragraphs per product,
+ * on every listing payload, for text that only the product page and the
+ * concierge read, is exactly the weight #73–#76 spent four PRs taking off the
+ * category routes. The product page fetches it once, for the one piece it is
+ * showing; the concierge fetches it for the one piece it was asked about.
+ *
+ * Scoped to visible categories like every other public read here, so a hidden
+ * piece has no heritage the concierge can quote either.
+ *
+ * Returns null when the product does not exist or cannot be seen — distinct from
+ * a product that exists and has nothing written, which returns a row of nulls.
+ * The caller needs to tell those apart to answer honestly.
+ */
+export async function getBrandKnowledge(
+  ref: { slug?: string; productId?: string },
+  ctx: ReadCtx = ANON_CTX
+): Promise<BrandKnowledge | null> {
+  if (!ref.slug && !ref.productId) return null;
+
+  const visibleIds = await scopeToVisible(undefined, ctx);
+  if (visibleIds.length === 0) return null;
+
+  let query = ctx.client
+    .from("product_versions")
+    .select(ctx.preview ? `${BRAND_KNOWLEDGE_SELECT}, state` : BRAND_KNOWLEDGE_SELECT)
+    .in("state", statesFor(ctx))
+    .eq("is_active", true)
+    .in("category_id", visibleIds);
+
+  query = ref.slug ? query.eq("slug", ref.slug) : query.eq("product_id", ref.productId!);
+
+  const { data, error } = await query;
+  if (error) {
+    console.error("getBrandKnowledge:", error.message);
+    return null;
+  }
+
+  // Same reason getProductBySlug avoids maybeSingle: in preview a product with
+  // a draft matches twice, and the draft is the one to show.
+  const rows = (data as unknown as (BrandKnowledgeRow & { state?: string })[]) ?? [];
+  const row = preferDraft(rows, (r) => r.product_id)[0];
+  return row ? mapBrandKnowledge(row) : null;
+}
+
+/**
+ * Every piece that has been written up, for searching across them.
+ *
+ * Products with nothing written are dropped here rather than by the caller: a
+ * search over empty fields can only return noise, and "which pieces are kasavu"
+ * should not match a product whose notes are blank.
+ */
+export async function getAllBrandKnowledge(
+  ctx: ReadCtx = ANON_CTX
+): Promise<BrandKnowledge[]> {
+  const visibleIds = await scopeToVisible(undefined, ctx);
+  if (visibleIds.length === 0) return [];
+
+  const { data, error } = await ctx.client
+    .from("product_versions")
+    .select(ctx.preview ? `${BRAND_KNOWLEDGE_SELECT}, state` : BRAND_KNOWLEDGE_SELECT)
+    .in("state", statesFor(ctx))
+    .eq("is_active", true)
+    .in("category_id", visibleIds);
+
+  if (error) {
+    console.error("getAllBrandKnowledge:", error.message);
+    return [];
+  }
+
+  const rows = (data as unknown as (BrandKnowledgeRow & { state?: string })[]) ?? [];
+  return preferDraft(rows, (r) => r.product_id)
+    .map(mapBrandKnowledge)
+    .filter((k) => hasBrandKnowledge(k));
 }
 
 export async function getRelatedProducts(
