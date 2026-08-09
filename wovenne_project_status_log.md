@@ -1,13 +1,13 @@
 # THE WOVENNE — project status log
 
-Last updated: 6 August 2026 (fifth session)
+Last updated: 9 August 2026 (sixth session)
 
 ---
 
 ## Session summary
 
-Everything below is built, merged to `main`, and migrations `0024`–`0036` are
-applied to Supabase and verified.
+Everything below is built, merged to `main`. Migrations `0024`–`0041` are
+applied to Supabase and verified; `0042` is written and awaiting a run.
 
 **One thing is not verified end to end: a real payment.** See "The gap" at the
 bottom — it is the single largest remaining risk and it cannot be closed from
@@ -639,6 +639,109 @@ and build stayed clean, and none of them moved its route's bundle at all. Sentry
 was reviewed and deliberately left as is.
 
 Files: `wovenne_performance_baseline.md` · PRs #73, #74, #75, #76
+
+---
+
+## Sixth session — PRs #78–#89
+
+Twelve PRs, four migrations. The log had stopped at #77, which is why this
+section is long: nothing between the cart fix and the reporting system had been
+recorded anywhere but in commit messages.
+
+### The cart followed one customer to the next — FIXED, #78
+
+A signed-in customer who added items and logged out left their cart on the
+device for the next person. **Worse than it looked**: CartSync restores only
+into an empty cart, so a second customer signing in had their own cart NOT
+restored, and 1.5s later the sync wrote the FIRST customer's items into the
+SECOND customer's row. A cross-account write, not just a disclosure.
+
+The cart now carries an `ownerId` and the rule lives in `lib/cartOwner.ts` as a
+pure function with 14 assertions. Two bugs surfaced in testing that read
+perfectly correctly: the first version cleared guest carts on every page load,
+and the flush of already-deployed carts used `migrate`, which zustand never
+calls when the stored blob has no numeric version — so it missed every cart it
+existed to clear.
+
+### Six customer-facing account bugs — #79
+
+Error above the email field, a duplicate eye icon that turned out to be the
+BROWSER's own reveal control, "code expired" for a code that was merely wrong
+(Supabase sends one message for both), the reset link landing on the homepage,
+Save address doing nothing, and login landing on the wishlist.
+
+The reset link was a regression from #69: `redirectTo` was unprefixed, and the
+allow-list rejected it so Supabase fell back to the Site URL. Save address was
+TWO bugs — the settings page read the address from the last ORDER while the
+panel wrote it to `profiles.default_address`, and the write could not tell a
+blocked update from a real one.
+
+### Preview mode leaked to customers — #80
+
+Next's draft cookie is independent of the Supabase session, so an admin who
+previewed and logged out left a browser still claiming to preview. Preview is
+DERIVED now: the cookie says what was asked for, `is_admin()` says whether it
+is still allowed. `/in` still builds static, so #74's caching is intact.
+
+### Coupons and invoices — #81, #82, migration `0037`
+
+Coupons are applied server-side in the Razorpay route from the priced subtotal.
+`redeem_coupon()` moves the counter in one guarded UPDATE and is claimed on
+PAYMENT, not checkout-start, so abandoned modals cannot burn a launch code.
+Loyalty accrual needed no change: `0029` already earns on the captured total.
+
+Invoices are a gapless `WOV-YYYY-NNNN` sequence assigned once at paid;
+`assign_invoice_number()` is idempotent. The PDF renders ON DEMAND from the
+order's own snapshot. **The rupee sign does not exist in PDF's built-in fonts** —
+it printed as a stray mark, found by rendering the document and looking at it,
+so amounts read "INR 8,900".
+
+### The reporting system — #83–#89, migrations `0038`–`0041`
+
+Built in six PRs, organised by what CANNOT be reconstructed later.
+
+`0038` captures cost snapshotted per order line, actual courier cost, Razorpay
+gateway fees, and stock movements — `product_sizes` had never been audited, so
+nothing recorded stock MOVING, only its current value. Three things would have
+broken it: `create or replace` with a new parameter OVERLOADS rather than
+replaces (checkout would have failed on the next payment), a changed return type
+cannot be replaced in place, and the carry-through trap had ALREADY fired —
+`0037` added `hsn_code` to products and versions but to neither publish path.
+
+`0039` made cost hand-editable with a live margin readout and logged manual
+stock edits, which had been invisible. It also fixed a latent data-loss bug:
+`saveProductSizes` deleted every size row then re-inserted, so a failed insert
+would have left a product with no sizes and no stock.
+
+`0040` added expenses, audited, with the double-counting rule written into the
+migration, the table comment AND the form: per-order courier cost is
+authoritative, and the shipping CATEGORY is only for spend not attributable to
+one order.
+
+`0041` is the P&L. Discounts are reported, never subtracted — `total_inr` is
+already net of them. It leads with what it cannot know, because a missing cost
+cannot be subtracted and therefore every gap makes the shop look MORE
+profitable. Verified against seeded data whose answer was computed
+independently: revenue 5,000, gross 3,000, net 1,732.
+
+#87 and #88 added Excel exports across seven datasets with a column picker and
+the financial-year bundle. PostgREST returns numerics as STRINGS, so without
+coercion every money column would have landed as text and every SUM returned
+zero — 17 assertions against a real written-and-reloaded workbook.
+
+#89 added imports with templates, a validation preview and nothing written until
+approved. A blank cell means "leave alone", never "set to zero".
+
+### What is still not exercised
+
+**No order has ever been placed.** Invoice numbering, coupon redemption, loyalty
+accrual, cost snapshotting, gateway-fee capture and stock movements have each
+been verified in isolation and have never run together. The Razorpay test
+purchase remains the single largest gap, as it has been since session four.
+
+**Credit notes do not exist.** Returns & Refunds was scoped in detail and
+deferred. Anything depending on it — cancelling an order, a P&L that reflects
+cancellations — is unbuilt.
 
 ---
 
