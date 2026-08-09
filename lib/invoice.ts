@@ -1,3 +1,5 @@
+import { orderRef } from "./orders";
+
 /**
  * Invoice data, shaped from an order row.
  *
@@ -102,8 +104,14 @@ export function buildInvoice(order: OrderRowLike): InvoiceData | null {
   return {
     invoiceNumber: order.invoice_number,
     issuedAt: order.invoice_issued_at ?? order.created_at,
-    // The Razorpay id is the reference a customer or a bank would quote.
-    orderReference: order.razorpay_order_id ?? order.id,
+    // The Razorpay id is the reference a customer or a bank would quote, so an
+    // online order still prints that. AN IN-PERSON ORDER HAS NONE, and the
+    // fallback used to be the raw uuid — which printed
+    // "a53c16f7-b5d3-48e5-b825-ed84aa335d59", wrapped onto two lines, and
+    // matched nothing else the customer had ever been shown. Their email, their
+    // order page and the admin all use the short reference, so the document that
+    // goes into their records should quote the same thing.
+    orderReference: order.razorpay_order_id ?? orderRef(order.id),
     orderDate: order.created_at,
     customer: {
       name: order.customer_name ?? "",

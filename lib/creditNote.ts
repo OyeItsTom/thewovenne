@@ -1,4 +1,5 @@
 import type { InvoiceLine } from "./invoice";
+import { orderRef } from "./orders";
 
 /**
  * A credit note, shaped from its own row plus the order it reverses.
@@ -91,9 +92,18 @@ export function buildCreditNote(
     reason: note.reason,
     amount: Number(note.amount_inr ?? 0),
     invoiceNumber: note.invoice_number,
+    // The short reference for an in-person order, for the reason given in
+    // buildInvoice: the raw uuid matched nothing the customer had been shown.
+    //
     // An anonymised order (0033) leaves the note able to name the invoice but
-    // not the person, which is the intended outcome of a deletion request.
-    orderReference: order?.razorpay_order_id ?? order?.id ?? note.order_id ?? "—",
+    // not the person, which is the intended outcome of a deletion request — and
+    // a note whose order row is gone entirely still has its own order_id to
+    // quote.
+    orderReference:
+      order?.razorpay_order_id ??
+      (order?.id ? orderRef(order.id) : null) ??
+      (note.order_id ? orderRef(note.order_id) : null) ??
+      "—",
     orderDate: order?.created_at ?? null,
     customer: {
       name: order?.customer_name ?? "",

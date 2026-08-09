@@ -4,9 +4,10 @@ Last updated: 9 August 2026 (seventh session)
 
 > **Read the seventh-session section at the bottom first.** The shop took its
 > first ever order today, through the in-person screen, and three of the bugs
-> fixed in that section all fired on it. One order in the database is still in a
-> state that needs a decision from you — it is described under "The first real
-> order, and what happened to it".
+> fixed in that section all fired on it. It has since been repaired — credit note
+> `CN-2026-0008` — and the story is under "The first real order, and what
+> happened to it", because it is the clearest description of what those bugs
+> actually did.
 
 ---
 
@@ -845,7 +846,7 @@ shipping anything.
 Two PRs, split by urgency: what could put the books wrong, then what makes the
 screen usable.
 
-### The first real order, and what happened to it — NEEDS A DECISION
+### The first real order, and what happened to it — SINCE REPAIRED
 
 At **14:26 today** an order was recorded through the in-person screen. It is the
 **first order this shop has ever had**, and it exercised three of the bugs below
@@ -874,13 +875,40 @@ What happened, in order:
    and the P&L still counts ₹182,289 of revenue and ₹210,900 of cost against a
    sale that is marked cancelled and was never dispatched.
 
-**Nothing has been changed about this order.** The correct repair is to set it
-back to `confirmed` and cancel it properly, which issues a credit note for the
-full amount, leaves the invoice standing, and stamps the date — and correctly
-returns **no** stock, because none ever came out. That takes two clicks once this
-is merged, and the P&L then reads net zero for it. Deleting the row instead would
-mean deleting an issued invoice, which this shop's whole numbering scheme exists
-to prevent. Say which and it is done.
+**Repaired the same evening, on the owner's instruction**, at **18:12**: set back
+to `confirmed`, then cancelled through `cancel_order()` — the same function the
+new button calls. Deleting the row was the alternative and was rejected, because
+it would have meant deleting an issued invoice, which this shop's whole numbering
+scheme exists to prevent.
+
+| | |
+|---|---|
+| Credit note | `CN-2026-0008`, ₹182,289, against `WOV-2026-0005` |
+| Stock returned | **no** — correctly, there was no `sale` movement to reverse |
+| `cancelled_at` | stamped |
+| Invoice | unchanged, as issued |
+| August P&L | gross revenue 182,289, credits 182,289 → **net revenue 0**, COGS fully reversed, **net profit 0** |
+
+`stock_returned: false` is the guard from `0045` doing exactly what it was built
+for: `Dress 1` is still 8 and `001` M is still 9, rather than 119 and 13.
+
+**The cancellation email was then sent to that order's address** — the customer
+address on it is the owner's own, so this was also the first real run of the email
+and the attachment. `CN-2026-0008.pdf` rendered at 41,758 bytes and Resend
+accepted it (`007bf24e-28a2-45cc-9937-a806c50a4f3e`). It went through
+`buildCreditNote`, `CreditNoteDocument`, the `orderCancelled` templates and
+`sendEmail` — the production path for everything that shapes and sends the
+message. Only the reading differed: the route reads through PostgREST with the
+admin's session, and there was no browser session to borrow here.
+
+**It found one thing worth fixing, by looking at the document that was sent.** An
+in-person order has no Razorpay id, and both document builders fell back to the
+raw uuid — so the credit note printed
+`a53c16f7-b5d3-48e5-b825-ed84aa335d59`, wrapped over two lines, where the
+customer's email, their order page and the admin all say `A53C16F7`. Two
+documents about one order quoting two different references is the kind of thing
+that gets queried. The fallback is now the short reference; an online order still
+prints the Razorpay id, because that is what a bank would quote.
 
 ### The bypass button — REMOVED, and refused by the database
 
@@ -1007,9 +1035,10 @@ PR #97
 
 ## Outstanding, owner action
 
-- **The 14:26 order** — decide how it is put right; see the seventh-session
-  section. Nothing has been changed about it
-- **Razorpay test purchase** — above
+- ~~**The 14:26 order**~~ — DONE, repaired at 18:12 with credit note
+  `CN-2026-0008` and the cancellation email sent. See the seventh-session section
+- **Razorpay test purchase** — above. Still the largest gap, and now the only
+  path in the shop that has never run: the in-person one has
 - **Admin save check, signed in** — Products, Categories, Journal and Pages save
   through `is_admin()`-gated RPCs that cannot be reached without an admin
   session, so they were reasoned about rather than tested. One save in each,
