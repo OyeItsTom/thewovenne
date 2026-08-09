@@ -68,6 +68,12 @@ interface ManualOrderRequest {
    * regardless. Never a default, and never inferred.
    */
   allowShort?: boolean;
+  /**
+   * The customer said yes to marketing email, out loud, while this sale was
+   * being taken. Only ever true because a box was ticked — see 0050 for what it
+   * does and does not promise.
+   */
+  marketingConsent?: boolean;
 }
 
 export async function POST(request: NextRequest) {
@@ -278,6 +284,36 @@ export async function POST(request: NextRequest) {
     console.error(`Manual order ${orderId}: no invoice number — ${invoiceError.message}`);
   }
 
+  // ── Consent, if it was given ───────────────────
+  // Through the ADMIN'S SESSION, not the service client: 0050's function is
+  // gated on is_admin(), and it is the one place that knows both what to stamp
+  // on the order and whether an account exists to carry it to. Recording this
+  // from here with two updates would be two chances to record half of it.
+  //
+  // A failure is never fatal. The sale is already taken and the invoice already
+  // issued; losing the order over a consent flag would be the wrong trade. It
+  // comes back as false, and the screen says consent was not recorded rather
+  // than quietly claiming it was.
+  let consent: { recorded: boolean; reachable: boolean } = {
+    recorded: false,
+    reachable: false,
+  };
+  if (body.marketingConsent === true && body.customerEmail?.trim()) {
+    const { data: consentResult, error: consentError } = await session.rpc(
+      "record_in_person_consent",
+      { p_order_id: orderId }
+    );
+    if (consentError) {
+      console.error(`Manual order ${orderId}: consent not recorded — ${consentError.message}`);
+    } else {
+      const row = consentResult as { recorded?: boolean; reachable?: boolean } | null;
+      consent = {
+        recorded: row?.recorded === true,
+        reachable: row?.reachable === true,
+      };
+    }
+  }
+
   // Emailed only if there is somewhere to send it. A market stall customer who
   // did not give an address still gets a recorded sale and an invoice on file.
   let emailed = false;
@@ -325,5 +361,10 @@ export async function POST(request: NextRequest) {
     total: (finished as { total_inr?: number } | null)?.total_inr ?? goods + shipping,
     emailed,
     stockShort: Boolean(stockError),
+    consentRecorded: consent.recorded,
+    // Reported separately from "recorded" on purpose: a consent that reaches
+    // nobody is still worth having on file, and the screen should be able to say
+    // which of the two happened.
+    consentReachable: consent.reachable,
   });
 }
