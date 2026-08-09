@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
   const kind = importKindById(String(form.get("kind") ?? ""));
   if (!kind) return NextResponse.json({ error: "Unknown import" }, { status: 400 });
 
-  if (mode === "template") return template(kind);
+  if (mode === "template") return template(kind, supabase);
 
   const file = form.get("file");
   if (!(file instanceof File)) {
@@ -95,11 +95,63 @@ function preview(kind: ImportKind, rows: ParsedRow[]) {
   };
 }
 
-/** A blank workbook with the right headers and one example row. */
-async function template(kind: ImportKind) {
+/**
+ * Dropdown values, read from the database at the moment the template is built.
+ *
+ * NOT A HARDCODED LIST ANYWHERE. Add a sub-category in the admin and the very
+ * next download offers it — there is no second place to update, so the template
+ * cannot drift out of step with the catalogue.
+ */
+async function optionValues(supabase: Client): Promise<Record<string, string[]>> {
+  const { data: cats } = await supabase
+    .from("categories")
+    .select("id, name, parent_id, is_visible")
+    .order("sort_order");
+
+  const rows = ((cats ?? []) as unknown as Record<string, unknown>[]).map((c) => ({
+    id: String(c.id),
+    name: String(c.name),
+    parent: c.parent_id ? String(c.parent_id) : null,
+  }));
+  const byId = new Map(rows.map((r) => [r.id, r]));
+
+  // "Women → Sarees" as one flat list rather than two dependent dropdowns.
+  // Dependent lists need INDIRECT and defined names, which Excel honours and
+  // Google Sheets and Numbers do not — and a template is opened in whichever of
+  // those the person happens to have. A qualified label is unambiguous in all
+  // three.
+  const categories = rows
+    .filter((r) => r.parent !== null)
+    .map((r) => `${byId.get(r.parent!)?.name ?? "?"} → ${r.name}`)
+    .sort();
+
+  // Colour and material are free text in the schema, so the "list" is whatever
+  // has actually been used. Offered as a suggestion, never a restriction.
+  const { data: products } = await supabase
+    .from("products")
+    .select("colour, fabric");
+  const distinct = (key: string) =>
+    [
+      ...new Set(
+        ((products ?? []) as unknown as Record<string, unknown>[])
+          .map((p) => (p[key] ? String(p[key]).trim() : ""))
+          .filter(Boolean)
+      ),
+    ].sort();
+
+  return {
+    categories,
+    colours: distinct("colour"),
+    fabrics: distinct("fabric"),
+  };
+}
+
+/** A blank workbook with the right headers, live dropdowns and one example row. */
+async function template(kind: ImportKind, supabase: Client) {
   const wb = new ExcelJS.Workbook();
   wb.creator = "THE WOVENNE";
   const sheet = wb.addWorksheet(kind.label.slice(0, 31));
+  const options = await optionValues(supabase);
 
   sheet.columns = kind.fields.map((f) => ({
     header: f.header,
@@ -120,6 +172,32 @@ async function template(kind: ImportKind) {
   note.font = { italic: true, color: { argb: "FFA85D3F" } };
 
   sheet.views = [{ state: "frozen", ySplit: 1 }];
+
+  // Dropdowns, applied down the column rather than to one cell, so they still
+  // work when the admin pastes or drags a hundred rows in.
+  kind.fields.forEach((field, index) => {
+    if (!field.options) return;
+    const values = options[field.options.source] ?? [];
+    if (values.length === 0) return;
+
+    const letter = sheet.getColumn(index + 1).letter;
+    for (let row = 2; row <= 500; row++) {
+      sheet.getCell(`${letter}${row}`).dataValidation = {
+        type: "list",
+        allowBlank: !field.required,
+        // Inline rather than a range on a hidden sheet: a range needs a defined
+        // name to survive a round trip through Sheets or Numbers, and an inline
+        // list survives all three unchanged.
+        formulae: [`"${values.join(",").replace(/"/g, "")}"`],
+        // "suggest" offers the list and still accepts something new — colour
+        // and material are free text, and a closed list would refuse a fabric
+        // the shop has genuinely started using.
+        showErrorMessage: field.options.mode === "strict",
+        errorTitle: "Not one of the options",
+        error: `Pick a ${field.header.toLowerCase()} from the list.`,
+      };
+    }
+  });
 
   const buffer = await wb.xlsx.writeBuffer();
   return new NextResponse(buffer as unknown as BodyInit, {
@@ -207,13 +285,86 @@ async function resolveActions(
   kind: ImportKind,
   rows: ParsedRow[]
 ): Promise<ParsedRow[]> {
-  if (kind.id === "products") return resolveProducts(supabase, rows);
+  if (kind.id === "products_new") return resolveNewProducts(supabase, rows);
+  if (kind.id === "products_update") return resolveProductUpdates(supabase, rows);
   if (kind.id === "courier_costs") return resolveCourier(supabase, rows);
   if (kind.id === "expenses") return resolveExpenses(rows);
   return rows;
 }
 
-async function resolveProducts(supabase: Client, rows: ParsedRow[]): Promise<ParsedRow[]> {
+/**
+ * Every row creates a product. SKUs are generated HERE, not typed in Excel.
+ *
+ * A spreadsheet cannot check uniqueness against a live database while someone
+ * types, so a hand-written SKU is a collision discovered at upload — after the
+ * work is done. Generated from the name through sku_from_slug(), the same
+ * function the database uses when a product is published, then made unique
+ * against what actually exists AND against the rest of this file.
+ */
+async function resolveNewProducts(supabase: Client, rows: ParsedRow[]): Promise<ParsedRow[]> {
+  const { data: existing } = await supabase.from("products").select("sku, slug");
+  const takenSkus = new Set<string>();
+  const takenSlugs = new Set<string>();
+  for (const p of ((existing ?? []) as unknown as Record<string, unknown>[])) {
+    if (p.sku) takenSkus.add(String(p.sku).toUpperCase());
+    if (p.slug) takenSlugs.add(String(p.slug).toLowerCase());
+  }
+
+  const { data: cats } = await supabase
+    .from("categories")
+    .select("id, name, parent_id");
+  const catRows = ((cats ?? []) as unknown as Record<string, unknown>[]).map((c) => ({
+    id: String(c.id),
+    name: String(c.name),
+    parent: c.parent_id ? String(c.parent_id) : null,
+  }));
+  const byId = new Map(catRows.map((c) => [c.id, c]));
+  // Matched on the same "Parent → Child" label the dropdown offers, loosely
+  // enough to survive an arrow the admin retyped as a hyphen.
+  const labelKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const catByLabel = new Map(
+    catRows
+      .filter((c) => c.parent)
+      .map((c) => [labelKey(`${byId.get(c.parent!)?.name ?? ""}${c.name}`), c.id])
+  );
+
+  for (const row of rows) {
+    const name = String(row.values.name ?? "").trim();
+    const label = String(row.values.category ?? "").trim();
+
+    const categoryId = catByLabel.get(labelKey(label));
+    if (!categoryId) {
+      row.errors.push(`"${label}" is not one of the categories — use the dropdown in the template`);
+    } else {
+      row.values.__category_id = categoryId;
+    }
+
+    // sku_from_slug's own rule, mirrored: uppercase, non-alphanumerics to
+    // hyphens. Kept identical so an imported SKU looks like every other one.
+    const base = name.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "");
+    if (!base) {
+      row.errors.push("Name has no letters or numbers to build a SKU from");
+      continue;
+    }
+
+    let sku = base;
+    let n = 2;
+    while (takenSkus.has(sku) || takenSlugs.has(sku.toLowerCase())) {
+      sku = `${base}-${n++}`;
+    }
+    takenSkus.add(sku);
+    takenSlugs.add(sku.toLowerCase());
+
+    row.values.sku = sku;
+    row.values.__slug = sku.toLowerCase();
+    row.action = "create";
+    row.summary = `New draft: ${name} · ${label} · SKU ${sku}`;
+  }
+  return rows;
+}
+
+/** Updates only. This template never creates anything. */
+async function resolveProductUpdates(supabase: Client, rows: ParsedRow[]): Promise<ParsedRow[]> {
   const skus = rows.map((r) => String(r.values.sku ?? "").toUpperCase()).filter(Boolean);
   const { data } = await supabase
     .from("products")
@@ -223,25 +374,11 @@ async function resolveProducts(supabase: Client, rows: ParsedRow[]): Promise<Par
     ((data ?? []) as unknown as Record<string, unknown>[]).map((p) => [String(p.sku), p])
   );
 
-  // Slugs of everything already in the catalogue. A new product's slug is
-  // derived from its SKU, and a collision would raise mid-commit — AFTER
-  // earlier rows had already been written, which is the partial application
-  // this import is otherwise careful to avoid. Caught at validation instead,
-  // where it is one clear message and nothing has been written.
-  const { data: slugRows } = await supabase.from("products").select("slug");
-  const takenSlugs = new Set(
-    ((slugRows ?? []) as unknown as Record<string, unknown>[]).map((p) =>
-      String(p.slug).toLowerCase()
-    )
-  );
-
   const seen = new Set<string>();
   for (const row of rows) {
     const sku = String(row.values.sku ?? "").toUpperCase();
     row.values.sku = sku;
 
-    // The same SKU twice in one file: the second would overwrite the first and
-    // only one of them is what the admin meant.
     if (seen.has(sku)) {
       row.errors.push(`SKU ${sku} appears more than once in this file`);
       continue;
@@ -249,39 +386,32 @@ async function resolveProducts(supabase: Client, rows: ParsedRow[]): Promise<Par
     seen.add(sku);
 
     const match = existing.get(sku);
-    if (match) {
-      row.action = "update";
-      const changes: string[] = [];
-      for (const [key, label] of [
-        ["cost_price_inr", "cost"],
-        ["price_inr", "price"],
-        ["stock_quantity", "stock"],
-      ] as const) {
-        const next = row.values[key];
-        if (next === null) continue;
-        const before = match[key] === null ? "not set" : String(Number(match[key]));
-        if (String(next) !== before) changes.push(`${label} ${before} → ${next}`);
-      }
-      if (row.values.hsn_code !== null) changes.push(`HSN → ${row.values.hsn_code}`);
-      row.summary = changes.length
-        ? `${match.name}: ${changes.join(", ")}`
-        : `${match.name}: nothing to change`;
-      if (changes.length === 0) row.action = "skip";
-    } else {
-      row.action = "create";
-      if (!row.values.name) {
-        row.errors.push(`SKU ${sku} is new, so it needs a Name`);
-      }
-      if (row.values.price_inr === null) {
-        row.errors.push(`SKU ${sku} is new, so it needs a Selling price`);
-      }
-      if (takenSlugs.has(sku.toLowerCase())) {
-        row.errors.push(
-          `SKU ${sku} would clash with an existing product's web address — change the SKU`
-        );
-      }
-      row.summary = `New draft: ${row.values.name ?? "(unnamed)"}`;
+    if (!match) {
+      // Never falls through to creating one. A typo'd SKU silently becoming a
+      // new product is how a catalogue grows duplicates nobody ordered.
+      row.errors.push(`No product with SKU ${sku} — this template only updates`);
+      continue;
     }
+
+    row.action = "update";
+    const changes: string[] = [];
+    for (const [key, label] of [
+      ["cost_price_inr", "cost"],
+      ["price_inr", "price"],
+      ["stock_quantity", "stock"],
+    ] as const) {
+      const next = row.values[key];
+      if (next === null) continue;
+      const before = match[key] === null ? "not set" : String(Number(match[key]));
+      if (String(next) !== before) changes.push(`${label} ${before} → ${next}`);
+    }
+    for (const key of ["fabric", "colour", "hsn_code"] as const) {
+      if (row.values[key] !== null) changes.push(`${key} → ${row.values[key]}`);
+    }
+    row.summary = changes.length
+      ? `${match.name}: ${changes.join(", ")}`
+      : `${match.name}: nothing to change`;
+    if (changes.length === 0) row.action = "skip";
   }
   return rows;
 }
@@ -369,7 +499,7 @@ async function commit(supabase: Client, kind: ImportKind, rows: ParsedRow[]): Pr
     return applied;
   }
 
-  if (kind.id === "products") {
+  if (kind.id === "products_new" || kind.id === "products_update") {
     let applied = 0;
     for (const r of doing) {
       // Every product write goes through the draft machinery, exactly as the
@@ -397,12 +527,13 @@ async function commit(supabase: Client, kind: ImportKind, rows: ParsedRow[]): Pr
       // Only the fields the file actually filled in. A blank cell leaves the
       // draft's existing value alone — see lib/imports.ts.
       const patch: Record<string, unknown> = {};
-      for (const key of ["name", "price_inr", "cost_price_inr", "stock_quantity", "hsn_code"]) {
+      for (const key of ["name", "price_inr", "cost_price_inr", "stock_quantity", "hsn_code", "fabric", "colour"]) {
         if (r.values[key] !== null && r.values[key] !== undefined) patch[key] = r.values[key];
       }
       if (r.action === "create") {
         patch.sku = r.values.sku;
-        patch.slug = String(r.values.sku).toLowerCase();
+        patch.slug = r.values.__slug;
+        patch.category_id = r.values.__category_id;
       }
       if (Object.keys(patch).length === 0) continue;
 

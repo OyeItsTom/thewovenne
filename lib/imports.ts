@@ -21,6 +21,17 @@ export interface ImportField {
   /** Shown in the example row, and in the picker's help text. */
   example: string;
   hint?: string;
+  /**
+   * Where this column's dropdown values come from, resolved from the database
+   * when the template is BUILT — never a hardcoded list. Add a category in the
+   * admin and the next download offers it, with nothing to update here.
+   *
+   * "strict" refuses anything not on the list. "suggest" offers the list and
+   * still accepts a new value, which is right for colour and material: those
+   * are free text in the schema and a closed list would make the template
+   * refuse a genuinely new fabric.
+   */
+  options?: { source: "categories" | "colours" | "fabrics"; mode: "strict" | "suggest" };
 }
 
 export interface ImportKind {
@@ -36,18 +47,42 @@ export interface ImportKind {
 
 export const IMPORT_KINDS: ImportKind[] = [
   {
-    id: "products",
-    label: "Products",
-    blurb: "Update prices, costs and stock in bulk, or add new pieces",
+    id: "products_new",
+    label: "New products",
+    blurb: "Add pieces in bulk. SKUs are generated for you.",
+    matchOn: "Nothing — every row creates a new product",
+    // NO SKU COLUMN, deliberately. A spreadsheet cannot check uniqueness against
+    // a live database while someone types, so a hand-written SKU is a collision
+    // waiting to be discovered at upload — after the work is done. They are
+    // generated server-side from the name, through the same sku_from_slug() the
+    // rest of the system uses, and checked against what actually exists.
+    safety:
+      "Every row creates a NEW product as a DRAFT. SKUs and web addresses are generated for you. Nothing reaches the shop until you add photographs and publish it.",
+    fields: [
+      { key: "name", header: "Name", type: "text", required: true, example: "Kerala Kasavu Saree" },
+      { key: "category", header: "Category", type: "text", required: true, example: "Women → Sarees", hint: "Choose from the dropdown", options: { source: "categories", mode: "strict" } },
+      { key: "price_inr", header: "Selling price", type: "money", required: true, example: "4500" },
+      { key: "cost_price_inr", header: "Cost price", type: "money", required: false, example: "1900" },
+      { key: "stock_quantity", header: "Stock", type: "number", required: false, example: "8" },
+      { key: "fabric", header: "Material", type: "text", required: false, example: "Handloom Cotton", options: { source: "fabrics", mode: "suggest" } },
+      { key: "colour", header: "Colour", type: "text", required: false, example: "Off-white", options: { source: "colours", mode: "suggest" } },
+      { key: "hsn_code", header: "HSN code", type: "text", required: false, example: "" },
+    ],
+  },
+  {
+    id: "products_update",
+    label: "Update existing products",
+    blurb: "Change prices, costs and stock on products you already have",
     matchOn: "SKU",
     safety:
-      "Matched on SKU. A row whose SKU exists updates that product; a row with a new SKU creates one. Everything lands as a DRAFT and appears in Review & Publish — nothing reaches the shop until you publish it.",
+      "Matched on SKU, which must already exist — this template never creates anything. Export Products first to get a file with the real SKUs in it. Changes land as DRAFTS and appear in Review & Publish.",
     fields: [
-      { key: "sku", header: "SKU", type: "text", required: true, example: "KASAVU-SAREE-01", hint: "Matched against existing products" },
-      { key: "name", header: "Name", type: "text", required: false, example: "Kerala Kasavu Saree", hint: "Required only for a new product" },
-      { key: "cost_price_inr", header: "Cost price", type: "money", required: false, example: "1900" },
+      { key: "sku", header: "SKU", type: "text", required: true, example: "KASAVU-SAREE-01", hint: "Must match an existing product" },
       { key: "price_inr", header: "Selling price", type: "money", required: false, example: "4500" },
+      { key: "cost_price_inr", header: "Cost price", type: "money", required: false, example: "1900" },
       { key: "stock_quantity", header: "Stock", type: "number", required: false, example: "8" },
+      { key: "fabric", header: "Material", type: "text", required: false, example: "Handloom Cotton", options: { source: "fabrics", mode: "suggest" } },
+      { key: "colour", header: "Colour", type: "text", required: false, example: "Off-white", options: { source: "colours", mode: "suggest" } },
       { key: "hsn_code", header: "HSN code", type: "text", required: false, example: "" },
     ],
   },
