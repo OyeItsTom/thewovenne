@@ -14,6 +14,7 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
 import { getBrowserSupabase } from "@/lib/supabase";
+import { youtubeId } from "@/lib/youtube";
 import { getAllCategories } from "@/lib/categories";
 import { getDraftProductImages } from "@/lib/products";
 import { newProductDraft, productDraftId, settleDraft } from "@/lib/drafts";
@@ -34,6 +35,7 @@ const emptyForm = {
   description: "",
   price_inr: "",
   cost_price_inr: "",
+  video_youtube_id: "",
   fabric: "",
   colour: "",
   stock_quantity: "",
@@ -82,6 +84,7 @@ const formFromProduct = (p: Product): FormState => ({
   description: p.description ?? "",
   price_inr: String(p.price_inr),
   cost_price_inr: p.cost_price_inr === null || p.cost_price_inr === undefined ? "" : String(p.cost_price_inr),
+  video_youtube_id: p.video_youtube_id ?? "",
   fabric: p.fabric ?? "",
   colour: p.colour ?? "",
   stock_quantity: String(p.stock_quantity),
@@ -152,6 +155,16 @@ export default function ProductModal({
    * when there is nothing to say — an empty cost is a legitimate state meaning
    * "not costed yet", not an error to nag about.
    */
+  /** Says what was understood, rather than only complaining when it was not. */
+  const videoHint = (() => {
+    const raw = form.video_youtube_id.trim();
+    if (!raw) return "Unlisted YouTube video. Nothing loads until a visitor presses play.";
+    const id = youtubeId(raw);
+    return id
+      ? `Video ${id} — it will appear on the product page once published.`
+      : "Not a YouTube link yet.";
+  })();
+
   const marginHint = (() => {
     const price = Number(form.price_inr);
     const cost = Number(form.cost_price_inr);
@@ -319,6 +332,12 @@ export default function ProductModal({
     e.preventDefault();
     setError(null);
 
+    if (form.video_youtube_id.trim() && !youtubeId(form.video_youtube_id)) {
+      setError(
+        "That does not look like a YouTube link. Paste the address from the browser, or the video ID."
+      );
+      return;
+    }
     if (!form.name || !form.slug || !form.price_inr) {
       setError("Name, slug and price are required.");
       return;
@@ -362,6 +381,9 @@ export default function ProductModal({
       // Blank stays NULL, never 0. A zero cost reads as "free to make" and
       // would show a 100% margin in the P&L for a piece nobody has costed yet.
       cost_price_inr: form.cost_price_inr.trim() === "" ? null : Number(form.cost_price_inr),
+      // Normalised to an ID here, not stored as whatever was pasted. Blank
+      // clears it; anything unparseable is refused above before we get here.
+      video_youtube_id: form.video_youtube_id.trim() === "" ? null : youtubeId(form.video_youtube_id),
       category_id: subCategoryId,
       fabric: form.fabric || null,
       colour: form.colour || null,
@@ -400,7 +422,7 @@ export default function ProductModal({
       .from("product_versions")
       .update(isEdit ? payload : { ...payload, is_active: true })
       .eq("id", versionId)
-      .select("product_id, name, slug, description, price_inr, cost_price_inr, sku, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at")
+      .select("product_id, name, slug, description, price_inr, cost_price_inr, sku, video_youtube_id, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at")
       .single();
 
     if (saveError) {
@@ -529,6 +551,15 @@ export default function ProductModal({
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <Field
+              label="Product video (optional)"
+              placeholder="Paste the YouTube link"
+              value={form.video_youtube_id}
+              onChange={update("video_youtube_id")}
+            />
+            <p className="mt-1 text-xs text-ink/50">{videoHint}</p>
+          </div>
           <Field
             label="Fabric"
             placeholder="Handloom Cotton-Linen"

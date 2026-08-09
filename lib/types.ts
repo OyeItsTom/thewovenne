@@ -35,6 +35,12 @@ export interface Product {
   cost_price_inr?: number | null;
   /** Stable identifier for spreadsheets and bulk import. Admin-only, like cost. */
   sku?: string | null;
+  /**
+   * YouTube video ID for the official product video. Unlike cost and sku this
+   * IS customer-facing — the product page renders it — so it is fetched by the
+   * storefront query too.
+   */
+  video_youtube_id?: string | null;
   category_id: string | null;
   // Derived from the joined categories row (name/slug) — not stored on products.
   // Kept so display code can show the category name without a second lookup.

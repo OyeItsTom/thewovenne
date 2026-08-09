@@ -4,6 +4,7 @@ import { effectivePrice } from "@/lib/pricing";
 import ImageGallery from "@/components/product/ImageGallery";
 import ProductOptions from "@/components/product/ProductOptions";
 import CareAccordion from "@/components/product/CareAccordion";
+import ProductVideo from "@/components/product/ProductVideo";
 import ProductGrid from "@/components/shop/ProductGrid";
 import WishlistButton from "@/components/shop/WishlistButton";
 import ProductReviews from "@/components/product/ProductReviews";
@@ -116,6 +117,13 @@ export default async function ProductDetail({
           <CareAccordion fabric={product.fabric} />
         </div>
       </div>
+
+      {/* Below the buy controls and above related pieces: someone who wants
+          the video will scroll for it, and someone who does not is not made to
+          scroll past it to reach the price. Nothing loads until they click. */}
+      {product.video_youtube_id && (
+        <ProductVideo videoId={product.video_youtube_id} productName={product.name} />
+      )}
 
       {related.length > 0 && (
         <div className="mt-24">

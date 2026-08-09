@@ -10,6 +10,8 @@ import type { Category, Product } from "./types";
 const PRODUCT_SELECT =
   "product_id, name, slug, description, price_inr, category_id, fabric, colour, " +
   "stock_quantity, image_url, is_active, created_at, collection, " +
+  // Customer-facing, unlike cost and sku: the product page renders it.
+  "video_youtube_id, " +
   "discount_type, discount_value, discount_starts_at, discount_ends_at";
 
 /**
