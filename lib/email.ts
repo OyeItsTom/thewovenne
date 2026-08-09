@@ -50,6 +50,14 @@ export async function sendEmail(opts: {
   html: string;
   text: string;
   replyTo?: string;
+  /**
+   * Base64 file attachments, in Resend's own shape.
+   *
+   * Added for invoice resends. The PDF is re-rendered from the order each time
+   * rather than stored, so an attachment is always the document that order
+   * currently describes — there is no archived copy that could have drifted.
+   */
+  attachments?: { filename: string; content: string }[];
 }): Promise<SendResult> {
   if (!emailConfigured()) {
     console.error(
@@ -72,6 +80,7 @@ export async function sendEmail(opts: {
         html: opts.html,
         text: opts.text,
         reply_to: opts.replyTo || process.env.EMAIL_REPLY_TO || undefined,
+        attachments: opts.attachments?.length ? opts.attachments : undefined,
       }),
     });
 

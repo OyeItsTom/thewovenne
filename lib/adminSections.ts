@@ -11,6 +11,7 @@ import {
   Rocket,
   TrendingUp,
   Settings,
+  Scroll,
   Sheet,
   ShoppingBag,
   Upload,
@@ -126,6 +127,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: "/admin/dashboard/marketing",
     blurb: "Send wishlist, low-stock and basket emails",
     icon: Mail,
+  },
+  {
+    id: "invoices",
+    label: "Invoices",
+    href: "/admin/dashboard/invoices",
+    blurb: "Every invoice issued, with downloads and resends",
+    icon: Scroll,
   },
   {
     id: "export",
