@@ -84,6 +84,9 @@ export interface Order {
   /** Coupon applied at checkout, if any. Kept for the invoice and reporting. */
   coupon_code: string | null;
   coupon_discount_inr: number;
+  /** How the money arrived. "razorpay" is online; anything else was in person. */
+  payment_method: string | null;
+  cancelled_at: string | null;
 }
 
 const ORDER_SELECT =
@@ -91,7 +94,7 @@ const ORDER_SELECT =
   "shipping_address, items, total_inr, shipping_cost_inr, payment_provider, " +
   "payment_status, status, needs_review, courier_name, awb_number, " +
   "shipped_at, delivered_at, admin_note, razorpay_order_id, invoice_number, " +
-  "coupon_code, coupon_discount_inr";
+  "coupon_code, coupon_discount_inr, payment_method, cancelled_at";
 
 function mapOrder(row: Record<string, unknown>): Order {
   return {
