@@ -1003,6 +1003,96 @@ case and the "One Size" one that fired this morning.
 
 PR #97
 
+### The screen itself — PR #98
+
+The second PR, and none of it changes what is recorded. It changes how long it
+takes to record it, and what is asked while the customer is there.
+
+**Marketing consent, asked at the stall.** Migration `0050`, **applied and
+verified**, 19 assertions in a rolled-back transaction. Unticked, never
+pre-ticked, and written as the words to say out loud rather than as a field
+label. What it does and does not promise is stated on the form itself:
+
+- It **records that they said yes**, on the order, with the moment — which under
+  the DPDP Act is the only thing that makes a later send defensible.
+- It makes them **marketable only if they have an account**, because
+  `marketing_targets()` starts from `profiles` and always has. Where an account
+  exists for that address the consent is set on it and they join the list
+  properly, matched on the lower-cased email so `Tom@` and `tom@` are one
+  person. Where one does not, the record sits on the order and reaches nobody —
+  and the screen says so afterwards instead of implying otherwise.
+- **An existing consent date is never overwritten.** The date that matters is the
+  first time they said yes, not the last time somebody asked.
+- **It does not leak into a later signup.** If they open an account next month
+  they are asked again, unticked, by `handle_new_user`.
+- Refused for an order with no email address, for an order that does not exist,
+  and for a non-admin session — all three verified.
+
+**Existing-customer search.** A returning customer is found by name or email and
+their details filled in, rather than retyped — retyping is how a receipt ends up
+one letter away from the account that should be able to see it. The phone comes
+from their **most recent order**, because that is the only place the shop holds
+one and a delivery number legitimately differs between orders; everything filled
+stays editable. The list is fetched **on demand rather than on mount**, because
+`admin_customers()` writes an audit row every time it is called and a screen that
+called it on opening would fill that log with reads nobody made. Someone who has
+already opted in shows as such, with no box to tick.
+
+**The logo on the invoice.** Both documents carried the wordmark letterspaced and
+nothing else, so the one thing a customer recognises at a glance was missing from
+the page that ends up in their records. The emblem sits above the wordmark on the
+invoice and the credit note.
+
+It is **embedded as base64, not read from `public/`** — these render inside
+serverless functions where `public/` is served as static assets and is not part
+of the function bundle, so a path would have worked locally and produced a
+logo-less invoice in production, for real customers only. Sized by rendering it
+at 34, 44 and 56pt and looking at all three: below about 44pt the interlaced
+strands close up and the weave stops reading as a weave.
+
+**The product picker.** One `<select>` of every product was fine with four pieces
+and stops being fine at forty — and at a stall the operator is holding the item,
+so they know its name or its category, not its position in an alphabetical list.
+There is now a category filter and a search box, offering up to eight matches
+with **the stock count on each button**, because the most useful moment to know a
+piece is sold out is before adding it. A parent category includes its children,
+since "Women" at a stall means everything under it, and every search term has to
+match somewhere — the same rule the storefront search uses, or "red saree" offers
+every red thing alongside every saree.
+
+PR #98
+
+---
+
+## Current data state — 9 August 2026, after the seventh session
+
+The table further up this log said 0 orders, 1 customer account and 0 consented
+customers. All three had changed by this morning; this is the state now.
+
+| | |
+|---|---|
+| Orders | **1** — the 14:26 one, needing a decision |
+| Credit notes | 0 |
+| Customer accounts | 4 |
+| Consented customers | 4 |
+| Admins | 3 |
+| Products published | 4 |
+| Products with sizes set | **1** of 4 (2 size rows) |
+| Saved carts | 5 |
+| Stock movements | 7 — all hand corrections and restocks, **no sale** |
+| Loyalty ledger | 0 |
+| Reviews | 0 |
+| Expenses | 0 |
+
+**No `sale` movement exists anywhere**, which is the same fact as "no order has
+ever taken stock". The 14:26 order is paid and has none.
+
+The credit note sequence sits at 5 with no credit notes in the table: `CN-2026-0001`
+to `0005` were consumed by verification transactions that were rolled back, and a
+sequence does not roll back with them. Harmless — the series only promises it does
+not reuse a number — but worth knowing before someone asks why the first real
+credit note is not `0001`.
+
 ---
 
 ## Outstanding, owner action
@@ -1014,7 +1104,9 @@ PR #97
   through `is_admin()`-gated RPCs that cannot be reached without an admin
   session, so they were reasoned about rather than tested. One save in each,
   while logged in, closes all four
-- **Product sizes** — none set, so no Size filter appears anywhere
+- **Product sizes** — set on 1 product of 4. The three without them are sold as
+  "One Size" and their stock comes off the published version's own count, which
+  works, but no Size filter appears for them on the storefront
 - **Shipping config** — seeded Kerala free / ₹120 / free over ₹3,000; confirm
   these are the real numbers
 - **Loyalty** — switch on when ready; rates are editable

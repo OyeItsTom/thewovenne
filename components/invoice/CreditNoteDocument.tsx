@@ -2,8 +2,9 @@
 // rendered to a PDF canvas rather than by React-DOM, including from scripts that
 // run outside Next's automatic JSX runtime.
 import React from "react";
-import { Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer";
+import { Document, Page, Text, View, Image, StyleSheet } from "@react-pdf/renderer";
 import { BUSINESS, inr } from "@/lib/invoice";
+import { EMBLEM_PNG } from "@/lib/invoiceEmblem";
 import { creditNoteKindLabel, type CreditNoteData } from "@/lib/creditNote";
 
 /**
@@ -29,6 +30,8 @@ const RULE = "#E3E1E8";
 
 const s = StyleSheet.create({
   page: { paddingTop: 56, paddingBottom: 56, paddingHorizontal: 56, fontSize: 9.5, color: INK, fontFamily: "Helvetica" },
+  // Identical to the invoice's, deliberately — the two documents are a pair.
+  emblem: { width: 44, height: 39.6, marginBottom: 12 },
   wordmark: { fontSize: 15, letterSpacing: 4, color: INK },
   tagline: { fontSize: 7.5, letterSpacing: 1.4, color: TERRACOTTA, marginTop: 5, textTransform: "uppercase" },
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
@@ -78,6 +81,9 @@ export default function CreditNoteDocument({ data }: { data: CreditNoteData }) {
       <Page size="A4" style={s.page}>
         <View style={s.headerRow}>
           <View>
+            {/* eslint-disable-next-line jsx-a11y/alt-text -- @react-pdf's Image;
+                see the same note in InvoiceDocument. */}
+            <Image src={EMBLEM_PNG} style={s.emblem} />
             <Text style={s.wordmark}>{BUSINESS.name}</Text>
             <Text style={s.tagline}>Woven in India · Worn for life</Text>
           </View>

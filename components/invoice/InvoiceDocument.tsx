@@ -3,8 +3,9 @@
 // from scripts/invoice-preview.ts, which runs outside Next's automatic JSX
 // runtime and fails with "React is not defined" without this.
 import React from "react";
-import { Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer";
+import { Document, Page, Text, View, Image, StyleSheet } from "@react-pdf/renderer";
 import { BUSINESS, inr, type InvoiceData } from "@/lib/invoice";
+import { EMBLEM_PNG } from "@/lib/invoiceEmblem";
 
 /**
  * The invoice, as a PDF.
@@ -25,6 +26,9 @@ const RULE = "#E3E1E8";
 
 const s = StyleSheet.create({
   page: { paddingTop: 56, paddingBottom: 56, paddingHorizontal: 56, fontSize: 9.5, color: INK, fontFamily: "Helvetica" },
+  // Sized in points and never stretched: the emblem is 180×162, and any pair of
+  // numbers that is not that ratio squashes a mark people recognise.
+  emblem: { width: 44, height: 39.6, marginBottom: 12 },
   wordmark: { fontSize: 15, letterSpacing: 4, color: INK },
   tagline: { fontSize: 7.5, letterSpacing: 1.4, color: TERRACOTTA, marginTop: 5, textTransform: "uppercase" },
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
@@ -70,6 +74,14 @@ export default function InvoiceDocument({ data }: { data: InvoiceData }) {
       <Page size="A4" style={s.page}>
         <View style={s.headerRow}>
           <View>
+            {/* The mark above the wordmark, as it is on the site — the header
+                carried the name letterspaced and nothing else, so the one thing
+                a customer recognises at a glance was missing from the document
+                that ends up in their records. */}
+            {/* eslint-disable-next-line jsx-a11y/alt-text -- this is
+                @react-pdf's Image, drawn onto a PDF canvas. It takes no alt
+                prop, and a PDF has no accessibility tree for one to land in. */}
+            <Image src={EMBLEM_PNG} style={s.emblem} />
             <Text style={s.wordmark}>{BUSINESS.name}</Text>
             <Text style={s.tagline}>Woven in India · Worn for life</Text>
           </View>
