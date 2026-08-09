@@ -13,6 +13,7 @@ import {
   type OrderStatus,
 } from "@/lib/orders";
 import InvoiceLink from "@/components/order/InvoiceLink";
+import { paymentMethodLabel } from "@/lib/paymentMethods";
 
 /**
  * Every order, and the controls to move one along.
@@ -38,6 +39,37 @@ export default function OrdersManager() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Cancel, which is never an edit of the invoice.
+   *
+   * One RPC, because a cancellation is four things that must all happen or
+   * none: credit note, stock back, status, timestamp. The original invoice is
+   * untouched — a credit note is the only correct way to undo one.
+   */
+  async function cancel(order: Order) {
+    const reason = window.prompt(
+      `Cancel order ${orderRef(order.id)}?\n\nThis issues a CREDIT NOTE against invoice ${order.invoice_number ?? "(none)"} and returns the stock. The invoice itself is never changed or deleted.\n\nReason (optional):`
+    );
+    if (reason === null) return;
+
+    setBusy(order.id);
+    setError(null);
+    const { data, error: rpcError } = await getBrowserSupabase().rpc("cancel_order", {
+      p_order_id: order.id,
+      p_reason: reason || null,
+    });
+    setBusy(null);
+    if (rpcError) return setError(rpcError.message);
+
+    const result = data as { credit_note?: { credit_note_number?: string }; stock_note?: string | null };
+    // Surfaced rather than logged: an order whose stock never came out is
+    // unusual, and the admin should be told rather than left to notice.
+    if (result?.stock_note) {
+      setError(`${result.credit_note?.credit_note_number ?? "Credit note"} issued. ${result.stock_note}`);
+    }
+    await load();
+  }
 
   async function patch(order: Order, changes: Partial<Order>) {
     setBusy(order.id);
@@ -239,6 +271,26 @@ export default function OrdersManager() {
                   onAdvance={(s) => advanceTo(order, s)}
                   onPatch={(c) => patch(order, c)}
                 />
+
+                {/* Paid and not already cancelled. An unpaid order has nothing
+                    to credit, and a cancelled one is already done. */}
+                {order.payment_status === "paid" && order.status !== "cancelled" && (
+                  <div className="mt-4 border-t border-ink/10 pt-4">
+                    <button
+                      onClick={() => cancel(order)}
+                      disabled={working}
+                      className="text-xs uppercase tracking-wider text-terracotta-dark transition-colors hover:underline disabled:opacity-40"
+                    >
+                      Cancel &amp; issue credit note
+                    </button>
+                    <p className="mt-1.5 text-xs text-ink/50">
+                      Issues a credit note against{" "}
+                      {order.invoice_number ?? "this order"} and returns the
+                      stock. The invoice itself is never changed or deleted.
+                      {" "}Paid by {paymentMethodLabel(order.payment_method)}.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </section>
