@@ -7,7 +7,7 @@ import type { Category, Product } from "./types";
 // Storefront reads come from PUBLISHED versions, never the identity tables.
 // RLS only exposes state = 'published' to anon, so a mistake here cannot leak
 // draft work — the policy is the guarantee, this is just the query.
-const PRODUCT_SELECT =
+export const PRODUCT_SELECT =
   "product_id, name, slug, description, price_inr, category_id, fabric, colour, " +
   "stock_quantity, image_url, is_active, created_at, collection, " +
   // Customer-facing, unlike cost and sku: the product page renders it.
@@ -39,7 +39,7 @@ function finish(data: unknown, cats: Map<string, Category>): Product[] {
   return preferDraft(rows, (r) => r.product_id).map((r) => mapProduct(r, cats));
 }
 
-type ProductVersionRow = {
+export type ProductVersionRow = {
   product_id: string;
   name: string;
   slug: string;
@@ -57,6 +57,7 @@ type ProductVersionRow = {
   discount_value: number | null;
   discount_starts_at: string | null;
   discount_ends_at: string | null;
+  video_youtube_id: string | null;
 };
 
 /**
@@ -68,7 +69,7 @@ type ProductVersionRow = {
  * category_versions, not the categories identity row — embedding would give
  * whatever the identity table happens to hold.
  */
-function mapProduct(row: ProductVersionRow, categories: Map<string, Category>): Product {
+export function mapProduct(row: ProductVersionRow, categories: Map<string, Category>): Product {
   const category = row.category_id ? categories.get(row.category_id) : undefined;
   return {
     id: row.product_id,
@@ -93,6 +94,15 @@ function mapProduct(row: ProductVersionRow, categories: Map<string, Category>): 
     discount_value: row.discount_value,
     discount_starts_at: row.discount_starts_at,
     discount_ends_at: row.discount_ends_at,
+    // Added in the fix for #94: PRODUCT_SELECT fetched this and mapProduct
+    // dropped it, so the product page saw undefined and rendered nothing.
+    //
+    // THIS MAPPER IS AN ALLOW-LIST. A column reaching the storefront has to be
+    // named in three places — PRODUCT_SELECT, ProductVersionRow, and here — and
+    // missing the third is silent, because Product's customer-facing optional
+    // fields make an absent one type-check perfectly. scripts/product-mapping.test.ts
+    // now fails if any of the three disagree.
+    video_youtube_id: row.video_youtube_id ?? null,
   };
 }
 
