@@ -13,9 +13,11 @@ import { youtubeEmbedUrl, youtubeThumbnail } from "@/lib/youtube";
  * several hundred kilobytes the moment it scrolls into view, and #74 spent real
  * effort getting weight off these pages.
  *
- * The thumbnail is a plain img with loading="lazy" rather than next/image —
- * next/image would need i.ytimg.com added to the remote host allow-list, and
- * one 480px JPEG does not justify widening that.
+ * The thumbnail is a plain img with loading="lazy" rather than next/image. The
+ * original reason — i.ytimg.com not being in the remote host allow-list — no
+ * longer holds (#105 added it for customer video submissions), but the reason it
+ * stays is unchanged: this is one already-sized 480px JPEG on a CDN, and routing
+ * it through the optimizer would spend a transform on something that needs none.
  */
 export default function ProductVideo({
   videoId,
@@ -27,9 +29,17 @@ export default function ProductVideo({
   const [playing, setPlaying] = useState(false);
 
   return (
-    <section className="mt-12">
-      <h2 className="font-heading text-2xl text-ink">See it worn</h2>
-      <div className="mt-4 overflow-hidden rounded-2xl bg-ink/5">
+    /* The first thing below the fold, so it carries the same rhythm as every
+       section under it — rule, script line, serif heading — rather than reading
+       as a small block bolted under the buy panel. */
+    <section className="mt-24 border-t border-ink/10 pt-16" aria-labelledby="see-it-worn">
+      <div className="text-center">
+        <span className="font-script text-2xl text-terracotta">In motion</span>
+        <h2 id="see-it-worn" className="mt-2 font-heading text-3xl text-ink sm:text-4xl">
+          See it worn
+        </h2>
+      </div>
+      <div className="mx-auto mt-10 max-w-3xl overflow-hidden rounded-2xl bg-ink/5">
         {playing ? (
           <div className="relative aspect-video">
             <iframe

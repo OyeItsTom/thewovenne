@@ -7,6 +7,22 @@ import { cn } from "@/lib/utils";
 import Modal from "@/components/ui/Modal";
 import ImageWeaveOverlay from "@/components/weave/ImageWeaveOverlay";
 
+/**
+ * The gallery.
+ *
+ * ONE IMAGE PER FRAME, CROSS-FADED. Every photograph is rendered stacked and
+ * only the active one is opaque, so changing angle is a 500ms fade rather than a
+ * swap that flashes the linen backing while the next file decodes. That costs
+ * the whole gallery up front — which is why only the FIRST is `priority` and the
+ * rest are lazy: they are in the DOM but a browser fetches them when they matter.
+ *
+ * TALLER THAN IT WAS. 4:5 is a category-card shape; a product page is where
+ * somebody looks closely, so the main frame is 3:4 and rises to the full column
+ * on desktop. The lightbox stays for anyone who wants it larger still.
+ *
+ * ARROW KEYS WORK when the gallery has focus, because a keyboard user should not
+ * have to tab through four thumbnails to see the back of a garment.
+ */
 export default function ImageGallery({
   images,
   alt,
@@ -34,21 +50,38 @@ export default function ImageGallery({
   return (
     <div>
       <div
-        className="group relative aspect-[4/5] w-full overflow-hidden rounded-2xl bg-linen"
+        role="group"
+        aria-label={`${alt} — image ${active + 1} of ${images.length}`}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
+          if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+        }}
+        className="group relative aspect-[3/4] w-full overflow-hidden rounded-2xl bg-linen focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-terracotta/40"
         onPointerMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           setPointer({ x: e.clientX - rect.left, y: e.clientY - rect.top, active: true });
         }}
         onPointerLeave={() => setPointer((p) => ({ ...p, active: false }))}
       >
-        <Image
-          src={images[active]}
-          alt={alt}
-          fill
-          priority
-          sizes="(min-width: 1024px) 50vw, 100vw"
-          className="object-cover"
-        />
+        {/* Stacked, not swapped. The active one fades in over the last, so an
+            angle change never shows the empty frame underneath. */}
+        {images.map((src, i) => (
+          <Image
+            key={src + i}
+            src={src}
+            alt={i === active ? alt : ""}
+            aria-hidden={i !== active}
+            fill
+            // Only the cover is priority: it is the page's LCP. The others are
+            // lazy — present in the markup, fetched when the browser decides.
+            priority={i === 0}
+            sizes="(min-width: 1024px) 50vw, 100vw"
+            className={`object-cover transition-opacity duration-500 ease-out motion-reduce:transition-none ${
+              i === active ? "opacity-100" : "opacity-0"
+            }`}
+          />
+        ))}
         {/* Interactive weave — the cloth reacts to your hand. */}
         <ImageWeaveOverlay pointer={pointer} />
         <button
@@ -66,10 +99,15 @@ export default function ImageGallery({
             <button
               key={src + i}
               onClick={() => setActive(i)}
-              aria-label={`View image ${i + 1}`}
+              aria-label={`View image ${i + 1} of ${images.length}`}
+              aria-current={active === i}
               className={cn(
-                "relative aspect-square overflow-hidden rounded-lg bg-linen ring-2 ring-offset-2 ring-offset-cream transition-all",
-                active === i ? "ring-terracotta" : "ring-transparent"
+                "relative aspect-[3/4] overflow-hidden rounded-lg bg-linen transition-all duration-300",
+                // A hairline, not a coloured ring: the thumbnail strip should
+                // read as part of the photograph, not as a control panel.
+                active === i
+                  ? "ring-1 ring-ink/40 ring-offset-2 ring-offset-cream"
+                  : "opacity-60 hover:opacity-100"
               )}
             >
               <Image

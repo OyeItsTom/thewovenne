@@ -3,7 +3,7 @@ import { formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
 import ImageGallery from "@/components/product/ImageGallery";
 import ProductOptions from "@/components/product/ProductOptions";
-import CareAccordion from "@/components/product/CareAccordion";
+import MaterialCare from "@/components/product/MaterialCare";
 import BrandKnowledgePanel from "@/components/product/BrandKnowledgePanel";
 import ProductStyleSection from "@/components/style/ProductStyleSection";
 import ProductVideo from "@/components/product/ProductVideo";
@@ -76,14 +76,29 @@ export default async function ProductDetail({
       <div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
         <ImageGallery images={images} alt={product.name} />
 
+        {/* STICKY ON DESKTOP, and it needs BOTH of these elements to work. A
+            gallery is tall and a buy panel is short: without this, a piece with
+            no description leaves half a column of empty cream and the price
+            scrolls away while somebody is still looking at the cloth.
+            
+            The outer div is the grid item and must STRETCH to the row height —
+            that is the travel sticky moves within. The inner div is what sticks.
+            Collapsing these into one (or adding items-start) gives the item the
+            height of its own content, leaving zero slack, and sticky silently
+            does nothing. It looks applied in the inspector and behaves as if it
+            is not. */}
         <div>
+          <div className="lg:sticky lg:top-28">
           {product.category && (
             <p className="text-xs uppercase tracking-wider text-ink/50">
               {product.category}
             </p>
           )}
           <div className="mt-2 flex items-start justify-between gap-4">
-            <h1 className="font-heading text-4xl text-ink sm:text-5xl">
+            {/* The largest thing on the page, and the only h1. Tighter leading
+                and a hair of negative tracking is what stops a long name in a
+                serif reading as two separate lines of display type. */}
+            <h1 className="font-heading text-4xl leading-[1.08] tracking-[-0.01em] text-ink sm:text-5xl">
               {product.name}
             </h1>
             <WishlistButton
@@ -106,7 +121,10 @@ export default async function ProductDetail({
             </a>
           )}
 
-          <p className="mt-3 font-body text-2xl text-ink">
+          {/* Price sits BELOW the name and above the description, at a size that
+              reads as information rather than as a shout. A luxury page states
+              the number once and moves on. */}
+          <p className="mt-4 font-body text-xl tracking-wide text-ink">
             {formatINR(price)}
             {wasPrice != null && (
               <span className="ml-3 align-middle text-base font-normal text-ink/40 line-through">
@@ -116,33 +134,55 @@ export default async function ProductDetail({
           </p>
 
           {product.description && (
-            <p className="mt-6 text-base leading-relaxed text-ink/70">
+            <p className="mt-6 max-w-prose text-[15px] leading-[1.75] text-ink/70">
               {product.description}
             </p>
           )}
 
-          <div className="mt-8">
+          {/* A rule rather than a gap between reading about the piece and
+              choosing one. It marks where the page stops describing and starts
+              asking. */}
+          <div className="mt-8 border-t border-ink/10 pt-8">
             <ProductOptions product={product} sizes={sizes} />
           </div>
 
-          {/* The written care note takes precedence over the fabric-generic
-              advice — a piece somebody has written care instructions for should
-              not be described by a lookup table. */}
-          <CareAccordion fabric={product.fabric} careNote={knowledge?.care ?? null} />
+          {product.fabric && (
+            // The fabric named where it helps a decision; how to wash it now has
+            // its own section further down. One line here, not an accordion.
+            <p className="mt-6 text-xs uppercase tracking-wider text-ink/45">
+              {product.fabric}
+            </p>
+          )}
+          </div>
         </div>
       </div>
 
-      {/* Below the buy controls and above related pieces: someone who wants
-          the video will scroll for it, and someone who does not is not made to
-          scroll past it to reach the price. Nothing loads until they click. */}
+      {/* ── Below the fold, in the confirmed order ──────────────────
+          video → story → care → reviews → styled by customers → related.
+
+          Related pieces come LAST, deliberately. They used to sit above the
+          reviews, which meant the page offered somebody a different product
+          before it had finished telling them about this one. Everything that
+          argues for THIS piece now runs first, and the invitation to look
+          elsewhere is the last thing on the page. */}
+
+      {/* Nothing loads until it is pressed — see ProductVideo. */}
       {product.video_youtube_id && (
         <ProductVideo videoId={product.video_youtube_id} productName={product.name} />
       )}
 
       <BrandKnowledgePanel knowledge={knowledge} productName={product.name} />
 
+      {/* The written note wins over the fabric table — a piece somebody has
+          written care instructions for should not be described by a lookup. */}
+      <MaterialCare fabric={product.fabric} careNote={knowledge?.care ?? null} />
+
+      <ProductReviews productId={product.id} reviews={reviews} rating={rating} />
+
+      <ProductStyleSection productId={product.id} productName={product.name} />
+
       {related.length > 0 && (
-        <div className="mt-24">
+        <div className="mt-24 border-t border-ink/10 pt-16">
           <div className="text-center">
             <span className="font-script text-2xl text-terracotta">
               More From the Loom
@@ -157,17 +197,6 @@ export default async function ProductDetail({
         </div>
       )}
 
-      <ProductReviews
-        productId={product.id}
-        reviews={reviews}
-        rating={rating}
-      />
-
-      {/* After reviews, before nothing — the confirmed ordering for the product
-          page redesign puts customer photographs here, between what people said
-          and what else they might like. It fetches its own data and renders
-          nothing when this piece has none. */}
-      <ProductStyleSection productId={product.id} productName={product.name} />
     </div>
   );
 }
