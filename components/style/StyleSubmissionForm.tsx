@@ -114,6 +114,8 @@ export default function StyleSubmissionForm({
         credit_name: creditName.trim() || null,
       };
 
+      let submissionId = existing?.id ?? null;
+
       if (existing) {
         // A second INSERT is refused by the one-per-customer-per-product index,
         // so a replacement goes through 0053's function — which also puts it back
@@ -130,15 +132,39 @@ export default function StyleSubmissionForm({
         });
         if (rpcError) throw rpcError;
       } else {
-        const { error: insertError } = await client.from("style_submissions").insert({
-          product_id: productId,
-          user_id: user.id,
-          ...shared,
-          // The moment permission was given, recorded as a fact rather than
-          // inferred later from the row existing.
-          consented_at: new Date().toISOString(),
-        });
+        const { data: inserted, error: insertError } = await client
+          .from("style_submissions")
+          .insert({
+            product_id: productId,
+            user_id: user.id,
+            ...shared,
+            // The moment permission was given, recorded as a fact rather than
+            // inferred later from the row existing.
+            consented_at: new Date().toISOString(),
+          })
+          .select("id")
+          .single();
         if (insertError) throw insertError;
+        submissionId = inserted?.id ?? null;
+      }
+
+      // ── Ask the server to tell the shop ──
+      // AFTER the submission is saved and OUTSIDE its error handling, on
+      // purpose. Nobody's photograph should appear to have failed because the
+      // shop's own notification did — the customer is done either way. A miss
+      // here leaves admin_notified_at null, which is what the queue shows as
+      // un-announced rather than losing quietly.
+      if (submissionId) {
+        void fetch("/api/style/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: submissionId }),
+          // keepalive so the request still goes if this component unmounts
+          // or the customer navigates away the moment they press send.
+          keepalive: true,
+        }).catch(() => {
+          /* Their submission is safe; the shop finds it in the queue. */
+        });
       }
 
       setStage("done");
