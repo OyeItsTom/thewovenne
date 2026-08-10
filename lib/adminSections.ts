@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Camera,
   FileText,
   FolderTree,
   History,
@@ -9,15 +10,15 @@ import {
   Package,
   Receipt,
   Rocket,
-  TrendingUp,
-  Settings,
   Scroll,
+  Settings,
   Sheet,
-  Store,
   ShoppingBag,
-  Upload,
   Star,
+  Store,
   Ticket,
+  TrendingUp,
+  Upload,
   Users,
 } from "lucide-react";
 
@@ -107,6 +108,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: "/admin/dashboard/reviews",
     blurb: "Read, hide or remove customer reviews",
     icon: Star,
+  },
+  {
+    id: "style",
+    label: "Customer Style",
+    href: "/admin/dashboard/style",
+    blurb: "Approve or turn down photographs customers have sent",
+    icon: Camera,
   },
   {
     id: "coupons",
