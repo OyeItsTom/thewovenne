@@ -288,7 +288,11 @@ export async function getFeaturedProducts(
   const { data, error } = await storefrontQuery(ctx)
     .eq("is_active", true)
     .in("category_id", visibleIds)
-    .gt("stock_quantity", 0)
+    // NO STOCK FILTER, deliberately. This was the one query on the storefront
+    // that hid a sold-out piece; every category and search path already showed
+    // them. A piece that sold out is the best evidence the shop has that people
+    // buy here — it keeps its photographs and its reviews, and says "sold out"
+    // rather than vanishing and taking its social proof with it.
     .order("created_at", { ascending: false })
     .limit(limit);
 

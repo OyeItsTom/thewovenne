@@ -85,7 +85,7 @@ export default function AddToCart({
           size="lg"
           className="flex-1"
         >
-          {outOfStock ? "Out of Stock" : "Add to Cart"}
+          {outOfStock ? "Sold out" : "Add to Cart"}
         </Button>
         <a
           href={waHref}
