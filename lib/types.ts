@@ -72,6 +72,13 @@ export interface Product {
   discount_value: number | null;
   discount_starts_at: string | null;
   discount_ends_at: string | null;
+  /**
+   * The second gallery photo, for a card to cross-fade to on hover. Null when a
+   * product has only its cover — which is every product today, so a card with
+   * nothing to cycle to simply does not cycle. Derived by mapProduct from the
+   * embedded gallery, never stored.
+   */
+  hover_image_url?: string | null;
 }
 
 /**
