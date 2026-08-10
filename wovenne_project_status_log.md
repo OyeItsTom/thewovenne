@@ -2,8 +2,12 @@
 
 Last updated: 10 August 2026 (seventh session)
 
-> **PRs #97, #98 and #99 are merged to `main`.** Migrations `0044`–`0051` are all
-> applied and verified. PR #100 (order tracking) is open.
+> **PRs #97–#100 are all merged to `main`.** Migrations `0044`–`0051` are applied
+> and verified against the database.
+>
+> **ASK WOVENNE IS SWITCHED OFF** (`store_settings.ask_wovenne_enabled: false`),
+> so the concierge work in #99 and #100 reaches nobody until that toggle is on.
+> See "Status check" at the bottom.
 >
 > **Read the seventh-session section at the bottom first.** The shop took its
 > first ever order today, through the in-person screen, and three of the bugs
@@ -16,12 +20,15 @@ Last updated: 10 August 2026 (seventh session)
 
 ## Session summary
 
-Everything below is built, merged to `main`. Migrations `0024`–`0041` are
-applied to Supabase and verified; `0042` is written and awaiting a run.
+Everything below is built and merged to `main`. Migrations `0024`–`0051` are all
+applied to Supabase and verified — including `0042`, which this section used to
+describe as awaiting a run (`product_versions.allow_no_images` exists; checked
+10 August).
 
 **One thing is not verified end to end: a real payment.** See "The gap" at the
 bottom — it is the single largest remaining risk and it cannot be closed from
-this side.
+this side. As of 10 August the database still holds zero stock movements with
+reason `sale`, which is the same fact stated in data.
 
 ---
 
@@ -1410,19 +1417,26 @@ restored and from where, and refuses to run twice.
 
 - ~~**The 14:26 order**~~ — DONE, repaired at 18:12 with credit note
   `CN-2026-0008` and the cancellation email sent. See the seventh-session section
-- **Razorpay test purchase** — above. Still the largest gap, and now the only
-  path in the shop that has never run: the in-person one has
-- **Admin save check, signed in** — Products, Categories, Journal and Pages save
-  through `is_admin()`-gated RPCs that cannot be reached without an admin
-  session, so they were reasoned about rather than tested. One save in each,
-  while logged in, closes all four
+- **Ask Wovenne is switched off** — one toggle in Admin → Settings. Until it is on,
+  #99 and #100 (tools, brand knowledge, signed-in tier, order tracking) are dark;
+  `/api/chat` returns 503 by design and `chat_usage` shows one window, last used
+  2 August
+- **Razorpay test purchase** — above. Still the largest gap, and confirmed by the
+  database: `stock_movements` holds **zero** rows with reason `sale`, so no order
+  has ever taken stock through any path
+- **Admin save check, signed in** — HALF CLOSED, by the audit log rather than by a
+  test. `product_versions` has 80 recorded writes and `category_versions` 48, so
+  Products and Categories demonstrably save. `journal_versions` and
+  `site_page_versions` have **zero** — Journal and Pages have never successfully
+  written anything. One save in each of those two closes it
 - **Product sizes** — set on 1 product of 4. The three without them are sold as
   "One Size" and their stock comes off the published version's own count, which
   works, but no Size filter appears for them on the storefront
 - **Shipping config** — seeded Kerala free / ₹120 / free over ₹3,000; confirm
   these are the real numbers
 - **Loyalty** — switch on when ready; rates are editable
-- **Partners' first login** — `hello@` and `care@` still show `MFA: not enrolled`
+- ~~**Partners' first login**~~ — DONE. All three admins (`admin@`, `care@`,
+  `hello@`) now have a verified MFA factor; checked against `auth.mfa_factors`
 - **T&C wording** — `/policies` holds placeholder content; edit it in the admin
 - **Brand knowledge** — the three fields ship EMPTY on all four products. Until
   you write them, Ask Wovenne is no better informed about heritage or care than it
@@ -1437,3 +1451,75 @@ restored and from where, and refuses to run twice.
   customer, editable under Settings and pre-filled at checkout. It is
   deliberately one address rather than a book, and it cannot redirect an order
   already placed.
+
+---
+
+## Status check — 10 August 2026
+
+Everything below was read from git, the code, or the database rather than from
+this log, because two entries in it had gone stale and one feature was recorded
+more optimistically than it deserved.
+
+### Corrections
+
+**MFA is finished.** All three admin accounts have a verified factor. The
+outstanding list said `hello@` and `care@` were not enrolled; it was wrong.
+
+**Audit rows for products do not group by product.** `0014` says record_id is
+replaced with the entity id "so every entry for one product groups together". It
+is not happening: `Cotton` has 40 audit rows across **5 distinct record_ids**,
+several of which are version ids, and `Mul Cotton` has no row whose record_id is a
+product id at all. So tracing one product's history by id silently misses rows.
+
+**The cause is not diagnosed.** It may be an older logger version behind some
+rows, or a path where `product_id` was absent from the row. Recorded here as an
+observation with its evidence rather than as a fix, because guessing at the reason
+in a log entry is how the next person inherits a wrong explanation.
+
+**Customer Style is schema only** — see below. The section for #96 records the
+schema accurately; nothing else about the feature exists.
+
+### Customer Style — a quarter built, and nothing customers can reach
+
+| | |
+|---|---|
+| Built | `style_submissions`, `public_style_submissions`, RLS (verified purchase via `has_purchased()`, consent required before approval, admin-only approval, immediate withdrawal), admin delete (`0048`), 9 security assertions |
+| Not built | submission form · moderation queue · public gallery · per-product section · image upload and dimension guidance · any email · layout of any kind |
+
+`select count(*) from style_submissions` → **0**. Nothing has ever been submitted,
+because there is no way to submit. Verified by grep: no file outside
+`scripts/style-security.test.mjs` references the tables, there is no admin section
+for it, and there is no storefront route.
+
+**A decision waits here.** `0047` documents `reject_reason` as *"Internal. The
+customer is not told why, by decision — see the brief."* Rejection emails that
+explain the reason reverse that decision. That is allowed, but it is a change of
+mind rather than a gap, and the schema comment should change with it.
+
+### Verified data state
+
+| | |
+|---|---|
+| Orders | 1 — the 14:26 one, cancelled and credited |
+| Credit notes | 1 — `CN-2026-0008` |
+| Stock movements with reason `sale` | **0** |
+| Products | 4, all four costed (`products_without_cost: 0`) |
+| Products written up (brand knowledge) | **0** of 4 |
+| Products with sizes | 1 of 4 (2 size rows) |
+| Style submissions | 0 |
+| Reviews · Expenses | 0 · 0 |
+| Customer accounts · admins | 4 · 3 (all three with MFA) |
+| Publish queue | empty — no pending product, category or journal drafts |
+| Ask Wovenne | **off** |
+
+### Still inert, and known to be
+
+**WhatsApp** — `parseInbound()` returns null and `sendReply()` is a no-op; four
+TODOs. The shared core is ready and runs the same tool loop the widget does, so
+this is a provider and a template approval away, not a rebuild.
+
+**Shiprocket** — verified: the string "shiprocket" appears nowhere in `app/`,
+`lib/` or `components/`. Dispatch is typed by hand.
+
+**Guest order tracking** — a guest gets no order tool at all, by decision in #100.
+There is no way to identify whose orders are whose without a session.
