@@ -7,6 +7,7 @@ import { formatINR } from "@/lib/utils";
 import { buttonClassName } from "@/components/ui/Button";
 import OrderStatusTrail from "@/components/account/OrderStatusTrail";
 import InvoiceLink from "@/components/order/InvoiceLink";
+import ShareYourStyle from "@/components/style/ShareYourStyle";
 
 export const metadata: Metadata = {
   title: "Your orders | THE WOVENNE",
@@ -167,17 +168,30 @@ export default async function OrdersPage() {
                       </h2>
                       <ul className="mt-2 space-y-1 text-sm text-ink">
                         {order.items.map((item, i) => (
-                          <li key={i} className="flex justify-between gap-3">
-                            <span>
-                              {item.name}
-                              {item.size && item.size !== "One Size" && (
-                                <span className="text-ink/50"> · {item.size}</span>
-                              )}
-                              <span className="text-ink/50"> × {item.quantity}</span>
-                            </span>
-                            <span className="whitespace-nowrap">
-                              {formatINR(item.price_inr * item.quantity)}
-                            </span>
+                          <li key={i}>
+                            <div className="flex justify-between gap-3">
+                              <span>
+                                {item.name}
+                                {item.size && item.size !== "One Size" && (
+                                  <span className="text-ink/50"> · {item.size}</span>
+                                )}
+                                <span className="text-ink/50"> × {item.quantity}</span>
+                              </span>
+                              <span className="whitespace-nowrap">
+                                {formatINR(item.price_inr * item.quantity)}
+                              </span>
+                            </div>
+                            {/* Offered only on a DELIVERED order, which is the
+                                same condition has_purchased() applies — asking
+                                somebody to photograph a parcel that has not
+                                arrived would be the form promising something the
+                                database then refuses. */}
+                            {order.status === "delivered" && item.id && (
+                              <ShareYourStyle
+                                productId={item.id}
+                                productName={item.name}
+                              />
+                            )}
                           </li>
                         ))}
                       </ul>

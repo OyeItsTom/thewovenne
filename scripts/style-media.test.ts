@@ -18,6 +18,7 @@ import {
   parseStyleLink,
   watchLabel,
 } from "../lib/styleMedia";
+import { targetDimensions } from "../lib/stylePhoto";
 
 let pass = 0;
 let fail = 0;
@@ -107,6 +108,22 @@ eq("youtube", watchLabel("youtube"), "Watch on YouTube");
 eq("instagram", watchLabel("instagram"), "Watch on Instagram");
 t("the link help names both platforms and rules out profiles",
   /Instagram/.test(LINK_HELP) && /YouTube/.test(LINK_HELP) && /profile/.test(LINK_HELP));
+
+console.log("\n=== the downscale arithmetic ===");
+// Tested apart from the canvas, because this is where an off-by-one turns every
+// portrait into a slightly squashed one and no browser is needed to see it.
+eq("a big portrait scales to the ceiling, aspect kept",
+  targetDimensions(3024, 4032), { width: 2000, height: 2667 });
+eq("a big landscape too", targetDimensions(4032, 3024), { width: 2000, height: 1500 });
+eq("one already inside the ceiling is untouched",
+  targetDimensions(1200, 1500), { width: 1200, height: 1500 });
+eq("a small one is NOT enlarged", targetDimensions(700, 900), { width: 700, height: 900 });
+eq("exactly the ceiling is untouched", targetDimensions(2000, 2500), { width: 2000, height: 2500 });
+// A zero-height canvas throws rather than drawing, so an extreme panorama must
+// still round to at least one pixel.
+t("an extreme panorama never rounds to a zero-height canvas",
+  targetDimensions(60000, 20).height >= 1, JSON.stringify(targetDimensions(60000, 20)));
+eq("nonsense in, nothing out", targetDimensions(0, 0), { width: 0, height: 0 });
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);
