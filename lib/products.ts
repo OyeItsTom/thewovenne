@@ -12,7 +12,15 @@ export const PRODUCT_SELECT =
   "stock_quantity, image_url, is_active, created_at, collection, " +
   // Customer-facing, unlike cost and sku: the product page renders it.
   "video_youtube_id, " +
-  "discount_type, discount_value, discount_starts_at, discount_ends_at";
+  "discount_type, discount_value, discount_starts_at, discount_ends_at, " +
+  // The gallery, embedded rather than fetched per card. Two URLs — the cover and
+  // the one a card cross-fades to — are two short strings; the IMAGE BYTES are
+  // the expensive part and none are fetched here. Reading it in the listing
+  // query is what lets the card decide on hover without a round trip of its own.
+  //
+  // Embedded through product_images.product_version_id, so it is this version's
+  // gallery: a draft's photos stay with the draft.
+  "product_images(url, sort_order)";
 
 /**
  * Base query for every storefront listing.
@@ -58,6 +66,8 @@ export type ProductVersionRow = {
   discount_starts_at: string | null;
   discount_ends_at: string | null;
   video_youtube_id: string | null;
+  /** Embedded gallery. Absent on queries that do not ask for it. */
+  product_images?: { url: string | null; sort_order: number | null }[] | null;
 };
 
 /**
@@ -103,7 +113,37 @@ export function mapProduct(row: ProductVersionRow, categories: Map<string, Categ
     // fields make an absent one type-check perfectly. scripts/product-mapping.test.ts
     // now fails if any of the three disagree.
     video_youtube_id: row.video_youtube_id ?? null,
+    hover_image_url: pickHoverImage(row.product_images, row.image_url),
   };
+}
+
+/**
+ * The photo a card cross-fades to: the first gallery image that is not the one
+ * already showing.
+ *
+ * NOT SIMPLY images[1]. image_url is kept in sync with the lowest sort_order,
+ * but "kept in sync" is a promise made by the admin save path, and a cover that
+ * has drifted would make a card cross-fade from a photograph to the same
+ * photograph — a flicker with no explanation. Comparing the URLs costs nothing
+ * and cannot be wrong.
+ *
+ * Returns null when there is nothing to show, which is every product today: all
+ * four have exactly one photograph. A card with no second image does not cycle
+ * at all rather than cycling to a placeholder.
+ */
+export function pickHoverImage(
+  images: { url: string | null; sort_order: number | null }[] | null | undefined,
+  cover: string | null
+): string | null {
+  if (!images || images.length === 0) return null;
+
+  const ordered = [...images]
+    .filter((i): i is { url: string; sort_order: number | null } => !!i.url)
+    // Nulls last, so a row saved without a sort_order cannot jump to the front
+    // and become the hover image ahead of a deliberately ordered gallery.
+    .sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
+
+  return ordered.find((i) => i.url !== cover)?.url ?? null;
 }
 
 /**
