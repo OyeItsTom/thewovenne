@@ -45,6 +45,7 @@ interface Submission {
   created_at: string;
   customer_email: string | null;
   customer_name: string | null;
+  admin_notified_at: string | null;
 }
 
 type Tab = "pending" | "approved" | "rejected";
@@ -254,6 +255,18 @@ export default function StyleManager() {
                   >
                     <ExternalLink className="h-3.5 w-3.5" /> {watchLabel(link.platform)}
                   </a>
+                )}
+
+                {/* Only on a pending row, and only when the notice never went.
+                    A photograph nobody was told about is one that could sit here
+                    for a week — saying so is what stops the email feature
+                    failing silently. Not shown once reviewed: by then somebody
+                    has plainly seen it. */}
+                {row.status === "pending" && !row.admin_notified_at && (
+                  <p className="mt-2 text-xs text-terracotta-dark">
+                    No notification was sent for this one — it was found by
+                    opening this page.
+                  </p>
                 )}
 
                 {row.status === "rejected" && (
