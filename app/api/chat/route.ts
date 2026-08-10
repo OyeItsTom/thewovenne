@@ -77,11 +77,19 @@ export async function POST(req: NextRequest) {
   // needs three lookups is three model calls and still a single spend — the cap
   // is on what the customer asked for, not on how hard the answer was to find.
   let caller = anonymousCaller(req);
+  // The email is kept for the concierge as well as the quota: it is what turns
+  // order tracking on. Verified here and passed down, never read from the body —
+  // an email in a request body is a claim, and the concierge would be looking up
+  // orders against it.
+  let verifiedEmail: string | null = null;
   try {
     const {
       data: { user },
     } = await createRSCClient().auth.getUser();
-    if (user) caller = signedInCaller(user.id);
+    if (user) {
+      caller = signedInCaller(user.id);
+      verifiedEmail = user.email ?? null;
+    }
   } catch (err) {
     console.error("chat: session read failed, treating as anonymous:", err);
   }
@@ -97,7 +105,11 @@ export async function POST(req: NextRequest) {
   try {
     const replyStream = streamChat(messages, {
       orderId: body.orderId,
-      email: body.email,
+      // The session's address wins over anything the browser sent. The body form
+      // still works for a caller that supplies both an id and an email (the
+      // WhatsApp path, one day), but a signed-in customer never has to type
+      // theirs — and cannot be talked into typing somebody else's.
+      email: verifiedEmail ?? body.email,
       // Only the misses are logged. A tool that found what it was asked for is
       // the system working; a tool that found nothing is either a gap in the
       // catalogue or a piece whose story nobody has written yet, and both are

@@ -1,7 +1,10 @@
 # THE WOVENNE — project status log
 
-Last updated: 9 August 2026 (seventh session)
+Last updated: 10 August 2026 (seventh session)
 
+> **PRs #97, #98 and #99 are merged to `main`.** Migrations `0044`–`0051` are all
+> applied and verified. PR #100 (order tracking) is open.
+>
 > **Read the seventh-session section at the bottom first.** The shop took its
 > first ever order today, through the in-person screen, and three of the bugs
 > fixed in that section all fired on it. It has since been repaired — credit note
@@ -1285,6 +1288,121 @@ mode, and the script says `NO TOOLS WERE CALLED` when it happens.
   change — deliberately not made here, since it was not asked for.
 
 PR #99
+
+---
+
+## Order tracking actually works now — PR #100
+
+`lookupOrder` has existed since the concierge shipped and has **never once been
+reachable**. It needs an order id *and* an email from the request body; the widget
+sends neither, so the code was dead. Two things were wrong beyond that:
+
+1. **It compared the full uuid.** Every customer-facing surface shows
+   `orderRef()` — the first block, uppercased, `A53C16F7` — because that is what
+   somebody can read down a phone. A customer quoting the only reference they have
+   ever been given could never have matched.
+2. **The email came from the browser.** An email in a request body is a claim. Any
+   caller who guessed an id/email pair would have been handed the order.
+
+**The email now comes from the verified session**, read server-side in the route —
+the same read that decides the message allowance. And there is a fifth tool,
+`get_my_order`, offered **only when that session exists**.
+
+### Why the email is not a parameter
+
+It is closed over from the session and the query is pinned to it. The model
+chooses *which of that customer's orders* to describe and can choose nothing else:
+there is no argument it could pass, and no prompt anyone could send it, that
+widens the query to somebody else's order. The reference is filtered **in
+JavaScript over rows already pinned to that email**, so a reference cannot become
+a filter for another row either.
+
+**A guest is offered no tool at all**, rather than a tool that refuses — a tool in
+the list is a tool that gets tried, and the prompt tells it to ask them to sign in
+instead of asking for an order number it cannot verify.
+
+### It stays out of `lib/chatTools.ts`
+
+Orders are not publicly readable, so this one needs the service role. Every tool
+in `chatTools.ts` reads through the anonymous client and a test asserts that file
+contains no service client and no writer at all. Keeping that boundary legible was
+worth more than keeping all five tools in one file, so the privileged one sits
+next to the privileged function that already existed, and the loop decides whether
+to offer it.
+
+### What it tells the model
+
+Status, items, total, invoice number, courier and AWB once dispatched — and for a
+cancelled order, **an explicit instruction not to say the refund has been paid**,
+because a credit note records what is owed and the money moving is not visible
+from here. The same care as the cancellation email in #97.
+
+**18 assertions** (`scripts/order-tool.test.ts`), against the real orders table:
+four tools for a guest and five for a customer, the short reference resolving in
+upper and lower case and by full id, an unrelated session seeing nothing, and — the
+one that matters — **a known reference belonging to someone else refused, with
+nothing about them in the refusal**. The cancelled-order instruction is covered by
+real data, since the 14:26 order is cancelled.
+
+The widget needed no change: a same-origin fetch already sends the session cookie.
+There is now a comment saying so, because "nothing here" is otherwise indistinguishable
+from an oversight.
+
+PR #100
+
+---
+
+## The cost-price bug: what it actually cost
+
+The audit log answers this exactly, because `log_admin_action` records
+`{column: {from, to}}` for every update. **Two products lost a cost price**, both
+on 9 August, both to the mechanism described under PR #99:
+
+| Product | Cost wiped | When | By |
+|---|---|---|---|
+| `001` | **₹600** | 9 Aug, 11:31:25 | `admin@thewovenne.com` |
+| `Cotton` | **₹200** | 9 Aug, 11:33:22 | `admin@thewovenne.com` |
+
+The log shows the mechanism in the timestamps. Costs were set on **8 August at
+17:20–17:21** (null → 600, 200, 1900, 2000). On **9 August at 11:31**, `001` was
+edited: an `insert` of 28 fields — `ensure_product_draft` forking a draft and
+carrying the cost correctly — followed **0.27 seconds later** by an `update`
+setting `cost_price_inr` from `600.00` to `null`. That second row is the product
+form saving what it had shown, which was an empty box. `Cotton` repeats it exactly
+two minutes later.
+
+`Dress 1` (₹1,900) and `Mul Cotton` (₹2,000) still have their costs **only because
+they have not been edited since**. Their next edit would have taken them too.
+
+This is also the answer to the P&L's `products_without_cost: 2` — it was not two
+products nobody had costed. It was two products whose costs were erased.
+
+### RESTORED — 10 August, 00:43
+
+Both put back **through the normal draft/publish path**, not a direct UPDATE:
+`ensure_product_draft` forked a draft, the cost went on the draft, `publish_one`
+published it, and `0038`'s trigger carried it onto `products`. Three reasons that
+mattered — it is the same route the admin form takes, so a restore that worked
+proves the form does; the audit trigger records it as an ordinary edit rather than
+a value that changed by magic; and it re-exercises the carry-through this session
+has now touched twice.
+
+One transaction per product, refusing to run if either had an open draft (which
+would have published somebody's unfinished edit alongside the cost) or already had
+a cost (which would have overwritten it). Verified on **both** `products` and the
+published version before committing — a half-copied restore is the original bug
+again.
+
+| | Cost | `products` | Published version |
+|---|---|---|---|
+| `001` | ₹600 | ✅ | ✅ |
+| `Cotton` | ₹200 | ✅ | ✅ |
+
+**The P&L now reports `products_without_cost: 0`.** All four products are costed,
+four published versions, no drafts left open, the storefront still reads all four.
+
+Script: `scripts/restore-cost-prices.mjs` — kept because it documents what was
+restored and from where, and refuses to run twice.
 
 ---
 

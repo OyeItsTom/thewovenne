@@ -40,6 +40,11 @@ export default function AskWovenne() {
     try {
       // Only the real conversation turns go to the API (skip the greeting).
       const payload = nextMessages.filter((m, i) => !(i === 0 && m === GREETING));
+      // No credentials option and no email in the body, deliberately. A
+      // same-origin fetch already sends the session cookie, which is how the
+      // server recognises a signed-in customer — for the larger message
+      // allowance and for order tracking. Sending an email from here would be a
+      // claim the server would then have to trust; reading the session is not.
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
