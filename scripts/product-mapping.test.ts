@@ -19,6 +19,7 @@ import {
   mapAdminProduct,
   mapProduct,
   type AdminProductRow,
+  pickHoverImage,
   type ProductVersionRow,
 } from "../lib/products";
 
@@ -35,7 +36,21 @@ const RENAMED: Record<string, string> = {
   category_id: "category_id", // kept, and also resolved to a display name
 };
 
-const columns = PRODUCT_SELECT.split(",").map((c) => c.trim()).filter(Boolean);
+/**
+ * The plain columns, with EMBEDDED RESOURCES removed first.
+ *
+ * PostgREST embeds look like `product_images(url, sort_order)` — one selection
+ * containing a comma, which a naive split turns into two columns named
+ * "product_images(url" and "sort_order)". This test failed exactly that way when
+ * the gallery embed was added, which is the guard doing its job rather than a
+ * nuisance: an embed is not a column and is not carried by mapProduct field for
+ * field, so it is checked separately below.
+ */
+const embedded = [...PRODUCT_SELECT.matchAll(/(\w+)\s*\([^)]*\)/g)].map((m) => m[1]);
+const columns = PRODUCT_SELECT.replace(/\w+\s*\([^)]*\)/g, "")
+  .split(",")
+  .map((c) => c.trim())
+  .filter(Boolean);
 
 console.log(`\n=== PRODUCT_SELECT fetches ${columns.length} columns ===`);
 
@@ -123,6 +138,69 @@ const storefrontFromAdminRow = mapProduct(
 t("mapProduct does not copy cost_price_inr", storefrontFromAdminRow.cost_price_inr === undefined);
 t("mapProduct does not copy the brand knowledge", storefrontFromAdminRow.heritage_note === undefined,
   "the product page reads it through getBrandKnowledge, one piece at a time");
+
+// ── The hover image (PR 1) ─────────────────────
+// pickHoverImage decides what a card cross-fades to. It is pure, so it is
+// testable without a database — and it has to be right, because the failure
+// modes are invisible: cross-fading to the same photograph looks like a flicker,
+// and picking a draft's photo would show unpublished work on a category page.
+{
+  const H = (imgs: ({ url: string | null; sort_order: number | null })[] | null | undefined,
+             cover: string | null) => pickHoverImage(imgs, cover);
+
+  t("no gallery means no hover image", H(null, "a.jpg") === null,
+    "every product today has exactly one photograph");
+  t("an empty gallery too", H([], "a.jpg") === null);
+  t("a gallery of only the cover does not cycle to itself",
+    H([{ url: "a.jpg", sort_order: 0 }], "a.jpg") === null,
+    "a cross-fade from a photograph to the same photograph is a flicker");
+  t("the second photograph is chosen",
+    H([{ url: "a.jpg", sort_order: 0 }, { url: "b.jpg", sort_order: 1 }], "a.jpg") === "b.jpg");
+  t("sort_order decides, not array order",
+    H([{ url: "c.jpg", sort_order: 2 }, { url: "b.jpg", sort_order: 1 }], "a.jpg") === "b.jpg");
+  t("a null sort_order sorts last rather than first",
+    H([{ url: "z.jpg", sort_order: null }, { url: "b.jpg", sort_order: 1 }], "a.jpg") === "b.jpg",
+    "a row saved without an order must not jump ahead of a deliberate gallery");
+  t("a drifted cover still finds a different photograph",
+    H([{ url: "a.jpg", sort_order: 0 }, { url: "b.jpg", sort_order: 1 }], "stale.jpg") === "a.jpg",
+    "image_url being in sync is a promise, not a guarantee");
+  t("rows with no url are skipped",
+    H([{ url: null, sort_order: 0 }, { url: "b.jpg", sort_order: 1 }], "a.jpg") === "b.jpg");
+  t("the input array is not mutated", (() => {
+    const input = [{ url: "c.jpg", sort_order: 2 }, { url: "b.jpg", sort_order: 1 }];
+    H(input, "a.jpg");
+    return input[0].url === "c.jpg";
+  })(), "mapProduct runs over a shared row; sorting in place would reorder the caller's gallery");
+}
+
+// ── The embed is fetched, and it is actually used ──
+// The three-place rule applies to the gallery too, just differently: it must be
+// asked for in PRODUCT_SELECT, typed on ProductVersionRow, and turned into
+// something by mapProduct. Fetching it and dropping it is the #94 bug again,
+// only quieter — the cards would simply never cycle and nobody would know why.
+{
+  t("PRODUCT_SELECT embeds the gallery", embedded.includes("product_images"),
+    embedded.join(", ") || "none");
+
+  const withGallery = mapProduct(
+    {
+      ...(row as unknown as Record<string, unknown>),
+      image_url: "cover.jpg",
+      product_images: [
+        { url: "cover.jpg", sort_order: 0 },
+        { url: "second.jpg", sort_order: 1 },
+      ],
+    } as ProductVersionRow,
+    new Map()
+  );
+  t("mapProduct derives hover_image_url from the embed",
+    withGallery.hover_image_url === "second.jpg", String(withGallery.hover_image_url));
+
+  const noGallery = mapProduct({ ...(row as unknown as Record<string, unknown>), image_url: "cover.jpg" } as ProductVersionRow, new Map());
+  t("and null when the query did not ask for it",
+    noGallery.hover_image_url === null,
+    "a read without the embed must not crash a card");
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
