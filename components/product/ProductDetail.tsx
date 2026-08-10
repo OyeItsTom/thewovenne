@@ -5,6 +5,7 @@ import ImageGallery from "@/components/product/ImageGallery";
 import ProductOptions from "@/components/product/ProductOptions";
 import CareAccordion from "@/components/product/CareAccordion";
 import BrandKnowledgePanel from "@/components/product/BrandKnowledgePanel";
+import ProductStyleSection from "@/components/style/ProductStyleSection";
 import ProductVideo from "@/components/product/ProductVideo";
 import ProductGrid from "@/components/shop/ProductGrid";
 import WishlistButton from "@/components/shop/WishlistButton";
@@ -161,6 +162,12 @@ export default async function ProductDetail({
         reviews={reviews}
         rating={rating}
       />
+
+      {/* After reviews, before nothing — the confirmed ordering for the product
+          page redesign puts customer photographs here, between what people said
+          and what else they might like. It fetches its own data and renders
+          nothing when this piece has none. */}
+      <ProductStyleSection productId={product.id} productName={product.name} />
     </div>
   );
 }
