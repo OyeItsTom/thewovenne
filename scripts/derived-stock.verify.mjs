@@ -51,6 +51,11 @@ try {
   const sizesTotal = await one(`select coalesce(sum(ps.stock_quantity),0)::int total from product_sizes ps
     join products p on p.id = ps.product_id where p.slug = '001'`);
 
+  // Snapshot the archived rows before anything runs — see the assertion below.
+  const archivedBefore = await one(`select coalesce(string_agg(pv.stock_quantity::text, ',' order by pv.id), '') v
+    from product_versions pv join products p on p.id = pv.product_id
+    where p.slug='001' and pv.state='archived'`);
+
   await c.query(fs.readFileSync("supabase/migrations/0056_sized_stock_is_derived.sql", "utf8"));
 
   console.log("\n=== the row that prompted this ===");
@@ -60,11 +65,17 @@ try {
   t("its sizes total 13", sizesTotal.total === 13, String(sizesTotal.total));
   t("and it now reads 13", after.stock_quantity === 13, String(after.stock_quantity));
 
-  const archived = await one(`select count(distinct pv.stock_quantity)::int kinds, min(pv.stock_quantity)::int val
+  // ASSERTS THE RULE, NOT A SNAPSHOT. This first checked that every archived row
+  // of 001 read 2 — true the day it was written, and false as soon as a normal
+  // publish archived a version holding the corrected 13. That is history being
+  // made, not history being rewritten, and a test that cannot tell them apart is
+  // worse than none. So: record what the archived rows say BEFORE the migration
+  // and require them to say exactly the same afterwards.
+  const archivedAfter = await one(`select coalesce(string_agg(pv.stock_quantity::text, ',' order by pv.id), '') v
     from product_versions pv join products p on p.id = pv.product_id
     where p.slug='001' and pv.state='archived'`);
-  t("archived versions were NOT rewritten", archived.kinds === 1 && archived.val === 2,
-    `${archived.kinds} distinct value(s), = ${archived.val} — history is what was on the shelf then`);
+  t("archived versions were NOT rewritten", archivedAfter.v === archivedBefore.v,
+    `before [${archivedBefore.v}] after [${archivedAfter.v}] — history is what was on the shelf then`);
 
   console.log("\n=== a sale keeps it true ===");
   const prod = await one("select id from products where slug = '001'");
