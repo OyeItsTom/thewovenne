@@ -14,7 +14,7 @@ import { productHref } from "@/lib/urls";
 import WishlistButton from "./WishlistButton";
 import { useReveal, revealClass } from "@/lib/useReveal";
 import { useCartStore } from "@/lib/store";
-import Badge from "@/components/ui/Badge";
+import { stockState } from "@/lib/stock";
 
 export default function ProductCard({ product }: { product: Product }) {
   const { ref, revealed } = useReveal<HTMLDivElement>();
@@ -45,11 +45,16 @@ export default function ProductCard({ product }: { product: Product }) {
   const addItem = useCartStore((s) => s.addItem);
   const openCart = useCartStore((s) => s.openCart);
 
-  const outOfStock = product.stock_quantity <= 0;
+  // THE ONE INTERPRETATION OF INVENTORY. This used to carry its own rule —
+  // `stock_quantity <= 5` — a second opinion that disagreed with the product
+  // page's threshold of three. Post-0056 the column IS the derived total for a
+  // sized product, so asking lib/stock about it gives a card the same answer the
+  // page gives, by construction rather than by coincidence.
+  const stock = stockState(product.stock_quantity);
+  const outOfStock = stock.soldOut;
   // The campaign price, so the card, the cart and the charge all agree. The
   // server re-resolves this at checkout regardless — see the checkout route.
   const { price, wasPrice } = effectivePrice(product);
-  const lowStock = product.stock_quantity > 0 && product.stock_quantity <= 5;
 
   const handleQuickAdd = (e: MouseEvent) => {
     e.preventDefault();
@@ -109,15 +114,20 @@ export default function ProductCard({ product }: { product: Product }) {
             className="absolute right-3 top-3 z-10 opacity-0 transition-opacity duration-300 group-hover:opacity-100 focus-visible:opacity-100 md:opacity-0"
           />
 
-          {outOfStock ? (
-            <Badge tone="danger" className="absolute left-3 top-3">
-              Out of Stock
-            </Badge>
-          ) : lowStock ? (
-            <Badge tone="warning" className="absolute left-3 top-3">
-              Only {product.stock_quantity} left
-            </Badge>
-          ) : null}
+          {/* NO LOW-STOCK COPY ON A DISCOVERY CARD. "Only 2 left" scattered
+              across a grid is scarcity used as decoration: it competes with the
+              photograph, and it reads as a marketplace rather than a shop. That
+              sentence belongs where somebody is deciding to buy — beside the
+              size and the button — not where they are still looking.
+
+              SOLD OUT STAYS, because it is not urgency, it is the answer to
+              "can I buy this?" — and a customer who clicks through to find out
+              has been wasted. Quiet type on cream rather than a red badge. */}
+          {outOfStock && (
+            <span className="absolute left-3 top-3 rounded-full bg-cream/90 px-3 py-1 text-[11px] uppercase tracking-wider text-ink/70 backdrop-blur">
+              Sold out
+            </span>
+          )}
 
           {!outOfStock && (
             <button
