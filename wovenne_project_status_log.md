@@ -1476,25 +1476,50 @@ rows, or a path where `product_id` was absent from the row. Recorded here as an
 observation with its evidence rather than as a fix, because guessing at the reason
 in a log entry is how the next person inherits a wrong explanation.
 
-**Customer Style is schema only** — see below. The section for #96 records the
-schema accurately; nothing else about the feature exists.
+**Customer Style was schema only when this correction was written.** It is not
+any more — the section below was rewritten on 10 Aug 2026, after #102–#105
+merged and deployed. The paragraph above stands as what was true at the time.
 
-### Customer Style — a quarter built, and nothing customers can reach
+### Customer Style — built and live, waiting on its first photograph
 
-| | |
-|---|---|
-| Built | `style_submissions`, `public_style_submissions`, RLS (verified purchase via `has_purchased()`, consent required before approval, admin-only approval, immediate withdrawal), admin delete (`0048`), 9 security assertions |
-| Not built | submission form · moderation queue · public gallery · per-product section · image upload and dimension guidance · any email · layout of any kind |
+Shipped 10 Aug 2026 in four stacked PRs, merged in order and each deployed green:
 
-`select count(*) from style_submissions` → **0**. Nothing has ever been submitted,
-because there is no way to submit. Verified by grep: no file outside
-`scripts/style-security.test.mjs` references the tables, there is no admin section
-for it, and there is no storefront route.
+| PR | Part | What it added |
+|---|---|---|
+| #102 | foundations | `style-photos` bucket + per-user folder policy, `photo_width`/`photo_height`, `rejection_emailed_at` (`0052`), the shared media layer (`lib/styleMedia.ts`, `lib/stylePhoto.ts`) |
+| #103 | submission form | `StyleSubmissionForm` + `ShareYourStyle`, client-side downscale and HEIC→JPEG, `resubmit_style()` (`0053`) |
+| #104 | moderation queue | `/admin/dashboard/style`, `admin_style_submissions()` (`0054`), rejection email + `POST /api/admin/style/reject` |
+| #105 | public gallery | `/in/customer-style`, `StyleCard`/`StyleGallery`, per-product section on `ProductDetail`, footer link |
 
-**A decision waits here.** `0047` documents `reject_reason` as *"Internal. The
-customer is not told why, by decision — see the brief."* Rejection emails that
-explain the reason reverse that decision. That is allowed, but it is a change of
-mind rather than a gap, and the schema comment should change with it.
+**Where the entry point is, because it is not where people look for it.** There
+is no public "submit" URL, by design. "Share your style" appears on
+`/in/account/orders` — signed in, on an order whose status is **`delivered`**, as
+a button on each product line. The database refuses a submission from somebody
+who has not received that piece (`has_purchased()`), so a button anywhere else
+would be the form promising what the database then refuses. The only publicly
+linked page is the gallery, from the footer's Explore column.
+
+`select count(*) from style_submissions` → **0**. Nothing has been submitted yet
+— but the reason has changed: there is now a way to submit and nobody has used it,
+where before there was no way at all. The gallery is therefore showing its empty
+state, which is a designed state rather than a broken grid.
+
+**The queue needs checking on a rhythm, not when it occurs to somebody.** This is
+the first public surface on the site whose content is written by people outside
+the business, and approval is the only thing between a submitted photograph and
+the storefront. Nothing notifies anybody that something is pending — there is no
+alert, no digest, no badge. A submission sits in `/admin/dashboard/style` until a
+human opens that page.
+
+**The decision that was open here is closed.** `0047` had `reject_reason` as
+*"Internal. The customer is not told why."* `0052` supersedes that comment in the
+schema itself: the reason is now written in words the customer reads, and a null
+reason means a silent rejection, which is what spam gets. The change of mind is
+recorded where the column is defined rather than only here.
+
+**Not yet done by a human:** no submission has been made, so the full path —
+submit → pending → approve → gallery, and separately a turn-down email as a
+customer receives it — has not been walked end to end on production.
 
 ### Verified data state
 
