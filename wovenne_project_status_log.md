@@ -1377,8 +1377,32 @@ they have not been edited since**. Their next edit would have taken them too.
 This is also the answer to the P&L's `products_without_cost: 2` — it was not two
 products nobody had costed. It was two products whose costs were erased.
 
-**Both values are recoverable from the audit log and nothing has been restored
-yet** — see the outstanding list.
+### RESTORED — 10 August, 00:43
+
+Both put back **through the normal draft/publish path**, not a direct UPDATE:
+`ensure_product_draft` forked a draft, the cost went on the draft, `publish_one`
+published it, and `0038`'s trigger carried it onto `products`. Three reasons that
+mattered — it is the same route the admin form takes, so a restore that worked
+proves the form does; the audit trigger records it as an ordinary edit rather than
+a value that changed by magic; and it re-exercises the carry-through this session
+has now touched twice.
+
+One transaction per product, refusing to run if either had an open draft (which
+would have published somebody's unfinished edit alongside the cost) or already had
+a cost (which would have overwritten it). Verified on **both** `products` and the
+published version before committing — a half-copied restore is the original bug
+again.
+
+| | Cost | `products` | Published version |
+|---|---|---|---|
+| `001` | ₹600 | ✅ | ✅ |
+| `Cotton` | ₹200 | ✅ | ✅ |
+
+**The P&L now reports `products_without_cost: 0`.** All four products are costed,
+four published versions, no drafts left open, the storefront still reads all four.
+
+Script: `scripts/restore-cost-prices.mjs` — kept because it documents what was
+restored and from where, and refuses to run twice.
 
 ---
 
@@ -1404,10 +1428,6 @@ yet** — see the outstanding list.
   you write them, Ask Wovenne is no better informed about heritage or care than it
   was, and the product page shows no story section. This is the one item on this
   list where the value arrives with your text rather than with a merge
-- **Restore two cost prices** — `001` was ₹600 and `Cotton` was ₹200 before the
-  bug erased them; both values come from the audit log. Nothing has been written
-  back, because it is your money and your books. One word and it is done, through
-  the normal draft/publish path so the change is audited like any other edit
 - **One live concierge run** — `npx tsx scripts/concierge-live.ts "…"` with a real
   `ANTHROPIC_API_KEY` in `.env.local`, to confirm the model actually calls the
   tools. Everything else about them is tested; that part cannot be
