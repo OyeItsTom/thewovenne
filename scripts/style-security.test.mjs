@@ -13,7 +13,11 @@ const env=Object.fromEntries(fs.readFileSync(".env.local","utf8").split("\n").fi
 const c=new pg.Client({connectionString:env.SUPABASE_DB_URL, ssl:{rejectUnauthorized:false}});
 let ok=0,bad=0; const t=(n,p,d="")=>{console.log(`  ${p?"PASS":"FAIL"}  ${n}${d?"  — "+d:""}`);p?ok++:bad++;};
 const sp=async(label,fn)=>{await c.query(`savepoint ${label}`);try{const r=await fn();await c.query(`release savepoint ${label}`);return{ok:true,r};}catch(e){await c.query(`rollback to savepoint ${label}`);return{ok:false,e:e.message};}};
-await c.connect(); await c.query("begin");
+await c.connect();
+// What the database held before this test touched anything. Compared against
+// after the rollback, rather than against zero — see the final assertion.
+const baseline=(await c.query("select (select count(*)::int from style_submissions) s,(select count(*)::int from orders) o")).rows[0];
+await c.query("begin");
 try{
   const admin=(await c.query("select id,email from profiles where is_admin limit 1")).rows[0];
   const cust=(await c.query("select id,email from profiles where not is_admin limit 1")).rows[0];
@@ -87,7 +91,14 @@ try{
 }catch(e){ console.log("  ERROR:",e.message); bad++; }
 finally{
   await c.query("rollback");
+  // COMPARED AGAINST THE BASELINE, not against zero. This asserted `orders === 0`
+  // and was right until the shop took its first order on 9 August — after which a
+  // perfectly good rollback reported a failure. A test that assumes an empty shop
+  // reports a fault in the shop rather than one in itself. Same correction as
+  // scripts/cancel-guard.verify.mjs needed for the same reason.
   const left=await c.query("select (select count(*)::int from style_submissions) s,(select count(*)::int from orders) o");
-  t("ROLLED BACK — nothing written", left.rows[0].s===0 && left.rows[0].o===0, `submissions ${left.rows[0].s}, orders ${left.rows[0].o}`);
+  t("ROLLED BACK — nothing written",
+    left.rows[0].s===baseline.s && left.rows[0].o===baseline.o,
+    `submissions ${left.rows[0].s}/${baseline.s}, orders ${left.rows[0].o}/${baseline.o}`);
   await c.end(); console.log(`\n${ok} passed, ${bad} failed`);
 }
