@@ -63,6 +63,14 @@ export default async function Footer() {
                 Journal
               </Link>
             </li>
+            <li>
+              <Link
+                href="/in/customer-style"
+                className="transition-colors hover:text-cream"
+              >
+                Customer Style
+              </Link>
+            </li>
             {pages.map((page) => (
               <li key={page.id}>
                 <Link

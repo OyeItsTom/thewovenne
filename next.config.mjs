@@ -17,7 +17,15 @@ const nextConfig = {
         hostname: "placehold.co",
       },
       {
-        // Product photos uploaded to Supabase Storage.
+        // YouTube's own thumbnails, for a customer's video submission. Needed
+        // even though that <Image> is `unoptimized`: if anyone ever removes that
+        // prop the optimizer starts validating the host, and a missing entry is
+        // a runtime error on a page that was working.
+        protocol: "https",
+        hostname: "i.ytimg.com",
+      },
+      {
+        // Product photos, and customers' style photographs, in Supabase Storage.
         protocol: "https",
         hostname: "*.supabase.co",
       },
