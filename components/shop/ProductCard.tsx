@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-// Type-only: React exports these as types, not values, and importing them as
-// value bindings is a runtime error under isolatedModules.
-import type { MouseEvent, PointerEvent } from "react";
+// Type-only: React exports this as a type, not a value, and importing it as a
+// value binding is a runtime error under isolatedModules.
+import type { MouseEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
@@ -19,29 +19,41 @@ import { stockState } from "@/lib/stock";
 export default function ProductCard({ product }: { product: Product }) {
   const { ref, revealed } = useReveal<HTMLDivElement>();
 
-  // ── The second photograph ──────────────────────
-  // `armed` is one-way: once a mouse has been over this card the image stays
-  // mounted, so leaving and returning does not re-request it. `hovering` is what
-  // actually cross-fades. Splitting the two is the whole trick — a single state
-  // would either re-download on every pass or download for everybody.
+  // ── The photographs ───────────────────────────
+  // MANUAL ONLY. #108 changed the image when a mouse arrived; nothing changes it
+  // now except a customer pressing an arrow. No timer, no hover switch, no
+  // advance on entering the viewport, and no reset — the card stays exactly
+  // where it was left.
   //
-  // NOTHING IS FETCHED UNTIL A MOUSE ARRIVES. A hidden <Image> that is merely
-  // transparent still downloads when it scrolls into view, which would put a
-  // second photograph of every product on the wire for a visitor who never
-  // hovers — the opposite of the point.
-  const [armed, setArmed] = useState(false);
-  const [hovering, setHovering] = useState(false);
-  const [hoverLoaded, setHoverLoaded] = useState(false);
-  const hoverSrc = product.hover_image_url ?? null;
+  // `index` is per card, held here rather than anywhere shared, so pressing next
+  // on one product cannot move another. It starts at 0 and stays there until
+  // somebody asks for something else.
+  const images = product.images?.length ? product.images : product.image_url ? [product.image_url] : [];
+  const [index, setIndex] = useState(0);
 
-  // Touch fires pointerenter too, and on a phone a tap means "open this
-  // product", not "show me the other angle". Mouse only, deliberately: see the
-  // brief — a swipe on a card fights the page's own vertical scroll.
-  const onPointerEnter = (e: PointerEvent) => {
-    if (!hoverSrc || e.pointerType !== "mouse") return;
-    setArmed(true);
-    setHovering(true);
+  // Only photographs the customer has actually asked for are mounted. A hidden
+  // <Image> that is merely transparent still downloads once it scrolls into
+  // view, so rendering the whole gallery would put every secondary photograph of
+  // every product on the wire for a visitor who never presses an arrow — the
+  // cost #108 was careful to avoid, and the reason this grows rather than
+  // rendering images.map().
+  const [mounted, setMounted] = useState(0);
+
+  const step = (delta: number) => (e: MouseEvent) => {
+    // The card is a link. Without both of these, changing the photograph would
+    // open the product page instead.
+    e.preventDefault();
+    e.stopPropagation();
+    const next = index + delta;
+    if (next < 0 || next >= images.length) return;
+    setIndex(next);
+    setMounted((m) => Math.max(m, next));
   };
+
+  const hasMany = images.length > 1;
+  const atStart = index === 0;
+  const atEnd = index === images.length - 1;
+
   const addItem = useCartStore((s) => s.addItem);
   const openCart = useCartStore((s) => s.openCart);
 
@@ -71,17 +83,16 @@ export default function ProductCard({ product }: { product: Product }) {
   };
 
   return (
-    <div
-      ref={ref}
-      className={`group ${revealClass(revealed)}`}
-      onPointerEnter={onPointerEnter}
-      onPointerLeave={() => setHovering(false)}
-    >
+    <div ref={ref} className={`group ${revealClass(revealed)}`}>
       <Link href={productHref(product)} className="block">
         <div className="relative aspect-[4/5] overflow-hidden rounded-xl bg-linen">
-          {product.image_url && (
+          {/* THE COVER IS ALWAYS THE BASE LAYER, at full opacity, and every
+              other photograph fades in on top of it. That is what stops a blank
+              frame: a chosen image that has not downloaded yet simply has not
+              covered the cover yet, rather than replacing it with nothing. */}
+          {images[0] && (
             <Image
-              src={product.image_url}
+              src={images[0]}
               alt={product.name}
               fill
               sizes="(min-width: 1024px) 25vw, (min-width: 768px) 33vw, 50vw"
@@ -89,22 +100,52 @@ export default function ProductCard({ product }: { product: Product }) {
             />
           )}
 
-          {/* The cross-fade. Held at opacity-0 until the file has actually
-              arrived, so a slow connection shows the cover a moment longer
-              rather than a half-drawn photograph. Decorative: the card is
-              already labelled by the product name below it. */}
-          {armed && hoverSrc && (
+          {images.slice(1, mounted + 1).map((src, i) => (
             <Image
-              src={hoverSrc}
+              key={src}
+              src={src}
               alt=""
               aria-hidden
               fill
               sizes="(min-width: 1024px) 25vw, (min-width: 768px) 33vw, 50vw"
-              onLoad={() => setHoverLoaded(true)}
-              className={`object-cover transition-[opacity,transform] duration-700 ease-out group-hover:scale-105 motion-reduce:transition-none ${
-                hovering && hoverLoaded ? "opacity-100" : "opacity-0"
+              className={`object-cover transition-opacity duration-300 ease-out group-hover:scale-105 motion-reduce:transition-none ${
+                index === i + 1 ? "opacity-100" : "opacity-0"
               }`}
             />
+          ))}
+
+          {/* ── Manual navigation ──
+              Only when there is somewhere to go. Quiet and small — a scaled-down
+              version of the product gallery's arrows (#109), not a slideshow
+              control: same chevron, same cream disc, roughly two thirds the
+              size, and sitting inside the frame rather than over the middle of
+              the garment.
+
+              Visible on touch, where there is no hover to reveal them, and on
+              hover or keyboard focus on a pointer device. Disabled rather than
+              hidden at the ends, so the card does not reflow as somebody steps
+              through, and so nothing is offered that would do nothing. */}
+          {hasMany && (
+            <>
+              <button
+                type="button"
+                onClick={step(-1)}
+                disabled={atStart}
+                aria-label={`Previous image of ${product.name}`}
+                className="absolute left-2 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink shadow-soft backdrop-blur transition-opacity duration-300 disabled:opacity-25 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={step(1)}
+                disabled={atEnd}
+                aria-label={`Next image of ${product.name}`}
+                className="absolute right-2 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink shadow-soft backdrop-blur transition-opacity duration-300 disabled:opacity-25 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </>
           )}
 
           <WishlistButton
