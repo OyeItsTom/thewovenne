@@ -691,14 +691,35 @@ export default function ProductModal({
             value={form.colour}
             onChange={update("colour")}
           />
-          <Field
-            label="Stock Quantity"
-            type="number"
-            min="0"
-            required
-            value={form.stock_quantity}
-            onChange={update("stock_quantity")}
-          />
+          {/* DERIVED, NOT TYPED, once a product has sizes (migration 0056).
+              The database overwrites whatever this field sends with the sum of
+              the sizes, so leaving it editable would be offering a control that
+              silently does nothing — which is how 001 came to claim 2 units
+              while holding 13. Stock is managed in one place: below. */}
+          {sizes.length > 0 ? (
+            <label className="block">
+              <span className="text-sm font-medium text-ink/70">Stock Quantity</span>
+              <input
+                type="text"
+                readOnly
+                tabIndex={-1}
+                value={sizes.reduce((n, sz) => n + (Number(sz.stock_quantity) || 0), 0)}
+                className="mt-1 w-full cursor-not-allowed rounded-lg border border-ink/10 bg-linen/50 px-3 py-2 text-ink/60"
+              />
+              <span className="mt-1 block text-xs text-ink/55">
+                Added up from the sizes below — edit it there.
+              </span>
+            </label>
+          ) : (
+            <Field
+              label="Stock Quantity"
+              type="number"
+              min="0"
+              required
+              value={form.stock_quantity}
+              onChange={update("stock_quantity")}
+            />
+          )}
         </div>
 
         <fieldset className="rounded-lg border border-ink/10 p-4">
@@ -708,8 +729,9 @@ export default function ProductModal({
 
           <p className="text-xs text-ink/60">
             Leave empty for products sold in one size — sarees, home — which use
-            the single stock number above. Otherwise each size carries its own
-            count.
+            the single stock number above. Add sizes and this becomes the only
+            place stock is managed: the product total is added up from these, and
+            the field above turns into a read-out of that sum.
           </p>
           {/* Said plainly because it contradicts every other field in this
               form, and an admin who assumed otherwise would oversell. */}

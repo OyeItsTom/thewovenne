@@ -16,6 +16,7 @@ import { getBrandKnowledge } from "@/lib/storefront";
 import { cPath } from "@/lib/country";
 import type { Product } from "@/lib/types";
 import type { ProductSize } from "@/lib/sizes";
+import { stockNote, stockState } from "@/lib/stock";
 
 /**
  * The product page body, shared so the canonical hierarchical route is the only
@@ -41,6 +42,9 @@ export default async function ProductDetail({
   breadcrumb?: { parent: { slug: string; name: string }; child: { slug: string; name: string } };
 }) {
   const { price, wasPrice } = effectivePrice(product);
+  // Decided before anything renders, so the note appears NEXT TO THE PRICE
+  // rather than after a size is chosen — which was after the moment it mattered.
+  const note = stockNote(stockState(product.stock_quantity, sizes));
   // Fetched HERE for the same reason reviews are: both routes render this file,
   // and a read done in one route and not the other is how two pages start
   // showing different things about one product.
@@ -132,6 +136,17 @@ export default async function ProductDetail({
               </span>
             )}
           </p>
+
+          {note && (
+            /* A gold dot and a line of small caps. No red, no badge, no count
+               ticking down: the fact, said once, in the same voice as the rest
+               of the page. Sold out reads the same way — a piece being gone is
+               information, not a failure to apologise for. */
+            <p className="mt-4 flex items-center gap-2 text-xs uppercase tracking-[0.12em] text-ink/55">
+              <span aria-hidden className="h-1 w-1 rounded-full bg-gold" />
+              {note}
+            </p>
+          )}
 
           {product.description && (
             <p className="mt-6 max-w-prose text-[15px] leading-[1.75] text-ink/70">
