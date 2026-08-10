@@ -20,8 +20,15 @@ import ImageWeaveOverlay from "@/components/weave/ImageWeaveOverlay";
  * somebody looks closely, so the main frame is 3:4 and rises to the full column
  * on desktop. The lightbox stays for anyone who wants it larger still.
  *
- * ARROW KEYS WORK when the gallery has focus, because a keyboard user should not
- * have to tab through four thumbnails to see the back of a garment.
+ * ARROWS YOU CAN SEE AND PRESS. The first version of this shipped keyboard
+ * arrows only — which is not navigation, it is a secret. Almost nobody tries the
+ * arrow keys on a photograph, so the gallery read as "click each thumbnail
+ * individually" and the cross-fade looked broken. The buttons are the primary
+ * control now; the keys still work for anyone who does reach for them.
+ *
+ * THEY ARE ALWAYS VISIBLE ON TOUCH and fade in on hover on desktop. A control
+ * that only appears on hover does not exist on a phone, and hiding it there
+ * would repeat the same mistake in a different way.
  */
 export default function ImageGallery({
   images,
@@ -84,6 +91,31 @@ export default function ImageGallery({
         ))}
         {/* Interactive weave — the cloth reacts to your hand. */}
         <ImageWeaveOverlay pointer={pointer} />
+        {images.length > 1 && (
+          <>
+            <button
+              onClick={(e) => { e.stopPropagation(); go(-1); }}
+              aria-label="Previous image"
+              className="absolute left-3 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink shadow-soft backdrop-blur transition-all duration-300 hover:bg-cream lg:opacity-0 lg:group-hover:opacity-100 lg:focus-visible:opacity-100"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); go(1); }}
+              aria-label="Next image"
+              className="absolute right-3 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink shadow-soft backdrop-blur transition-all duration-300 hover:bg-cream lg:opacity-0 lg:group-hover:opacity-100 lg:focus-visible:opacity-100"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </button>
+
+            {/* Where you are in the set, for anyone who does not want to count
+                thumbnails. Bottom left, so it never sits under the arrows. */}
+            <span className="pointer-events-none absolute bottom-3 left-3 rounded-full bg-cream/80 px-3 py-1 text-xs tabular-nums text-ink/70 backdrop-blur">
+              {active + 1} / {images.length}
+            </span>
+          </>
+        )}
+
         <button
           onClick={() => setLightboxOpen(true)}
           aria-label="Open full image"
