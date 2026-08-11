@@ -20,17 +20,17 @@ export default function CartDrawer() {
   return (
     <AnimatePresence>
       {isOpen && (
-        /* The wrapper never takes pointer events; only the backdrop and panel do,
-           and the backdrop gives them up on exit. AnimatePresence does not
-           reliably unmount this subtree, so rather than depend on that, the
-           leftover is made harmless — otherwise an invisible backdrop blocks
-           every page. See components/ui/Modal.tsx for the full account. */
-        <div key="cart-drawer" className="pointer-events-none fixed inset-0 z-[70] flex justify-end">
-          <motion.div
-            className="pointer-events-auto absolute inset-0 bg-ink/40 backdrop-blur-sm"
-            initial={{ opacity: 0, pointerEvents: "auto" }}
-            animate={{ opacity: 1, pointerEvents: "auto" }}
-            exit={{ opacity: 0, pointerEvents: "none" }}
+        <motion.div
+          key="cart-drawer"
+          className="fixed inset-0 z-[70] flex justify-end"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+        >
+          {/* Plain div now. The backdrop's fade moved up to the wrapper, which
+              leaves AnimatePresence with a single motion child to wait on. */}
+          <div
+            className="absolute inset-0 bg-ink/40 backdrop-blur-sm"
             onClick={closeCart}
             aria-hidden
           />
@@ -39,7 +39,7 @@ export default function CartDrawer() {
             animate="visible"
             exit="exit"
             variants={panel}
-            className="pointer-events-auto relative flex h-full w-full max-w-md flex-col bg-cream p-6 shadow-lift sm:p-8"
+            className="relative flex h-full w-full max-w-md flex-col bg-cream p-6 shadow-lift sm:p-8"
           >
             <div className="flex items-center justify-between">
               <h2 className="font-heading text-2xl text-ink">Your Bag</h2>
@@ -81,7 +81,7 @@ export default function CartDrawer() {
               </div>
             )}
           </motion.div>
-        </div>
+        </motion.div>
       )}
     </AnimatePresence>
   );
