@@ -1,17 +1,33 @@
 import Image from "next/image";
 import { cPath } from "@/lib/country";
 import Link from "next/link";
-import { Facebook, Instagram, MessageCircle } from "lucide-react";
+import { Instagram, Mail, MessageCircle } from "lucide-react";
 import { getPublishedPages } from "@/lib/storefront";
 
 const INSTAGRAM_URL = "https://www.instagram.com/thewovenne";
 
+/**
+ * Our Story has a hand-written link, in a deliberate position, so the CMS page
+ * that points at the same route must not print a second one.
+ *
+ * Matching on the ROUTE, not the title: an admin renaming the page to "About
+ * us" would slip past a title match and the duplicate would quietly return.
+ */
+const HARDCODED_PAGE_SLUGS = new Set(["about"]);
+
 export default async function Footer() {
   // Footer links come from the pages themselves, so adding a page adds its link.
-  const pages = (await getPublishedPages()).filter((p) => p.in_footer);
+  const pages = (await getPublishedPages()).filter(
+    (p) => p.in_footer && !HARDCODED_PAGE_SLUGS.has(p.slug)
+  );
+
+  // NO NUMBER, NO LINK. Unset, this interpolated to the string "undefined" and
+  // shipped `wa.me/undefined` — a live, clickable, broken contact route. It is
+  // set in Production and absent from Preview, so every preview review has been
+  // looking at a dead WhatsApp button.
   const number = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
   const message = encodeURIComponent("Hi, I'm interested in THE WOVENNE products");
-  const whatsappHref = `https://wa.me/${number}?text=${message}`;
+  const whatsappHref = number ? `https://wa.me/${number}?text=${message}` : null;
 
   return (
     <footer className="relative overflow-hidden bg-ink text-cream">
@@ -64,11 +80,13 @@ export default async function Footer() {
               </Link>
             </li>
             <li>
+              {/* The same name the header uses. Two labels for one page is how
+                  a customer concludes they are two pages. */}
               <Link
                 href="/in/customer-style"
                 className="transition-colors hover:text-cream"
               >
-                Customer Style
+                Worn by You
               </Link>
             </li>
             {pages.map((page) => (
@@ -87,17 +105,33 @@ export default async function Footer() {
         <div>
           <h3 className="font-heading text-lg text-gold">Connect</h3>
           <ul className="mt-4 space-y-2 text-sm text-cream/70">
+            {whatsappHref && (
+              <li>
+                <a
+                  href={whatsappHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 transition-colors hover:text-cream"
+                >
+                  <MessageCircle className="h-4 w-4" /> WhatsApp
+                </a>
+              </li>
+            )}
             <li>
+              {/* A written address, spelled out rather than hidden behind the
+                  word "email": somebody deciding whether to trust a shop wants
+                  to see that there is a person at the other end. */}
               <a
-                href={whatsappHref}
-                target="_blank"
-                rel="noopener noreferrer"
+                href="mailto:hello@thewovenne.com"
                 className="inline-flex items-center gap-2 transition-colors hover:text-cream"
               >
-                <MessageCircle className="h-4 w-4" /> WhatsApp
+                <Mail className="h-4 w-4" /> hello@thewovenne.com
               </a>
             </li>
           </ul>
+          {/* NO FACEBOOK ICON UNTIL THERE IS A FACEBOOK PAGE. It linked to "#",
+              which scrolls to the top and looks like a bug. An icon that goes
+              nowhere costs more trust than an absent one. */}
           <div className="mt-5 flex gap-4 text-cream/70">
             <a
               href={INSTAGRAM_URL}
@@ -107,9 +141,6 @@ export default async function Footer() {
               className="transition-colors hover:text-cream"
             >
               <Instagram className="h-5 w-5" />
-            </a>
-            <a href="#" aria-label="Facebook" className="transition-colors hover:text-cream">
-              <Facebook className="h-5 w-5" />
             </a>
           </div>
         </div>

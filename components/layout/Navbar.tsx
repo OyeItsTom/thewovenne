@@ -29,7 +29,14 @@ export default async function Navbar() {
     // anchor it pointed at went with it. A link that silently scrolls nowhere
     // is the classic leftover of moving content.
     { href: "/in/about", label: "Our Story" },
-    { href: "/in/journal", label: "Journal" },
+    // WORN BY YOU TAKES JOURNAL'S PLACE, rather than joining it. The primary bar
+    // holds five links before it starts wrapping on a narrow phone, and the
+    // photographs customers send us do more selling than an essay does — so the
+    // scarce slot goes to them.
+    //
+    // Journal is not deleted, only demoted: it keeps its route, its sitemap
+    // entry and its footer link. See the Explore column in Footer.tsx.
+    { href: "/in/customer-style", label: "Worn by You" },
   ];
 
   return <NavbarClient navLinks={navLinks} />;

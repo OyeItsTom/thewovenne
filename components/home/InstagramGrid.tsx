@@ -1,21 +1,37 @@
-"use client";
-
-import Image from "next/image";
-import { motion, useReducedMotion } from "framer-motion";
 import { Instagram } from "lucide-react";
-import { fadeUp, staggerContainer } from "@/lib/motion";
 
 const INSTAGRAM_URL = "https://www.instagram.com/thewovenne";
-const cells = Array.from({ length: 6 }, (_, i) => i + 1);
 
+/**
+ * The invitation to follow — with no feed behind it yet.
+ *
+ * WHAT WAS HERE: six square cells, each one the same placehold.co image reading
+ * "THE WOVENNE" in flat cream, each linking to the profile. It looked, at a
+ * glance, like a real feed of six posts. It was one placeholder repeated — a
+ * grid of nothing, dressed as evidence that people are posting.
+ *
+ * A shop that shows fake photographs is making a claim it cannot support, and
+ * the customer finds out the moment they click through. So the grid is gone
+ * rather than restyled. The invitation stays, because that part was always true.
+ *
+ * NOT A BOX. The obvious empty state — a bordered panel where the grid was — is
+ * still a container drawing attention to its own emptiness. This is a
+ * typographic block that reads as finished at four products and will read as
+ * finished at four hundred: nothing here is waiting to be filled in.
+ *
+ * WHEN REAL MEDIA EXISTS, the grid returns beneath the handle, and the line of
+ * copy is what gives way to it. See the Instagram integration notes in
+ * README.md — reading the account's own posts needs an Instagram Business
+ * account and a reviewed Meta app, neither of which is a code change.
+ *
+ * A SERVER COMPONENT NOW. The cells needed framer-motion for their stagger; the
+ * text does not need JavaScript at all, so this section ships none. That is the
+ * whole of its cost on the homepage's Largest Contentful Paint: nothing.
+ */
 export default function InstagramGrid() {
-  const reduced = useReducedMotion();
-  const container = staggerContainer(reduced, 0.08);
-  const item = fadeUp(reduced);
-
   return (
     <section className="section-padding container-wovenne">
-      <div className="text-center">
+      <div className="mx-auto max-w-xl text-center">
         <span className="eyebrow">Follow Along</span>
         <h2 className="mt-3 font-heading text-4xl text-ink sm:text-5xl">
           <a
@@ -27,48 +43,22 @@ export default function InstagramGrid() {
             @thewovenne
           </a>
         </h2>
-      </div>
 
-      <motion.div
-        initial="hidden"
-        whileInView="visible"
-        viewport={{ once: true, margin: "-100px" }}
-        variants={container}
-        className="mt-12 grid grid-cols-3 gap-2 sm:gap-4 md:grid-cols-6"
-      >
-        {cells.map((i) => (
-          <motion.div key={i} variants={item}>
-            <a
-              href={INSTAGRAM_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="THE WOVENNE on Instagram (@thewovenne)"
-              className="group relative block aspect-square overflow-hidden rounded-lg bg-linen"
-            >
-              <Image
-                src="https://placehold.co/400x400/F0EAD6/1C1F3B?text=THE+WOVENNE"
-                alt="THE WOVENNE on Instagram"
-                fill
-                sizes="200px"
-                className="object-cover transition-transform duration-700 group-hover:scale-110"
-              />
-              <span className="absolute inset-0 flex items-center justify-center bg-ink/0 text-cream opacity-0 transition-all duration-300 group-hover:bg-ink/40 group-hover:opacity-100">
-                <Instagram className="h-6 w-6" />
-              </span>
-            </a>
-          </motion.div>
-        ))}
-      </motion.div>
+        <p className="mt-6 text-base leading-relaxed text-ink/60">
+          The cloth on the loom, and the people wearing it. We post it all on
+          Instagram first.
+        </p>
 
-      <div className="mt-10 text-center">
-        <a
-          href={INSTAGRAM_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 rounded-full border border-ink/15 px-6 py-3 text-sm font-medium text-ink transition-colors hover:border-terracotta hover:text-terracotta"
-        >
-          <Instagram className="h-5 w-5" /> Follow @thewovenne
-        </a>
+        <div className="mt-10">
+          <a
+            href={INSTAGRAM_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 rounded-full border border-ink/15 px-6 py-3 text-sm font-medium text-ink transition-colors hover:border-terracotta hover:text-terracotta"
+          >
+            <Instagram className="h-5 w-5" /> Follow @thewovenne
+          </a>
+        </div>
       </div>
     </section>
   );
