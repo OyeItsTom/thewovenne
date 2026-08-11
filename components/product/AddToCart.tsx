@@ -6,6 +6,7 @@ import type { Product } from "@/lib/types";
 import { useCartStore } from "@/lib/store";
 import Button from "@/components/ui/Button";
 import { effectivePrice } from "@/lib/pricing";
+import { whatsappHref } from "@/lib/whatsapp";
 
 export default function AddToCart({
   product,
@@ -45,11 +46,7 @@ export default function AddToCart({
     openCart();
   };
 
-  const number = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
-  const waMessage = encodeURIComponent(
-    `Hi, I'd like to know more about ${product.name}`
-  );
-  const waHref = `https://wa.me/${number}?text=${waMessage}`;
+  const waHref = whatsappHref(`Hi, I'd like to know more about ${product.name}`);
 
   return (
     <div className="space-y-6">
@@ -87,14 +84,18 @@ export default function AddToCart({
         >
           {outOfStock ? "Sold out" : "Add to Cart"}
         </Button>
-        <a
-          href={waHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex flex-1 items-center justify-center gap-2 rounded-full border border-ink/15 px-6 py-3 text-sm font-medium text-ink transition-colors hover:border-[#25D366] hover:text-[#1da851] sm:text-base"
-        >
-          <MessageCircle className="h-5 w-5" /> Ask on WhatsApp
-        </a>
+        {/* Without a number this drops out and Add to Cart takes the full row,
+            which is the better purchase control anyway. */}
+        {waHref && (
+          <a
+            href={waHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-full border border-ink/15 px-6 py-3 text-sm font-medium text-ink transition-colors hover:border-[#25D366] hover:text-[#1da851] sm:text-base"
+          >
+            <MessageCircle className="h-5 w-5" /> Ask on WhatsApp
+          </a>
+        )}
       </div>
     </div>
   );
