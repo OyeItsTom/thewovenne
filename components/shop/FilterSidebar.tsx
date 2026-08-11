@@ -137,7 +137,11 @@ export default function FilterSidebar({
       {/* Mobile slide-in drawer */}
       <AnimatePresence>
         {isOpen && (
-          <div className="fixed inset-0 z-[70] lg:hidden">
+          /* Keyed so AnimatePresence can resolve the exit and actually unmount.
+             Without it the overlay survives at opacity 0 with pointer-events
+             auto and silently blocks the whole shop page — see
+             components/ui/Modal.tsx for the full account. */
+          <div key="filter-drawer" className="fixed inset-0 z-[70] lg:hidden">
             <motion.div
               className="absolute inset-0 bg-ink/40 backdrop-blur-sm"
               initial={{ opacity: 0 }}

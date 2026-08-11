@@ -40,7 +40,21 @@ export default function Modal({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+        /*
+          THE KEY IS WHAT MAKES THIS CLOSE. AnimatePresence identifies its direct
+          children by key. Without one it cannot resolve the exit, so it never
+          unmounts the subtree — the inner panel finishes its own exit animation
+          and disappears, which makes the modal LOOK closed, while this wrapper
+          and its overlay stay behind at opacity 0 with pointer-events auto.
+
+          The result is an invisible sheet across the whole viewport. Every link
+          and button under it stops responding, including the control that would
+          open the thing again. Verified on production with a real mouse before
+          this fix: after closing, a click on the main navigation did nothing.
+
+          Same one-line defect in CartDrawer and FilterSidebar, fixed here too.
+        */
+        <div key="modal" className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <motion.div
             className="absolute inset-0 bg-ink/50 backdrop-blur-sm"
             initial={{ opacity: 0 }}
