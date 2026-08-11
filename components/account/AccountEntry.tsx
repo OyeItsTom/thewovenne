@@ -55,7 +55,7 @@ export default function AccountEntry({ href }: { href: string }) {
           onClick={() => setModalOpen(true)}
           aria-label="Account"
           aria-haspopup="dialog"
-          className="text-ink transition-colors hover:text-terracotta"
+          className="-m-2.5 p-2.5 text-ink transition-colors hover:text-terracotta"
         >
           <User className="h-6 w-6" strokeWidth={1.5} />
         </button>
@@ -68,7 +68,7 @@ export default function AccountEntry({ href }: { href: string }) {
     <Link
       href={href}
       aria-label="Your account"
-      className="text-ink transition-colors hover:text-terracotta"
+      className="-m-2.5 p-2.5 text-ink transition-colors hover:text-terracotta"
     >
       <User className="h-6 w-6" strokeWidth={1.5} />
     </Link>

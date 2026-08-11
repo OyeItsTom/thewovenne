@@ -59,7 +59,7 @@ export default function AddToCart({
             onClick={() => setQuantity((q) => Math.max(1, q - 1))}
             disabled={outOfStock}
             aria-label="Decrease quantity"
-            className="p-3 text-ink/60 transition-colors hover:text-ink disabled:opacity-40"
+            className="tap-44 relative p-3 text-ink/60 transition-colors hover:text-ink disabled:opacity-40"
           >
             <Minus className="h-4 w-4" />
           </button>
@@ -68,7 +68,7 @@ export default function AddToCart({
             onClick={() => setQuantity((q) => Math.min(max, q + 1))}
             disabled={outOfStock || quantity >= max}
             aria-label="Increase quantity"
-            className="p-3 text-ink/60 transition-colors hover:text-ink disabled:opacity-40"
+            className="tap-44 relative p-3 text-ink/60 transition-colors hover:text-ink disabled:opacity-40"
           >
             <Plus className="h-4 w-4" />
           </button>
