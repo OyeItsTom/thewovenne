@@ -7,17 +7,16 @@ import { MessageCircle } from "lucide-react";
 import { buttonClassName } from "@/components/ui/Button";
 import { fadeUp, staggerContainer } from "@/lib/motion";
 import WovenCheck from "@/components/weave/WovenCheck";
+import { whatsappHref } from "@/lib/whatsapp";
 
 export default function CheckoutSuccessPage() {
   const reduced = useReducedMotion();
   const container = staggerContainer(reduced);
   const item = fadeUp(reduced);
 
-  const number = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
-  const message = encodeURIComponent(
+  const waHref = whatsappHref(
     "Hi, I've just placed an order with THE WOVENNE and would like to follow up."
   );
-  const waHref = `https://wa.me/${number}?text=${message}`;
 
   return (
     <div className="container-wovenne section-padding flex min-h-[60vh] flex-col items-center justify-center text-center">
@@ -68,14 +67,16 @@ export default function CheckoutSuccessPage() {
           <Link href="/in/shop" className={buttonClassName("outline", "lg")}>
             Continue Shopping
           </Link>
-          <a
-            href={waHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={buttonClassName("primary", "lg")}
-          >
-            <MessageCircle className="h-5 w-5" /> Follow Up on WhatsApp
-          </a>
+          {waHref && (
+            <a
+              href={waHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={buttonClassName("primary", "lg")}
+            >
+              <MessageCircle className="h-5 w-5" /> Follow Up on WhatsApp
+            </a>
+          )}
         </motion.div>
       </motion.div>
     </div>
