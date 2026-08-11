@@ -17,6 +17,16 @@ export interface ShippingConfig {
   /** Free anywhere above this order value. 0 disables it. */
   free_above_inr: number;
   note: string;
+  /**
+   * Working days before an order leaves. 0 means "we have not decided yet", and
+   * NOTHING IS SHOWN — the product page omits the dispatch line entirely rather
+   * than guessing.
+   *
+   * Here so the number has somewhere to live the day it becomes a real
+   * commitment. It is a promise to a customer, so it has to come from the
+   * business, not from a plausible-sounding default.
+   */
+  dispatch_days: number;
 }
 
 export const DEFAULT_SHIPPING: ShippingConfig = {
@@ -24,6 +34,7 @@ export const DEFAULT_SHIPPING: ShippingConfig = {
   flat_rate_inr: 120,
   free_above_inr: 3000,
   note: "Free delivery across Kerala, and on orders over the threshold.",
+  dispatch_days: 0,
 };
 
 export async function getShippingConfig(): Promise<ShippingConfig> {
