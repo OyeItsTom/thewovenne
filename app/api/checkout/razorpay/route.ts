@@ -7,8 +7,7 @@ import { validateOrderDetails } from "@/lib/orderDetails";
 import { getShippingConfig, quoteShipping } from "@/lib/shipping";
 import { planRedemption } from "@/lib/loyalty";
 import { applyCoupon } from "@/lib/coupons";
-import { settleLoyalty } from "@/lib/settleLoyalty";
-import { sendOrderConfirmation } from "@/lib/sendOrderConfirmation";
+import { settleOrder } from "@/lib/settleOrder";
 import type { CartItem } from "@/lib/store";
 
 interface CreatePayload {
@@ -243,11 +242,13 @@ async function handleCreate({ items, details: rawDetails, redeemPoints, couponCo
 }
 
 async function handleVerify({
-  items,
   razorpay_order_id,
   razorpay_payment_id,
   razorpay_signature,
 }: VerifyPayload) {
+  // The payment-response signature, which uses the API KEY SECRET and the
+  // `order_id|payment_id` pair. Not to be confused with the webhook signature in
+  // ./webhook/route.ts, which is HMAC of the raw body under a different secret.
   const expectedSignature = crypto
     .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET!)
     .update(`${razorpay_order_id}|${razorpay_payment_id}`)
@@ -265,225 +266,15 @@ async function handleVerify({
     return NextResponse.json({ verified: false });
   }
 
-  // Line items are re-priced rather than taken from the request, for the same
-  // reason as above: the order record should say what was actually sold.
-  const { items: priced, error } = await priceCart(items);
-
-  // The recorded total is what Razorpay actually captured, not a recomputation.
-  // Re-pricing here could disagree with the create call if a discount window
-  // closed in between, and the payment is the fact of record.
-  let capturedInr: number | null = null;
-  try {
-    const order = await razorpay.orders.fetch(razorpay_order_id);
-    capturedInr = Number(order.amount) / 100;
-  } catch (e) {
-    console.error("Could not fetch Razorpay order for amount:", e);
-  }
-
-  // What Razorpay actually took. Read here, at verification, because it is only
-  // knowable once a payment exists — and it is a real cost of every sale that
-  // would otherwise never appear in the P&L, quietly overstating profit on
-  // every order.
+  // Everything past this point is shared with the webhook — see lib/settleOrder.
   //
-  // Fee and tax stay separate: they are separate lines on Razorpay's settlement,
-  // and netting them together loses the input credit once GST registration
-  // happens. Both arrive in paise.
+  // `items` is accepted in the payload for backwards compatibility and then
+  // ignored. Settlement reads the lines the SERVER priced at creation, so a
+  // basket cannot be restated after payment, and so this path and the webhook
+  // (which has no browser to ask) settle from the same source.
   //
-  // Never fatal. A fee we could not read is a reporting gap; failing a
-  // confirmation the customer has already paid for is not.
-  let gatewayFeeInr: number | null = null;
-  let gatewayTaxInr: number | null = null;
-  try {
-    const payment = await razorpay.payments.fetch(razorpay_payment_id);
-    if (payment?.fee !== undefined && payment.fee !== null) {
-      gatewayFeeInr = Number(payment.fee) / 100;
-    }
-    if (payment?.tax !== undefined && payment.tax !== null) {
-      gatewayTaxInr = Number(payment.tax) / 100;
-    }
-  } catch (e) {
-    console.error(
-      `Could not read Razorpay fees for payment ${razorpay_payment_id} — this order will show no gateway cost:`,
-      e
-    );
-  }
-
-  const supabase = createServiceClient();
-
-  // Stock comes out HERE, after payment is confirmed, and atomically —
-  // reserve_stock decrements with the guard inside the UPDATE, so two buyers
-  // racing for the last unit cannot both succeed.
-  //
-  // The cost of decrementing after payment rather than before is a window of a
-  // few seconds in which both can pay. When that happens the customer is NOT
-  // failed — they have paid, and refusing their confirmation over our stock
-  // arithmetic would be indefensible. The order is flagged instead, so a human
-  // can refund or restock deliberately.
-  // Read BEFORE the stock comes out: reserve_stock records a movement per line
-  // and that movement is far more useful attached to the order that caused it —
-  // particularly for a return, which has to know what to put back and why.
-  const { data: pendingRow } = await supabase
-    .from("orders")
-    .select("id")
-    .eq("razorpay_order_id", razorpay_order_id)
-    .maybeSingle();
-  const orderRowId = (pendingRow as { id?: string } | null)?.id ?? null;
-
-  let stockShort = false;
-  try {
-    const { error: stockError } = await supabase.rpc("reserve_stock", {
-      p_items: priced.map((i) => ({
-        id: i.id,
-        size: i.size,
-        quantity: i.quantity,
-      })),
-      p_order_id: orderRowId,
-    });
-    if (stockError) {
-      stockShort = true;
-      console.error(
-        `Stock could not be reserved for paid order ${razorpay_order_id}: ${stockError.message}`
-      );
-    }
-  } catch (e) {
-    stockShort = true;
-    console.error("reserve_stock threw:", e);
-  }
-
-  // UPDATE, not insert: handleCreate already wrote this row with the customer's
-  // contact and address. Inserting here would leave two rows for one order, the
-  // paid one missing the details needed to ship it.
-  const { data: updated, error: updateError } = await supabase
-    .from("orders")
-    .update({
-      payment_status: "paid",
-      // Surfaces in the admin as an order needing attention rather than one
-      // quietly shipped from stock that was not there.
-      tracking_status: stockShort ? "needs_review" : null,
-      total_inr:
-        capturedInr ??
-        priced.reduce((sum, item) => sum + item.price_inr * item.quantity, 0),
-      gateway_fee_inr: gatewayFeeInr,
-      gateway_tax_inr: gatewayTaxInr,
-      items: priced.map((item) => ({
-        id: item.id,
-        name: item.name,
-        size: item.size,
-        quantity: item.quantity,
-        price_inr: item.price_inr,
-        cost_price_inr: item.cost_price_inr,
-        sku: item.sku,
-      })),
-    })
-    .eq("razorpay_order_id", razorpay_order_id)
-    .select("id");
-
-  if (updateError) {
-    // The customer has paid — never fail their confirmation over a recording
-    // problem. Sentry picks this up from the console error.
-    console.error("Failed to mark order paid:", updateError.message);
-  } else if (!updated?.length) {
-    // Paid, but no pending row to update. Should not happen, and losing a paid
-    // order silently would be far worse than a duplicate, so record what we
-    // have and shout about it.
-    console.error(
-      `Paid order ${razorpay_order_id} had no pending row — recording without contact details.`
-    );
-    await supabase.from("orders").insert({
-      razorpay_order_id,
-      payment_provider: "razorpay",
-      payment_status: "paid",
-      total_inr: capturedInr,
-      items: priced.map((item) => ({
-        id: item.id,
-        name: item.name,
-        size: item.size,
-        quantity: item.quantity,
-        price_inr: item.price_inr,
-        cost_price_inr: item.cost_price_inr,
-        sku: item.sku,
-      })),
-    });
-  }
-  if (error) {
-    console.error("Order recorded with unpriced items:", error);
-  }
-
-  // Points move only after payment, and only through the database functions —
-  // both are guarded so a retry cannot pay out twice or spend a balance twice.
-  await settleLoyalty(razorpay_order_id);
-
-  // The coupon use is claimed HERE, not at checkout-start. handleCreate writes
-  // a pending row before the customer has paid, and counting a use there would
-  // let abandoned payment modals burn a launch code's entire allowance.
-  //
-  // The trade-off is the same window reserve_stock accepts above: for a few
-  // seconds more people can be mid-payment than there are uses left, so a
-  // "first 50" can overshoot slightly. Overshooting a promotion is a rounding
-  // error. Refusing someone who has already paid is not, so this NEVER fails
-  // the confirmation — a use that cannot be claimed is logged and the order
-  // stands, because the money has already moved at the discounted price.
-  //
-  // redeem_coupon() is idempotent per order, so a retried verification counts
-  // once.
-  const paidOrderId = updated?.[0]?.id ?? null;
-  if (paidOrderId) {
-    const { data: order } = await supabase
-      .from("orders")
-      .select("coupon_code, coupon_discount_inr, customer_email")
-      .eq("id", paidOrderId)
-      .maybeSingle();
-
-    const used = order as {
-      coupon_code?: string | null;
-      coupon_discount_inr?: number | null;
-      customer_email?: string | null;
-    } | null;
-
-    if (used?.coupon_code) {
-      const { data: claimed, error: redeemError } = await supabase.rpc("redeem_coupon", {
-        p_code: used.coupon_code,
-        p_order_id: paidOrderId,
-        p_email: used.customer_email ?? "",
-        p_discount: used.coupon_discount_inr ?? 0,
-      });
-      if (redeemError) {
-        console.error(
-          `Could not record coupon ${used.coupon_code} for paid order ${razorpay_order_id}: ${redeemError.message}`
-        );
-      } else if (claimed === false) {
-        // Exhausted or withdrawn between checkout and payment. The customer
-        // keeps their discount — they were charged it — and this is a note for
-        // whoever reconciles the promotion, not a problem to push back at them.
-        console.error(
-          `Coupon ${used.coupon_code} could not be claimed for paid order ${razorpay_order_id} ` +
-            `(exhausted or withdrawn mid-payment). Discount was honoured.`
-        );
-      }
-    }
-
-    // The invoice NUMBER is assigned now; the PDF is rendered on demand. A
-    // number identifies a financial event, so it belongs to the moment the
-    // payment succeeded — but rendering a document here would put a PDF
-    // between the customer and their confirmation page, which is the same
-    // reason the confirmation email is not awaited.
-    const { error: invoiceError } = await supabase.rpc("assign_invoice_number", {
-      p_order_id: paidOrderId,
-    });
-    if (invoiceError) {
-      console.error(
-        `Could not assign an invoice number to paid order ${razorpay_order_id}: ${invoiceError.message}`
-      );
-    }
-  }
-
-  // Sent last, and deliberately not awaited for its success: the customer has
-  // paid and their confirmation page must not wait on an email provider, nor
-  // fail because one is down. A failure is logged, and the order exists
-  // regardless — it can always be re-sent from the admin.
-  void sendOrderConfirmation(razorpay_order_id).catch((e) =>
-    console.error("Order confirmation email failed:", e)
-  );
+  // Replaying this request is safe: every effect is guarded in the database.
+  await settleOrder(razorpay_order_id, razorpay_payment_id);
 
   return NextResponse.json({ verified: true });
 }
