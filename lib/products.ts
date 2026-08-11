@@ -113,37 +113,42 @@ export function mapProduct(row: ProductVersionRow, categories: Map<string, Categ
     // fields make an absent one type-check perfectly. scripts/product-mapping.test.ts
     // now fails if any of the three disagree.
     video_youtube_id: row.video_youtube_id ?? null,
-    hover_image_url: pickHoverImage(row.product_images, row.image_url),
+    images: galleryImages(row.product_images, row.image_url),
   };
 }
 
 /**
- * The photo a card cross-fades to: the first gallery image that is not the one
- * already showing.
+ * A product's photographs, in the order a card should offer them.
  *
- * NOT SIMPLY images[1]. image_url is kept in sync with the lowest sort_order,
- * but "kept in sync" is a promise made by the admin save path, and a cover that
- * has drifted would make a card cross-fade from a photograph to the same
- * photograph — a flicker with no explanation. Comparing the URLs costs nothing
- * and cannot be wrong.
+ * REPLACES pickHoverImage (#108), which returned a single "other angle" because
+ * the card only ever showed two. A card now steps through the whole set, so it
+ * needs the whole set — from the SAME embed that was already being fetched. No
+ * new columns, nothing added to the storefront payload beyond what was already
+ * there.
  *
- * Returns null when there is nothing to show, which is every product today: all
- * four have exactly one photograph. A card with no second image does not cycle
- * at all rather than cycling to a placeholder.
+ * THE COVER LEADS, whatever the gallery says. image_url is what every other
+ * surface shows — the cart, chat, an order line — and a card that opens on a
+ * different photograph than the one the customer clicked from is disorienting.
+ * It is also de-duplicated against the gallery, because the cover is normally
+ * the lowest sort_order and would otherwise appear twice.
+ *
+ * Empty in, empty out: a product with no photographs returns [], and a card with
+ * fewer than two entries shows no navigation at all.
  */
-export function pickHoverImage(
+export function galleryImages(
   images: { url: string | null; sort_order: number | null }[] | null | undefined,
   cover: string | null
-): string | null {
-  if (!images || images.length === 0) return null;
+): string[] {
+  const ordered = [...(images ?? [])]
+    .filter((i): i is { url: string; sort_order: number | null } => typeof i.url === "string" && i.url.length > 0)
+    // Nulls last, so a row saved without an order cannot jump to the front of a
+    // deliberately arranged gallery.
+    .sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER))
+    .map((i) => i.url);
 
-  const ordered = [...images]
-    .filter((i): i is { url: string; sort_order: number | null } => !!i.url)
-    // Nulls last, so a row saved without a sort_order cannot jump to the front
-    // and become the hover image ahead of a deliberately ordered gallery.
-    .sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
-
-  return ordered.find((i) => i.url !== cover)?.url ?? null;
+  const all = cover ? [cover, ...ordered] : ordered;
+  // Same URL twice would be an arrow that appears to do nothing.
+  return all.filter((url, i) => all.indexOf(url) === i);
 }
 
 /**

@@ -19,7 +19,7 @@ import {
   mapAdminProduct,
   mapProduct,
   type AdminProductRow,
-  pickHoverImage,
+  galleryImages,
   type ProductVersionRow,
 } from "../lib/products";
 
@@ -139,38 +139,38 @@ t("mapProduct does not copy cost_price_inr", storefrontFromAdminRow.cost_price_i
 t("mapProduct does not copy the brand knowledge", storefrontFromAdminRow.heritage_note === undefined,
   "the product page reads it through getBrandKnowledge, one piece at a time");
 
-// ── The hover image (PR 1) ─────────────────────
-// pickHoverImage decides what a card cross-fades to. It is pure, so it is
-// testable without a database — and it has to be right, because the failure
-// modes are invisible: cross-fading to the same photograph looks like a flicker,
-// and picking a draft's photo would show unpublished work on a category page.
+// ── The card's photographs ────────────────────
+// galleryImages decides what a card can step through. Pure, so it is testable
+// without a database — and the failure modes are invisible: an arrow that moves
+// to the same photograph looks broken, and a missing cover means a card opens on
+// a different image than the one the customer clicked from.
 {
-  const H = (imgs: ({ url: string | null; sort_order: number | null })[] | null | undefined,
-             cover: string | null) => pickHoverImage(imgs, cover);
+  const G = (imgs: ({ url: string | null; sort_order: number | null })[] | null | undefined,
+             cover: string | null) => galleryImages(imgs, cover);
 
-  t("no gallery means no hover image", H(null, "a.jpg") === null,
-    "every product today has exactly one photograph");
-  t("an empty gallery too", H([], "a.jpg") === null);
-  t("a gallery of only the cover does not cycle to itself",
-    H([{ url: "a.jpg", sort_order: 0 }], "a.jpg") === null,
-    "a cross-fade from a photograph to the same photograph is a flicker");
-  t("the second photograph is chosen",
-    H([{ url: "a.jpg", sort_order: 0 }, { url: "b.jpg", sort_order: 1 }], "a.jpg") === "b.jpg");
-  t("sort_order decides, not array order",
-    H([{ url: "c.jpg", sort_order: 2 }, { url: "b.jpg", sort_order: 1 }], "a.jpg") === "b.jpg");
+  t("no gallery, no cover, nothing to show", G(null, null).length === 0);
+  t("cover only, when there is no gallery", G(null, "a.jpg").join() === "a.jpg");
+  t("the cover leads", G([{ url: "b.jpg", sort_order: 1 }], "a.jpg").join() === "a.jpg,b.jpg");
+  t("the cover is not repeated when the gallery also holds it",
+    G([{ url: "a.jpg", sort_order: 0 }, { url: "b.jpg", sort_order: 1 }], "a.jpg").join() === "a.jpg,b.jpg",
+    "a duplicate would be an arrow that appears to do nothing");
+  t("sort_order decides the rest",
+    G([{ url: "c.jpg", sort_order: 2 }, { url: "b.jpg", sort_order: 1 }], "a.jpg").join() === "a.jpg,b.jpg,c.jpg");
   t("a null sort_order sorts last rather than first",
-    H([{ url: "z.jpg", sort_order: null }, { url: "b.jpg", sort_order: 1 }], "a.jpg") === "b.jpg",
-    "a row saved without an order must not jump ahead of a deliberate gallery");
-  t("a drifted cover still finds a different photograph",
-    H([{ url: "a.jpg", sort_order: 0 }, { url: "b.jpg", sort_order: 1 }], "stale.jpg") === "a.jpg",
-    "image_url being in sync is a promise, not a guarantee");
-  t("rows with no url are skipped",
-    H([{ url: null, sort_order: 0 }, { url: "b.jpg", sort_order: 1 }], "a.jpg") === "b.jpg");
+    G([{ url: "z.jpg", sort_order: null }, { url: "b.jpg", sort_order: 1 }], "a.jpg").join() === "a.jpg,b.jpg,z.jpg");
+  t("rows with no url are dropped",
+    G([{ url: null, sort_order: 0 }, { url: "b.jpg", sort_order: 1 }], "a.jpg").join() === "a.jpg,b.jpg",
+    "never render an arrow that moves to a missing image");
+  t("an empty-string url is dropped too",
+    G([{ url: "", sort_order: 0 }, { url: "b.jpg", sort_order: 1 }], "a.jpg").join() === "a.jpg,b.jpg");
+  t("one usable image means no navigation",
+    G([{ url: "a.jpg", sort_order: 0 }], "a.jpg").length === 1,
+    "the card shows arrows only above one");
   t("the input array is not mutated", (() => {
     const input = [{ url: "c.jpg", sort_order: 2 }, { url: "b.jpg", sort_order: 1 }];
-    H(input, "a.jpg");
+    G(input, "a.jpg");
     return input[0].url === "c.jpg";
-  })(), "mapProduct runs over a shared row; sorting in place would reorder the caller's gallery");
+  })(), "mapProduct runs over a shared row");
 }
 
 // ── The embed is fetched, and it is actually used ──
@@ -193,13 +193,13 @@ t("mapProduct does not copy the brand knowledge", storefrontFromAdminRow.heritag
     } as ProductVersionRow,
     new Map()
   );
-  t("mapProduct derives hover_image_url from the embed",
-    withGallery.hover_image_url === "second.jpg", String(withGallery.hover_image_url));
+  t("mapProduct derives the image list from the embed",
+    withGallery.images?.join() === "cover.jpg,second.jpg", String(withGallery.images));
 
   const noGallery = mapProduct({ ...(row as unknown as Record<string, unknown>), image_url: "cover.jpg" } as ProductVersionRow, new Map());
-  t("and null when the query did not ask for it",
-    noGallery.hover_image_url === null,
-    "a read without the embed must not crash a card");
+  t("and falls back to the cover when the query did not ask for it",
+    noGallery.images?.join() === "cover.jpg",
+    "a read without the embed must still give a card one photograph");
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
