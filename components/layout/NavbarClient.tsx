@@ -188,7 +188,7 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
             onClick={() => setSearchOpen((v) => !v)}
             aria-label={searchOpen ? "Close search" : "Search"}
             aria-expanded={searchOpen}
-            className="text-ink transition-colors hover:text-terracotta"
+            className="-m-2.5 p-2.5 text-ink transition-colors hover:text-terracotta"
           >
             <Search className="h-6 w-6" strokeWidth={1.5} />
           </button>
@@ -196,7 +196,7 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
           <Link
             href={WISHLIST_HREF}
             aria-label="Wishlist"
-            className="text-ink transition-colors hover:text-terracotta"
+            className="-m-2.5 p-2.5 text-ink transition-colors hover:text-terracotta"
           >
             <Heart className="h-6 w-6" strokeWidth={1.5} />
           </Link>
@@ -208,11 +208,11 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
           <button
             onClick={toggleCart}
             aria-label="Open cart"
-            className="relative text-ink transition-colors hover:text-terracotta"
+            className="relative -m-2.5 p-2.5 text-ink transition-colors hover:text-terracotta"
           >
             <ShoppingBag className="h-6 w-6" />
             {totalItems > 0 && (
-              <span className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-terracotta text-[10px] font-semibold text-cream">
+              <span className="pointer-events-none absolute right-0 top-0 flex h-5 w-5 items-center justify-center rounded-full bg-terracotta text-[10px] font-semibold text-cream">
                 {totalItems}
               </span>
             )}
@@ -221,7 +221,7 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
           <button
             onClick={() => setMobileOpen((v) => !v)}
             aria-label="Toggle menu"
-            className="text-ink md:hidden"
+            className="-m-2.5 p-2.5 text-ink md:hidden"
           >
             {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
           </button>

@@ -132,7 +132,7 @@ export default function ProductCard({ product }: { product: Product }) {
                 onClick={step(-1)}
                 disabled={atStart}
                 aria-label={`Previous image of ${product.name}`}
-                className="absolute left-2 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink shadow-soft backdrop-blur transition-opacity duration-300 disabled:opacity-25 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
+                className="tap-44 absolute left-2 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink shadow-soft backdrop-blur transition-opacity duration-300 disabled:opacity-25 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
@@ -141,7 +141,7 @@ export default function ProductCard({ product }: { product: Product }) {
                 onClick={step(1)}
                 disabled={atEnd}
                 aria-label={`Next image of ${product.name}`}
-                className="absolute right-2 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink shadow-soft backdrop-blur transition-opacity duration-300 disabled:opacity-25 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
+                className="tap-44 absolute right-2 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink shadow-soft backdrop-blur transition-opacity duration-300 disabled:opacity-25 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
               >
                 <ChevronRight className="h-4 w-4" />
               </button>

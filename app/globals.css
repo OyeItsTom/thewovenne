@@ -67,6 +67,31 @@
   .eyebrow {
     @apply font-script text-eyebrow uppercase text-terracotta;
   }
+
+  /*
+   * A 44px tap target around a control that is drawn smaller.
+   *
+   * The quiet discs on the product cards and the gallery are 32 and 40 pixels
+   * because that is the size they should LOOK. Padding them out to 44 would
+   * make the cream circles visibly heavier and put more of them over the
+   * photography, which is the opposite of what those controls are for.
+   *
+   * So the target grows and the drawing does not: a transparent pseudo-element
+   * centred on the control, sized to 44px in both directions. It is a child of
+   * the button, so a tap anywhere inside it is a tap on the button.
+   *
+   * Requires the control to be `relative`. Every current caller already is, or
+   * is `absolute`, which establishes the same containing block.
+   */
+  .tap-44::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
 }
 
 /* Lightweight CSS woven pattern — the static/low-power fallback for the

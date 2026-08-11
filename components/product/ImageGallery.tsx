@@ -119,7 +119,7 @@ export default function ImageGallery({
         <button
           onClick={() => setLightboxOpen(true)}
           aria-label="Open full image"
-          className="absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-full bg-cream/80 text-ink opacity-0 backdrop-blur transition-opacity group-hover:opacity-100"
+          className="tap-44 absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-full bg-cream/80 text-ink opacity-0 backdrop-blur transition-opacity group-hover:opacity-100"
         >
           <Expand className="h-4 w-4" />
         </button>

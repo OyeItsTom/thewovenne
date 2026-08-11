@@ -63,7 +63,7 @@ export default function WishlistButton({
       }
       title={saved ? "Saved" : "Save for later"}
       className={cn(
-        "flex items-center justify-center rounded-full bg-cream/90 text-ink shadow-soft backdrop-blur transition-colors",
+        "tap-44 relative flex items-center justify-center rounded-full bg-cream/90 text-ink shadow-soft backdrop-blur transition-colors",
         "hover:text-terracotta disabled:opacity-60",
         px,
         className
