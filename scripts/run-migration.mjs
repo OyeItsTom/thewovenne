@@ -10,13 +10,23 @@
  * The trailing verify block every migration carries is a SELECT, so its result
  * is printed rather than discarded — applying a migration and not looking at
  * what it reported is most of the way to not having checked at all.
+ *
+ * IT RECORDS WHAT IT APPLIED. schema_migrations (0057) gets a row in the SAME
+ * transaction as the migration itself, so the ledger cannot claim something that
+ * rolled back, and a migration cannot apply without being recorded. Re-running a
+ * file already in the ledger is refused rather than repeated: most migrations here
+ * are written to be idempotent, but "most" is not a property to bet a production
+ * database on at eleven at night. Pass --force to run one anyway.
  */
 import fs from "node:fs";
+import path from "node:path";
 import pg from "pg";
 
-const file = process.argv[2];
+const args = process.argv.slice(2);
+const force = args.includes("--force");
+const file = args.find((a) => !a.startsWith("--"));
 if (!file) {
-  console.error("usage: node scripts/run-migration.mjs <path-to-sql>");
+  console.error("usage: node scripts/run-migration.mjs <path-to-sql> [--force]");
   process.exit(1);
 }
 
@@ -43,11 +53,46 @@ const client = new pg.Client({
 
 try {
   await client.connect();
+
+  // The ledger does not exist until 0057 itself has run, so its absence is a
+  // normal state rather than an error — checked rather than assumed.
+  const ledgerExists = (
+    await client.query("select to_regclass('public.schema_migrations') is not null as ok")
+  ).rows[0].ok;
+
+  const name = path.basename(file);
+
+  if (ledgerExists && !force) {
+    const { rows } = await client.query(
+      "select applied_at, recorded_retrospectively from schema_migrations where filename = $1",
+      [name]
+    );
+    if (rows.length > 0) {
+      const when = rows[0].recorded_retrospectively
+        ? "recorded retrospectively by 0057 — the schema was verified present, the moment was not"
+        : `applied ${rows[0].applied_at?.toISOString?.() ?? rows[0].applied_at}`;
+      console.log(`${name} is already in the ledger (${when}).`);
+      console.log("Nothing was run. Pass --force if you genuinely mean to run it again.");
+      process.exit(0);
+    }
+  }
+
   await client.query("begin");
   const results = await client.query(sql);
+
+  // In the same transaction, deliberately: a ledger that can disagree with the
+  // schema is worse than no ledger, because it would be believed.
+  await client.query(
+    `insert into schema_migrations (filename, applied_at, recorded_retrospectively)
+     values ($1, now(), false)
+     on conflict (filename) do update
+       set applied_at = excluded.applied_at, recorded_retrospectively = false`,
+    [name]
+  );
+
   await client.query("commit");
 
-  console.log(`applied ${file}`);
+  console.log(`applied ${file}${force ? " (forced)" : ""} — recorded in schema_migrations`);
   const all = Array.isArray(results) ? results : [results];
   const verify = all.filter((r) => r?.rows?.length);
   for (const r of verify) console.table(r.rows);
