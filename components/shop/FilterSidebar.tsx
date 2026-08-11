@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
 import { cn, formatINR } from "@/lib/utils";
 import { slideInFromLeft } from "@/lib/motion";
@@ -134,22 +134,26 @@ export default function FilterSidebar({
       {/* Desktop sidebar */}
       <aside className="hidden w-64 flex-shrink-0 lg:block">{content}</aside>
 
-      {/* Mobile slide-in drawer */}
-      <AnimatePresence>
-        {isOpen && (
-          <div className="fixed inset-0 z-[70] lg:hidden">
+      {/* Mobile slide-in drawer.
+
+          NO AnimatePresence — see components/cart/CartDrawer.tsx for the full
+          account. In short: it did not unmount this subtree on close, leaving
+          an invisible backdrop over the shop page that swallowed every click.
+          Three attempts to fix it through framer-motion failed on a live
+          preview, so the unmount is React's again. The cost is the exit
+          animation. */}
+      {isOpen && (
+        <div className="fixed inset-0 z-[70] lg:hidden">
             <motion.div
               className="absolute inset-0 bg-ink/40 backdrop-blur-sm"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
               onClick={onClose}
               aria-hidden
             />
             <motion.div
               initial="hidden"
               animate="visible"
-              exit="exit"
               variants={panel}
               className="relative h-full w-full max-w-xs overflow-y-auto bg-cream p-6 shadow-lift"
             >
@@ -164,10 +168,9 @@ export default function FilterSidebar({
                 </button>
               </div>
               <div className="mt-6">{content}</div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+          </motion.div>
+        </div>
+      )}
     </>
   );
 }

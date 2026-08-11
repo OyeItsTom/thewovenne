@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { ShoppingBag, X } from "lucide-react";
 import { useCartStore } from "@/lib/store";
 import { formatINR } from "@/lib/utils";
@@ -17,22 +17,44 @@ export default function CartDrawer() {
   const reduced = useReducedMotion();
   const panel = slideInFromRight(reduced);
 
+  /*
+   * NO AnimatePresence HERE, DELIBERATELY.
+   *
+   * It did not unmount this subtree. Closing left the wrapper and its backdrop
+   * in the DOM at opacity 0 with pointer-events auto — an invisible sheet over
+   * the whole viewport, after which nothing on the page responded and the only
+   * way out was a reload. Verified on production with a real mouse: after
+   * closing the bag, a click on the main navigation did nothing.
+   *
+   * Three fixes were tried against framer-motion, and all three failed on a
+   * live preview: adding the `key` AnimatePresence wants; moving pointer-events
+   * into the exit variant; restructuring so the direct child is itself a motion
+   * component. Every time, both children reached their exit states and the
+   * subtree stayed mounted anyway.
+   *
+   * So this stops depending on it. React unmounts when `isOpen` goes false,
+   * which is synchronous and cannot half-happen. The cost is the slide-out —
+   * the drawer now disappears rather than animating away. Entry is unchanged.
+   * A 400ms flourish is not worth a storefront that stops accepting input.
+   *
+   * To bring the exit animation back, drive it with a CSS transition and a
+   * timeout this component owns, rather than handing the unmount to a library
+   * that demonstrably does not perform it.
+   */
+  if (!isOpen) return null;
+
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-[70] flex justify-end">
+    <div className="fixed inset-0 z-[70] flex justify-end">
           <motion.div
             className="absolute inset-0 bg-ink/40 backdrop-blur-sm"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
             onClick={closeCart}
             aria-hidden
           />
           <motion.div
             initial="hidden"
             animate="visible"
-            exit="exit"
             variants={panel}
             className="relative flex h-full w-full max-w-md flex-col bg-cream p-6 shadow-lift sm:p-8"
           >
@@ -75,9 +97,7 @@ export default function CartDrawer() {
                 </Link>
               </div>
             )}
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+      </motion.div>
+    </div>
   );
 }

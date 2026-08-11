@@ -1,7 +1,7 @@
 "use client";
 
 import { ReactNode, useEffect } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { scaleIn } from "@/lib/motion";
@@ -37,15 +37,21 @@ export default function Modal({
     };
   }, [isOpen, onClose]);
 
+  /*
+   * NO AnimatePresence — see components/cart/CartDrawer.tsx for the full
+   * account. In short: it did not unmount this subtree on close, leaving an
+   * invisible backdrop over the page that swallowed every click. Three attempts
+   * to fix it through framer-motion failed on a live preview, so the unmount is
+   * React's again. The cost is the exit animation.
+   */
+  if (!isOpen) return null;
+
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <motion.div
             className="absolute inset-0 bg-ink/50 backdrop-blur-sm"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
             onClick={onClose}
             aria-hidden
           />
@@ -58,7 +64,6 @@ export default function Modal({
             )}
             initial="hidden"
             animate="visible"
-            exit="exit"
             variants={panel}
           >
             <button
@@ -72,9 +77,7 @@ export default function Modal({
               <h2 className="mb-6 font-heading text-2xl text-ink">{title}</h2>
             )}
             {children}
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+      </motion.div>
+    </div>
   );
 }
