@@ -5,8 +5,14 @@ import StyleGallery from "@/components/style/StyleGallery";
 import { buttonClassName } from "@/components/ui/Button";
 import { cPath } from "@/lib/country";
 
+/**
+ * WORN BY YOU is the customer-facing name; "Customer Style" survives as the
+ * route, the table and the admin queue, where precision beats warmth. The URL
+ * does not change with the label — it is indexed, and a rename would cost the
+ * page its history to save four characters nobody reads.
+ */
 export const metadata: Metadata = {
-  title: "Customer Style | THE WOVENNE",
+  title: "Worn by You | THE WOVENNE",
   description:
     "Photographs sent to us by the people who wear our cloth — handloom linen and natural fibres, woven in Kerala.",
 };
@@ -32,7 +38,7 @@ export default async function CustomerStylePage() {
     <div className="container-wovenne section-padding">
       <header className="mx-auto max-w-2xl text-center">
         <span className="font-script text-2xl text-terracotta">Worn for life</span>
-        <h1 className="mt-3 font-heading text-display-sm text-ink">Customer Style</h1>
+        <h1 className="mt-3 font-heading text-display-sm text-ink">Worn by You</h1>
         <p className="mt-5 text-base leading-relaxed text-ink/65">
           Photographs sent to us by the people who wear the cloth. Every one is
           here because its owner asked for it to be — and can ask for it to come
