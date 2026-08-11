@@ -44,7 +44,11 @@ export default async function ProductDetail({
   const { price, wasPrice } = effectivePrice(product);
   // Decided before anything renders, so the note appears NEXT TO THE PRICE
   // rather than after a size is chosen — which was after the moment it mattered.
-  const note = stockNote(stockState(product.stock_quantity, sizes));
+  // ONE-SIZE PRODUCTS ONLY. A sized piece says it beside the size instead, where
+  // it follows what the customer actually picked — see ProductOptions. Keeping
+  // both would put "almost gone in some sizes" under the price while the chosen
+  // size says nothing, which is two answers to one question.
+  const note = sizes.length === 0 ? stockNote(stockState(product.stock_quantity)) : null;
   // Fetched HERE for the same reason reviews are: both routes render this file,
   // and a read done in one route and not the other is how two pages start
   // showing different things about one product.

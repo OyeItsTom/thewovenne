@@ -8,6 +8,7 @@ import { formatINR } from "@/lib/utils";
 import SizeSelector from "./SizeSelector";
 import AddToCart from "./AddToCart";
 import { effectivePrice } from "@/lib/pricing";
+import { sizeStockNote } from "@/lib/stock";
 
 /** What the cart records when a product has no sizes of its own. */
 const NO_SIZE = "One Size";
@@ -50,9 +51,26 @@ export default function ProductOptions({
     openCart();
   };
 
+  // FOLLOWS THE SELECTION, because that is the only stock number that means
+  // anything once a size is chosen: "almost gone" across a product is not what
+  // somebody buying an M needs to know. Null for a healthy size and null for a
+  // sold-out one — sold out is said by the selector and the button, and saying it
+  // three times does not make it truer. lib/stock owns the threshold.
+  const sizeNote = selected ? sizeStockNote(selected.stock_quantity, selected.label) : null;
+
   return (
     <div className="space-y-6">
       <SizeSelector sizes={sizes} selected={size} onSelect={setSize} />
+
+      {sizeNote && (
+        /* Beside the size and above the button — the buying decision, not the
+           photography. Small caps and a gold hairline, the same voice the page
+           uses for the one-size note. No red, no animation, no countdown. */
+        <p className="flex items-center gap-2 text-xs uppercase tracking-[0.12em] text-ink/60">
+          <span aria-hidden className="h-1 w-1 rounded-full bg-gold" />
+          {sizeNote}
+        </p>
+      )}
       <AddToCart
         product={product}
         size={size}

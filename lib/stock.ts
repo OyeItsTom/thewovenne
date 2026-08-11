@@ -92,3 +92,21 @@ export function stockNote(state: StockState): string | null {
 
   return "Almost gone";
 }
+
+/**
+ * The line shown once a customer has CHOSEN a size.
+ *
+ * Section 14 of the brief: inventory messaging follows the selection. Picking M
+ * with two left says so; picking a healthy S says nothing; picking a sold-out L
+ * is not this function's job at all — sold out is a separate state, said by the
+ * size selector and the button, and "Only 0 left" must never be rendered.
+ *
+ * Takes the same threshold as everything else. There is one definition of low in
+ * this file and no component is allowed a second opinion.
+ */
+export function sizeStockNote(stock: number, label: string): string | null {
+  if (stock <= 0) return null;        // sold out is said elsewhere, once
+  if (stock >= LOW_STOCK_THRESHOLD) return null;
+  const word = WORDS[stock] ?? String(stock);
+  return `Only ${word} left in ${label}`;
+}

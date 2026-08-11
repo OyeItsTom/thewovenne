@@ -9,7 +9,7 @@
  * IS the feature here: the difference between an elegant nudge and a cheap one is
  * entirely in what the string says.
  */
-import { LOW_STOCK_THRESHOLD, stockNote, stockState } from "../lib/stock";
+import { LOW_STOCK_THRESHOLD, sizeStockNote, stockNote, stockState } from "../lib/stock";
 import type { ProductSize } from "../lib/sizes";
 
 let pass = 0;
@@ -80,6 +80,19 @@ t("nothing counts down in numerals",
   "digits in a stock line read as a ticker");
 t("sold out is two words and no apology",
   note(0) === "Sold out", "not 'Out of Stock', which is the language the button now uses too");
+
+console.log("\n=== the line that follows a chosen size ===");
+t("a healthy size says nothing", sizeStockNote(6, "M") === null);
+t("the threshold is shared, not re-decided",
+  sizeStockNote(LOW_STOCK_THRESHOLD, "M") === null && sizeStockNote(LOW_STOCK_THRESHOLD - 1, "M") !== null,
+  `one rule at ${LOW_STOCK_THRESHOLD}, used by the card, the page and the size`);
+t("two left in M", sizeStockNote(2, "M") === "Only two left in M", String(sizeStockNote(2, "M")));
+t("one left in L, in words", sizeStockNote(1, "L") === "Only one left in L");
+t("a sold-out size says NOTHING here", sizeStockNote(0, "L") === null,
+  "sold out is a separate state, said by the selector and the button");
+t("and never 'Only 0 left'", !/only 0/i.test(String(sizeStockNote(0, "S"))));
+t("a negative row cannot produce a sentence either", sizeStockNote(-2, "S") === null);
+t("no digits, same as everywhere else", !/\d/.test(String(sizeStockNote(2, "M"))));
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
