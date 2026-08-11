@@ -1,7 +1,7 @@
 "use client";
 
 import { ReactNode, useEffect } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { scaleIn } from "@/lib/motion";
@@ -37,41 +37,21 @@ export default function Modal({
     };
   }, [isOpen, onClose]);
 
+  /*
+   * NO AnimatePresence — see components/cart/CartDrawer.tsx for the full
+   * account. In short: it did not unmount this subtree on close, leaving an
+   * invisible backdrop over the page that swallowed every click. Three attempts
+   * to fix it through framer-motion failed on a live preview, so the unmount is
+   * React's again. The cost is the exit animation.
+   */
+  if (!isOpen) return null;
+
   return (
-    <AnimatePresence>
-      {isOpen && (
-        /*
-          CLOSING THIS USED TO BREAK THE WHOLE PAGE.
-
-          AnimatePresence does not unmount this subtree when isOpen goes false.
-          Both children reach their exit states — the backdrop fades to opacity 0
-          and the panel animates away, so it LOOKS shut — but the wrapper and the
-          backdrop stay in the DOM, inset 0, still accepting pointer events. An
-          invisible sheet over the viewport. Every link and button underneath
-          stops responding, including the control that would reopen it, and the
-          only way out is a reload.
-
-          Verified on production with a real mouse: after closing, a click on the
-          main navigation did nothing.
-
-          THE FIX DOES NOT ARGUE WITH FRAMER-MOTION. Adding a key — which
-          AnimatePresence does want — was tried first and did not help; the
-          subtree still lingered. So rather than depending on an unmount that
-          demonstrably does not happen, the lingering subtree is made harmless:
-          the wrapper never takes pointer events, only the backdrop and the panel
-          do, and the backdrop gives them up as part of its exit. Whether or not
-          the node is ever removed, nothing is left covering the page.
-
-          The key stays because it is correct, not because it fixed this.
-
-          Same defect and same fix in CartDrawer and FilterSidebar.
-        */
-        <div key="modal" className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <motion.div
-            className="pointer-events-auto absolute inset-0 bg-ink/50 backdrop-blur-sm"
-            initial={{ opacity: 0, pointerEvents: "auto" }}
-            animate={{ opacity: 1, pointerEvents: "auto" }}
-            exit={{ opacity: 0, pointerEvents: "none" }}
+            className="absolute inset-0 bg-ink/50 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
             onClick={onClose}
             aria-hidden
           />
@@ -79,12 +59,11 @@ export default function Modal({
             role="dialog"
             aria-modal="true"
             className={cn(
-              "pointer-events-auto relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-cream p-6 shadow-lift sm:p-8",
+              "relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-cream p-6 shadow-lift sm:p-8",
               className
             )}
             initial="hidden"
             animate="visible"
-            exit="exit"
             variants={panel}
           >
             <button
@@ -98,9 +77,7 @@ export default function Modal({
               <h2 className="mb-6 font-heading text-2xl text-ink">{title}</h2>
             )}
             {children}
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+      </motion.div>
+    </div>
   );
 }
