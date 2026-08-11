@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Send, Sparkles, X } from "lucide-react";
 import { scaleIn } from "@/lib/motion";
+import { whatsappHref } from "@/lib/whatsapp";
 
 interface Msg {
   role: "user" | "assistant";
@@ -90,17 +91,15 @@ export default function AskWovenne() {
   }
 
   // Escalation: hand the conversation summary to WhatsApp.
-  const whatsappHref = (() => {
-    const number = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? "";
+  const waHref = (() => {
     const summary = messages
       .filter((m) => m !== GREETING)
       .map((m) => `${m.role === "user" ? "Me" : "Wovenne"}: ${m.content}`)
       .join("\n")
       .slice(0, 900);
-    const text = encodeURIComponent(
+    return whatsappHref(
       `Hi THE WOVENNE — continuing my Ask Wovenne chat:\n\n${summary || "I'd like some help."}`
     );
-    return `https://wa.me/${number}?text=${text}`;
   })();
 
   return (
@@ -178,14 +177,16 @@ export default function AskWovenne() {
                   <Send className="h-4 w-4" />
                 </button>
               </div>
-              <a
-                href={whatsappHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-2 block text-center text-xs text-ink/60 underline-offset-2 hover:text-terracotta hover:underline"
-              >
-                Continue on WhatsApp →
-              </a>
+              {waHref && (
+                <a
+                  href={waHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 block text-center text-xs text-ink/60 underline-offset-2 hover:text-terracotta hover:underline"
+                >
+                  Continue on WhatsApp →
+                </a>
+              )}
             </div>
           </motion.div>
         )}

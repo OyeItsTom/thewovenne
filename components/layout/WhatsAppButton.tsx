@@ -1,9 +1,11 @@
 import { MessageCircle } from "lucide-react";
+import { whatsappHref } from "@/lib/whatsapp";
 
 export default function WhatsAppButton() {
-  const number = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
-  const message = encodeURIComponent("Hi, I'm interested in THE WOVENNE products");
-  const href = `https://wa.me/${number}?text=${message}`;
+  const href = whatsappHref("Hi, I'm interested in THE WOVENNE products");
+  // No number, no floating button. Better an absent affordance than one that
+  // sits over every page promising a conversation it cannot start.
+  if (!href) return null;
 
   return (
     <a

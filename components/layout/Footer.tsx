@@ -3,6 +3,7 @@ import { cPath } from "@/lib/country";
 import Link from "next/link";
 import { Instagram, Mail, MessageCircle } from "lucide-react";
 import { getPublishedPages } from "@/lib/storefront";
+import { whatsappHref } from "@/lib/whatsapp";
 
 const INSTAGRAM_URL = "https://www.instagram.com/thewovenne";
 
@@ -21,13 +22,8 @@ export default async function Footer() {
     (p) => p.in_footer && !HARDCODED_PAGE_SLUGS.has(p.slug)
   );
 
-  // NO NUMBER, NO LINK. Unset, this interpolated to the string "undefined" and
-  // shipped `wa.me/undefined` — a live, clickable, broken contact route. It is
-  // set in Production and absent from Preview, so every preview review has been
-  // looking at a dead WhatsApp button.
-  const number = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
-  const message = encodeURIComponent("Hi, I'm interested in THE WOVENNE products");
-  const whatsappHref = number ? `https://wa.me/${number}?text=${message}` : null;
+  // No number, no link — see lib/whatsapp for why that is the only safe answer.
+  const waHref = whatsappHref("Hi, I'm interested in THE WOVENNE products");
 
   return (
     <footer className="relative overflow-hidden bg-ink text-cream">
@@ -105,10 +101,10 @@ export default async function Footer() {
         <div>
           <h3 className="font-heading text-lg text-gold">Connect</h3>
           <ul className="mt-4 space-y-2 text-sm text-cream/70">
-            {whatsappHref && (
+            {waHref && (
               <li>
                 <a
-                  href={whatsappHref}
+                  href={waHref}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 transition-colors hover:text-cream"
