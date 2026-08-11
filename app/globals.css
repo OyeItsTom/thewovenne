@@ -137,6 +137,34 @@
   }
 }
 
+/* ── iOS will zoom the page unless a field is 16px ─────────────
+   Safari on iOS zooms in whenever a focused input has a font-size below 16px,
+   and it does not zoom back out afterwards. The customer is left on a page
+   wider than their screen, pinching to find the next field — on the checkout
+   form, which is the worst possible place to make somebody fight the browser.
+   Measured at 14px on every field in the site: login, signup and checkout.
+
+   ONE RULE RATHER THAN A CLASS ON EVERY FIELD. This is a platform constraint,
+   not a design decision — it is true of every input on every page regardless of
+   what that form is for, including admin screens and any field added later. A
+   `text-base md:text-sm` on each component would encode the same fact in a
+   dozen places and be forgotten in the thirteenth.
+
+   Mobile only. Desktop keeps the 14px the design intends, so nothing above
+   768px changes.
+
+   The :not() pairs do two jobs. They exempt checkboxes and radios, whose
+   font-size is irrelevant and which iOS never zooms for; and, because :not()
+   carries the specificity of its argument, they lift this selector above
+   Tailwind's .text-sm without needing !important to win the cascade. */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select:not([multiple]),
+  textarea:not([hidden]) {
+    font-size: 16px;
+  }
+}
+
 /* ── Password fields: one reveal control, not two ──────────────
    Edge and Safari add their OWN eye/reveal button inside a password input, on
    top of the one AuthField renders. Two eyes sitting side by side look like a
