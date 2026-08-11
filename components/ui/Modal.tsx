@@ -41,25 +41,37 @@ export default function Modal({
     <AnimatePresence>
       {isOpen && (
         /*
-          THE KEY IS WHAT MAKES THIS CLOSE. AnimatePresence identifies its direct
-          children by key. Without one it cannot resolve the exit, so it never
-          unmounts the subtree — the inner panel finishes its own exit animation
-          and disappears, which makes the modal LOOK closed, while this wrapper
-          and its overlay stay behind at opacity 0 with pointer-events auto.
+          CLOSING THIS USED TO BREAK THE WHOLE PAGE.
 
-          The result is an invisible sheet across the whole viewport. Every link
-          and button under it stops responding, including the control that would
-          open the thing again. Verified on production with a real mouse before
-          this fix: after closing, a click on the main navigation did nothing.
+          AnimatePresence does not unmount this subtree when isOpen goes false.
+          Both children reach their exit states — the backdrop fades to opacity 0
+          and the panel animates away, so it LOOKS shut — but the wrapper and the
+          backdrop stay in the DOM, inset 0, still accepting pointer events. An
+          invisible sheet over the viewport. Every link and button underneath
+          stops responding, including the control that would reopen it, and the
+          only way out is a reload.
 
-          Same one-line defect in CartDrawer and FilterSidebar, fixed here too.
+          Verified on production with a real mouse: after closing, a click on the
+          main navigation did nothing.
+
+          THE FIX DOES NOT ARGUE WITH FRAMER-MOTION. Adding a key — which
+          AnimatePresence does want — was tried first and did not help; the
+          subtree still lingered. So rather than depending on an unmount that
+          demonstrably does not happen, the lingering subtree is made harmless:
+          the wrapper never takes pointer events, only the backdrop and the panel
+          do, and the backdrop gives them up as part of its exit. Whether or not
+          the node is ever removed, nothing is left covering the page.
+
+          The key stays because it is correct, not because it fixed this.
+
+          Same defect and same fix in CartDrawer and FilterSidebar.
         */
-        <div key="modal" className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+        <div key="modal" className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center p-4">
           <motion.div
-            className="absolute inset-0 bg-ink/50 backdrop-blur-sm"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            className="pointer-events-auto absolute inset-0 bg-ink/50 backdrop-blur-sm"
+            initial={{ opacity: 0, pointerEvents: "auto" }}
+            animate={{ opacity: 1, pointerEvents: "auto" }}
+            exit={{ opacity: 0, pointerEvents: "none" }}
             onClick={onClose}
             aria-hidden
           />
@@ -67,7 +79,7 @@ export default function Modal({
             role="dialog"
             aria-modal="true"
             className={cn(
-              "relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-cream p-6 shadow-lift sm:p-8",
+              "pointer-events-auto relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-cream p-6 shadow-lift sm:p-8",
               className
             )}
             initial="hidden"
