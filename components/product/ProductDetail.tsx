@@ -81,7 +81,11 @@ export default async function ProductDetail({
         </nav>
       )}
 
-      <div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
+      {/* gap-8 on a phone rather than gap-12. Stacked in one column, that gap is
+          simply distance between the photograph and the words about it, and 48px
+          of it was pushing the price off the first screen. On two columns from
+          lg: up it is horizontal breathing room and keeps its original 16. */}
+      <div className="grid gap-8 sm:gap-12 lg:grid-cols-2 lg:gap-16">
         <ImageGallery images={images} alt={product.name} />
 
         {/* STICKY ON DESKTOP, and it needs BOTH of these elements to work. A

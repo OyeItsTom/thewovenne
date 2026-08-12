@@ -126,7 +126,18 @@ export default function ImageGallery({
       </div>
 
       {images.length > 1 && (
-        <div className="mt-4 grid grid-cols-4 gap-3">
+        // THE STRIP IS SHORTER ON A PHONE, and the main photograph is not
+        // touched. At 390px the gallery is 453px tall and the strip added
+        // another 101 on top, which together pushed the product's name to 828
+        // and its price to 888 — past the 844 fold. A customer saw a photograph
+        // and had to scroll to learn what it cost.
+        //
+        // Square thumbnails rather than 3:4 on mobile: a thumbnail's job is to
+        // say "there is another angle", and it does that at any ratio. The
+        // portrait crop that matters is the one in the main frame, and it is
+        // unchanged. Above sm: the strip keeps its original proportions, where
+        // there is room for them.
+        <div className="mt-3 grid grid-cols-4 gap-3 sm:mt-4">
           {images.map((src, i) => (
             <button
               key={src + i}
@@ -134,7 +145,7 @@ export default function ImageGallery({
               aria-label={`View image ${i + 1} of ${images.length}`}
               aria-current={active === i}
               className={cn(
-                "relative aspect-[3/4] overflow-hidden rounded-lg bg-linen transition-all duration-300",
+                "relative aspect-square overflow-hidden rounded-lg bg-linen transition-all duration-300 sm:aspect-[3/4]",
                 // A hairline, not a coloured ring: the thumbnail strip should
                 // read as part of the photograph, not as a control panel.
                 active === i
