@@ -91,9 +91,8 @@ export function isUnfiltered(filters: CatalogueFilters): boolean {
  * Filters back into a query string.
  *
  * KEYS IN A FIXED ORDER, and empty ones omitted. Two identical filter states
- * must produce byte-identical URLs, or the same view acquires several addresses
- * — which matters for the browser's history, for anything cached by URL, and
- * for a search engine deciding whether two pages are the same page.
+ * produce byte-identical navigation URLs and cache inputs. This is deterministic
+ * parameter writing, not a complete faceted-search canonical/noindex policy.
  */
 export function catalogueSearchString(filters: CatalogueFilters): string {
   const params = new URLSearchParams();

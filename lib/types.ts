@@ -81,6 +81,28 @@ export interface Product {
   images?: string[];
 }
 
+/** Exact public payload required by ProductCard and product URL construction. */
+export type ProductListing = Pick<
+  Product,
+  | "id"
+  | "name"
+  | "slug"
+  | "price_inr"
+  | "category_id"
+  | "category"
+  | "category_slug"
+  | "category_parent_slug"
+  | "stock_quantity"
+  | "image_url"
+  | "is_active"
+  | "created_at"
+  | "discount_type"
+  | "discount_value"
+  | "discount_starts_at"
+  | "discount_ends_at"
+  | "images"
+>;
+
 /**
  * A photo in a product's gallery. products.image_url stays in sync with the
  * lowest sort_order (the cover) so listings, cart and chat keep working from

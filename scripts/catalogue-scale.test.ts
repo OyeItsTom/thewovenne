@@ -1,5 +1,5 @@
 /**
- * Does the catalogue's behaviour hold at 4, 40 and 400 products?
+ * Do pure catalogue fixture properties hold at 4, 40 and 400 products?
  *
  * WHAT THIS IS AND IS NOT. It exercises the pure logic — URL parsing and
  * writing, facet derivation, and the shape of what a page would serialise —

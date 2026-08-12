@@ -109,7 +109,7 @@ check(
     category: "sarees",
   }),
   "category=sarees&colour=gold&maxPrice=2500",
-  "two identical states must produce byte-identical URLs"
+    "deterministic writing; full faceted SEO policy is separate work"
 );
 
 check(

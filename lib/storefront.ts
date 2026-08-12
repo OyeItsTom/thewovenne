@@ -5,6 +5,7 @@ import * as products from "./products";
 import * as categories from "./categories";
 import * as journal from "./journal";
 import * as pages from "./pages";
+import { getSizesForProducts } from "./sizes";
 import { getContent as readContent } from "./content";
 import type { SiteContentMap } from "./types";
 
@@ -42,6 +43,13 @@ export const getAllProducts = async () => products.getAllProducts(await previewC
  *
  * Keyed on the filters themselves, so two customers asking the same question
  * share an answer and a different question gets its own.
+ *
+ * CARDINALITY. The URL parser admits only five named fields, drops empty values,
+ * caps text at 80 characters and caps price. The theoretical text combinations
+ * are still unbounded, but entries expire after 60 seconds and the deployed
+ * data cache is evictable. At a four-product launch catalogue, adding a second
+ * validation/cache subsystem would cost more complexity than it removes. Revisit
+ * alongside pagination or if cache/storage telemetry shows abuse.
  */
 const cachedCatalogue = unstable_cache(
   async (filters: products.CatalogueFilterInput, limit?: number, offset?: number) =>
@@ -69,6 +77,36 @@ export const getCatalogueFacetValues = async () => {
   const ctx = await previewCtx();
   if (ctx.preview) return products.getCatalogueFacetValues(ctx);
   return cachedFacets();
+};
+
+const cachedCategoryTree = unstable_cache(
+  async () => categories.getVisibleCategoryTree(ANON_CTX),
+  ["catalogue-category-tree"],
+  { revalidate: 60, tags: ["catalogue"] }
+);
+
+/** Public catalogue support reads share its TTL; preview remains request-local. */
+export const getCatalogueCategoryTree = async () => {
+  const ctx = await previewCtx();
+  if (ctx.preview) return categories.getVisibleCategoryTree(ctx);
+  return cachedCategoryTree();
+};
+
+const cachedCatalogueSizes = unstable_cache(
+  async (productIds: string[]) => {
+    const sizes = await getSizesForProducts(productIds, ANON_CTX.client);
+    return Object.fromEntries(sizes);
+  },
+  ["catalogue-product-sizes"],
+  { revalidate: 60, tags: ["catalogue"] }
+);
+
+export const getCatalogueSizes = async (productIds: string[]) => {
+  const ctx = await previewCtx();
+  if (ctx.preview) {
+    return Object.fromEntries(await getSizesForProducts(productIds, ctx.client));
+  }
+  return cachedCatalogueSizes(productIds);
 };
 
 /**

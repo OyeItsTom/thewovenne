@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { SlidersHorizontal } from "lucide-react";
-import type { CategoryNode, Product } from "@/lib/types";
+import type { CategoryNode, ProductListing } from "@/lib/types";
 import FilterSidebar, {
   type FilterOptions,
   type Filters,
@@ -41,7 +41,7 @@ export default function ShopFilters({
   filters,
 }: {
   /** Already filtered by the database. */
-  products: Product[];
+  products: ProductListing[];
   categoryTree: CategoryNode[];
   /** Sizes for the products on show, for the Size filter. */
   sizesByProduct?: SizesByProduct;

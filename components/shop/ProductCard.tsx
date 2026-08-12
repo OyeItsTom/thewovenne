@@ -7,7 +7,7 @@ import type { MouseEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
-import type { Product } from "@/lib/types";
+import type { ProductListing } from "@/lib/types";
 import { formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
 import { productHref } from "@/lib/urls";
@@ -16,7 +16,7 @@ import { useReveal, revealClass } from "@/lib/useReveal";
 import { useCartStore } from "@/lib/store";
 import { stockState } from "@/lib/stock";
 
-export default function ProductCard({ product }: { product: Product }) {
+export default function ProductCard({ product }: { product: ProductListing }) {
   const { ref, revealed } = useReveal<HTMLDivElement>();
 
   // ── The photographs ───────────────────────────

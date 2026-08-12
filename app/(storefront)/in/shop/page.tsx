@@ -1,17 +1,21 @@
 import type { Metadata } from "next";
-import { getCatalogue, getCatalogueFacetValues } from "@/lib/storefront";
-import { getVisibleCategoryTree } from "@/lib/storefront";
+import {
+  getCatalogue,
+  getCatalogueCategoryTree,
+  getCatalogueFacetValues,
+  getCatalogueSizes,
+} from "@/lib/storefront";
 import { parseCatalogueParams, type RawSearchParams } from "@/lib/catalogueParams";
 import ShopFilters from "@/components/shop/ShopFilters";
-import { getSizesForProducts } from "@/lib/sizes";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 /*
  * Reading searchParams makes this render dynamically — that is how App Router
  * works and it is not avoidable while filters live in the URL. The 60s caching
  * this page has always had did not go away, it moved: getCatalogue() caches the
- * QUERY per filter combination, so a dynamic render is still not a database
- * round trip. See lib/storefront.
+ * QUERY per filter combination. The public category-tree and displayed-size
+ * support reads use the same TTL; preview bypasses every one of those caches.
+ * See lib/storefront.
  */
 export const revalidate = 60;
 
@@ -38,7 +42,7 @@ export default async function ShopPage({
   // and nothing else, so the page serialises a result rather than a catalogue.
   const [{ products }, categoryTree, facetValues] = await Promise.all([
     getCatalogue(filters),
-    getVisibleCategoryTree(),
+    getCatalogueCategoryTree(),
     // Across the whole catalogue, not just this result — otherwise filtering to
     // one product would leave one chip and no way back.
     getCatalogueFacetValues(),
@@ -46,8 +50,7 @@ export default async function ShopPage({
 
   // Only for the products actually on show. Previously this was every product
   // in the shop whether or not a size filter was ever touched.
-  const sizeMap = await getSizesForProducts(products.map((p) => p.id));
-  const sizesByProduct = Object.fromEntries(sizeMap);
+  const sizesByProduct = await getCatalogueSizes(products.map((p) => p.id));
 
   return (
     <div className="container-wovenne section-padding">
