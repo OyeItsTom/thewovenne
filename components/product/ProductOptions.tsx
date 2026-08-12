@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Product } from "@/lib/types";
 import type { ProductSize } from "@/lib/sizes";
 import { useCartStore } from "@/lib/store";
@@ -58,6 +58,56 @@ export default function ProductOptions({
   // three times does not make it truer. lib/stock owns the threshold.
   const sizeNote = selected ? sizeStockNote(selected.stock_quantity, selected.label) : null;
 
+  /**
+   * The sticky bar appears only once the real Add to Cart has been seen and then
+   * left the screen.
+   *
+   * It used to be `fixed` unconditionally, so it was on screen from the moment
+   * the page loaded — covering 69px of an 844px phone before the customer had
+   * seen anything, offering a second price and a second Add button, and asking
+   * somebody to buy a size they had not chosen yet.
+   *
+   * "SEEN, THEN GONE" RATHER THAN "NOT CURRENTLY VISIBLE", and the difference is
+   * not academic. The real button sits around 1233px down a 390px-wide page, so
+   * it is already outside the viewport on load. A plain !isIntersecting test
+   * would therefore show the bar immediately — reintroducing the exact problem,
+   * just via an observer. The bar has to wait until the customer has actually
+   * reached the purchase controls once.
+   *
+   * After that it behaves normally: away when the real button is on screen,
+   * back when it is not.
+   *
+   * No scroll listener, no threshold guessing, no library.
+   */
+  const ctaRef = useRef<HTMLDivElement>(null);
+  const [ctaVisible, setCtaVisible] = useState(false);
+  const [ctaHasBeenSeen, setCtaHasBeenSeen] = useState(false);
+
+  useEffect(() => {
+    const node = ctaRef.current;
+    if (!node) return;
+
+    // No IntersectionObserver — an old browser, or a test environment. Never
+    // showing the bar is the safe failure: the page still has its real button,
+    // and a permanently pinned bar is the thing being fixed.
+    if (typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setCtaVisible(entry.isIntersecting);
+        if (entry.isIntersecting) setCtaHasBeenSeen(true);
+      },
+      // The bottom of the viewport is trimmed by roughly the bar's own height,
+      // so the bar cannot appear while it would be sitting on top of the button
+      // it is standing in for.
+      { rootMargin: "0px 0px -80px 0px" }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const showStickyBar = ctaHasBeenSeen && !ctaVisible;
+
   return (
     <div className="space-y-6">
       <SizeSelector sizes={sizes} selected={size} onSelect={setSize} />
@@ -71,15 +121,19 @@ export default function ProductOptions({
           {sizeNote}
         </p>
       )}
-      <AddToCart
-        product={product}
-        size={size}
-        disabled={outOfStock}
-        available={sizes.length > 0 ? (selected?.stock_quantity ?? 0) : undefined}
-      />
+      <div ref={ctaRef}>
+        <AddToCart
+          product={product}
+          size={size}
+          disabled={outOfStock}
+          available={sizes.length > 0 ? (selected?.stock_quantity ?? 0) : undefined}
+        />
+      </div>
 
-      {/* Sticky add-to-cart bar — mobile only. Adds one of the selected size. */}
+      {/* Sticky add-to-cart bar — mobile only, and only once the real button has
+          scrolled away. Adds one of the selected size. */}
       {/* pr-24 clears the floating WhatsApp button at bottom-right. */}
+      {showStickyBar && (
       <div className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-3 border-t border-ink/10 bg-cream/95 py-3 pl-4 pr-24 backdrop-blur lg:hidden">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-ink">{product.name}</p>
@@ -93,6 +147,7 @@ export default function ProductOptions({
           {outOfStock ? "Out of Stock" : `Add · ${size}`}
         </button>
       </div>
+      )}
     </div>
   );
 }
