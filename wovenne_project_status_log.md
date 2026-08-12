@@ -1548,3 +1548,60 @@ this is a provider and a template approval away, not a rebuild.
 
 **Guest order tracking** — a guest gets no order tool at all, by decision in #100.
 There is no way to identify whose orders are whose without a session.
+
+---
+
+## Collection / Category Discovery — PR #128, merged 12 August 2026
+
+`/in/shop` no longer sends the complete catalogue to a client component and asks
+the phone to hide non-matches. Filter state belongs to the URL, the server reads
+that state, and Postgres/PostgREST returns the matching catalogue rows. A filtered
+view therefore survives refresh, browser history and sharing while ProductGrid
+and ProductCard remain the rendering architecture.
+
+The URL contract accepts category, fabric, colour, size and maximum price in a
+fixed write order. Fabric, colour and size values are literal, case-insensitive
+values with surrounding whitespace ignored; `%`, `_` and backslash are not
+pattern language. This deterministic parameter writing is not a complete
+faceted-navigation canonical/noindex policy — that remains separate SEO work.
+
+**Preview and public reads stay separate.** Public queries use the anonymous
+client and published rows only. An authorised Preview request is never cached;
+it collapses each published/draft pair to the effective version before applying
+category, fabric, colour, price, active-state or size filters. A superseding
+draft that stops matching cannot leave its published version visible, and draft
+gallery changes remain confined to Preview.
+
+The public catalogue result, catalogue-wide fabric/colour facets, category tree
+and displayed-product size support reads use 60-second query-level caching.
+Preview bypasses all four caches. The listing order is deterministic before
+pagination arrives: `created_at DESC, product_id ASC`.
+
+Product cards now receive a dedicated `ProductListing` payload rather than the
+richer product-detail shape. It retains the cover, full ordered card gallery,
+price and discount window, category path and stock state, while omitting
+description, video, fabric, colour and collection fields that the card does not
+render. A read-only measurement against the four-product catalogue reduced the
+unfiltered serialised listing from **3,906 bytes to 3,142 bytes** (19.6%).
+
+**Verification:** 100/100 catalogue assertions passed: 26 URL-contract, 42 pure
+4/40/400 fixture-scale, 17 effective-version/literal-value and 15 production-query
+orchestration assertions. The whole repository TypeScript test-script suite,
+standalone TypeScript, ESLint and the 88-page production build passed again on
+merged `main`. The owner verified `/in/shop` on the Vercel Preview using an
+iPhone: load, drawer open/close, category filtering, switching categories and
+product card/image rendering. No migration or production test data was added.
+
+**The scale fixtures are not PostgreSQL performance benchmarks.** They establish
+pure filtering, URL, facet and result-payload properties at 4, 40 and 400
+generated rows; they do not measure planner choices, indexes or database latency.
+
+### Remaining limitations
+
+- Real PostgreSQL scale testing against representative catalogue data remains.
+- Size and attribute filters currently pass matching product-id sets into the
+  final listing query; revisit if those sets become materially large.
+- Pagination is not implemented, although ordering is now ready for it.
+- Full faceted-navigation canonical/noindex policy remains future SEO work.
+- Sub-category routes retain their existing client-side filtering; #128 changes
+  `/in/shop` only.
