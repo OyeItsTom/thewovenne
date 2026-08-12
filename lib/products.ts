@@ -365,6 +365,157 @@ export async function getAllProducts(ctx: ReadCtx = ANON_CTX): Promise<Product[]
 }
 
 /**
+ * The catalogue, filtered by the database rather than by the browser.
+ *
+ * WHAT THIS REPLACES. getAllProducts() returned every product, and the shop page
+ * handed the whole array to a client component to filter in memory. Measured on
+ * the live site that was 1,052 characters of serialised product per row — 41 KB
+ * at forty products, 411 KB at four hundred, sent to a phone so it could hide
+ * most of it again.
+ *
+ * SCOPING IS UNCHANGED AND MUST STAY THAT WAY. Every path still goes through
+ * scopeToVisible(), so hiding a category in admin still removes its products
+ * everywhere. Filtering narrows within that set; it can never widen it.
+ *
+ * SIZE NEEDS A SECOND QUERY, and only pays for one when it is used. product_sizes
+ * is a separate table, so a size filter first asks which products still have
+ * stock in that label and then constrains on the answer. No size filter, no
+ * extra round trip.
+ *
+ * `limit` and `offset` are accepted but unused by callers today. They are here
+ * so paging becomes a caller change rather than a rewrite of this function.
+ */
+export interface CatalogueFilterInput {
+  /** Sub-category slug. Resolved to an id here, so callers pass what the URL has. */
+  category?: string | null;
+  fabric?: string | null;
+  colour?: string | null;
+  size?: string | null;
+  maxPrice?: number | null;
+}
+
+export async function getCatalogue(
+  filters: CatalogueFilterInput = {},
+  opts: { limit?: number; offset?: number } = {},
+  ctx: ReadCtx = ANON_CTX
+): Promise<{ products: Product[]; total: number }> {
+  const [visibleIds, cats] = await Promise.all([
+    scopeToVisible(undefined, ctx),
+    categoryMap(ctx.client, ctx),
+  ]);
+  if (visibleIds.length === 0) return { products: [], total: 0 };
+
+  // A category slug narrows the visible set. An unrecognised slug narrows it to
+  // nothing, which is the honest answer — better an empty listing than silently
+  // ignoring half the URL and showing everything.
+  let scopedIds = visibleIds;
+  if (filters.category) {
+    const match = [...cats.values()].find((c) => c.slug === filters.category);
+    scopedIds = match && visibleIds.includes(match.id) ? [match.id] : [];
+    if (scopedIds.length === 0) return { products: [], total: 0 };
+  }
+
+  // Only products with stock in the chosen size. Done first so the main query
+  // can constrain on ids rather than filtering after the fact.
+  let sizeScopedProductIds: string[] | null = null;
+  if (filters.size) {
+    const { data: sizeRows, error: sizeError } = await ctx.client
+      .from("product_sizes")
+      .select("product_id")
+      .eq("label", filters.size)
+      .gt("stock_quantity", 0);
+
+    if (sizeError) {
+      console.error("getCatalogue sizes:", sizeError.message);
+      return { products: [], total: 0 };
+    }
+    sizeScopedProductIds = [
+      ...new Set((sizeRows ?? []).map((r) => (r as { product_id: string }).product_id)),
+    ];
+    if (sizeScopedProductIds.length === 0) return { products: [], total: 0 };
+  }
+
+  let query = storefrontQuery(ctx)
+    .eq("is_active", true)
+    .in("category_id", scopedIds);
+
+  // ilike rather than eq: the columns are free text and the values in them are
+  // inconsistently cased. This matches how the facet list is built, so a chip
+  // the customer can see always selects the products it was derived from.
+  if (filters.fabric) query = query.ilike("fabric", filters.fabric);
+  if (filters.colour) query = query.ilike("colour", filters.colour);
+  if (filters.maxPrice !== null && filters.maxPrice !== undefined) {
+    query = query.lte("price_inr", filters.maxPrice);
+  }
+  if (sizeScopedProductIds) query = query.in("product_id", sizeScopedProductIds);
+
+  query = query.order("created_at", { ascending: false });
+  if (opts.limit !== undefined) {
+    const from = opts.offset ?? 0;
+    query = query.range(from, from + opts.limit - 1);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    console.error("getCatalogue:", error.message);
+    return { products: [], total: 0 };
+  }
+
+  const products = finish(data, cats);
+  // Without paging the row count IS the total. When paging arrives this becomes
+  // a count query; the shape of the return value already allows for it.
+  return { products, total: products.length };
+}
+
+/**
+ * The values worth offering as filters, across the whole visible catalogue.
+ *
+ * A SEPARATE, DELIBERATELY THIN QUERY. The chips must describe the entire
+ * catalogue, not merely the page being shown — otherwise filtering down to one
+ * product would leave one chip and no way back. Reading two short text columns
+ * for every product is a fraction of reading every product: no description, no
+ * gallery, no prices, no discount window.
+ *
+ * Values are returned as stored. Normalising them is separate work; this is the
+ * query, not the vocabulary.
+ */
+export async function getCatalogueFacetValues(
+  ctx: ReadCtx = ANON_CTX
+): Promise<{ fabrics: string[]; colours: string[] }> {
+  const visibleIds = await scopeToVisible(undefined, ctx);
+  if (visibleIds.length === 0) return { fabrics: [], colours: [] };
+
+  const { data, error } = await ctx.client
+    .from("product_versions")
+    .select("fabric, colour")
+    .in("state", statesFor(ctx))
+    .eq("is_active", true)
+    .in("category_id", visibleIds);
+
+  if (error) {
+    console.error("getCatalogueFacetValues:", error.message);
+    return { fabrics: [], colours: [] };
+  }
+
+  const rows = (data ?? []) as { fabric: string | null; colour: string | null }[];
+  const pick = (get: (r: (typeof rows)[number]) => string | null) => {
+    // Keyed case-insensitively so "gold" and "Gold" are one chip, shown with the
+    // first spelling seen. Genuinely different fabrics stay separate — this only
+    // collapses values that differ by case or surrounding space.
+    const seen = new Map<string, string>();
+    for (const row of rows) {
+      const value = get(row)?.trim();
+      if (!value) continue;
+      const key = value.toLowerCase();
+      if (!seen.has(key)) seen.set(key, value);
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  };
+
+  return { fabrics: pick((r) => r.fabric), colours: pick((r) => r.colour) };
+}
+
+/**
  * Products in a seasonal collection, e.g. "onam-edit".
  *
  * Goes through scopeToVisible like every other listing, so putting a product

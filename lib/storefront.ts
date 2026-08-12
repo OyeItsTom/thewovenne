@@ -1,4 +1,6 @@
+import { unstable_cache } from "next/cache";
 import { previewCtx } from "./preview";
+import { ANON_CTX } from "./readCtx";
 import * as products from "./products";
 import * as categories from "./categories";
 import * as journal from "./journal";
@@ -23,6 +25,51 @@ export const getFeaturedProducts = async (limit = 4) =>
   products.getFeaturedProducts(limit, await previewCtx());
 
 export const getAllProducts = async () => products.getAllProducts(await previewCtx());
+
+/**
+ * The filtered catalogue, cached per distinct set of filters.
+ *
+ * WHY A CACHE HAS TO APPEAR HERE. Reading searchParams makes a page render
+ * dynamically, which would otherwise turn a statically generated catalogue into
+ * a database round trip for every visitor — undoing the 60s revalidate the shop
+ * page has always had. Caching the QUERY rather than the page keeps that intent:
+ * the render is dynamic, the data is not re-fetched.
+ *
+ * PREVIEW IS NEVER CACHED, and this is the important line in the file. An admin
+ * viewing drafts must not have their view stored and served to customers, and a
+ * customer's cached view must not be overwritten by a draft. Preview takes the
+ * uncached path every time.
+ *
+ * Keyed on the filters themselves, so two customers asking the same question
+ * share an answer and a different question gets its own.
+ */
+const cachedCatalogue = unstable_cache(
+  async (filters: products.CatalogueFilterInput, limit?: number, offset?: number) =>
+    products.getCatalogue(filters, { limit, offset }, ANON_CTX),
+  ["catalogue"],
+  { revalidate: 60, tags: ["catalogue"] }
+);
+
+export const getCatalogue = async (
+  filters: products.CatalogueFilterInput = {},
+  opts: { limit?: number; offset?: number } = {}
+) => {
+  const ctx = await previewCtx();
+  if (ctx.preview) return products.getCatalogue(filters, opts, ctx);
+  return cachedCatalogue(filters, opts.limit, opts.offset);
+};
+
+const cachedFacets = unstable_cache(
+  async () => products.getCatalogueFacetValues(ANON_CTX),
+  ["catalogue-facets"],
+  { revalidate: 60, tags: ["catalogue"] }
+);
+
+export const getCatalogueFacetValues = async () => {
+  const ctx = await previewCtx();
+  if (ctx.preview) return products.getCatalogueFacetValues(ctx);
+  return cachedFacets();
+};
 
 /**
  * Heritage, craft and care for one piece — preview-aware, so an admin editing
