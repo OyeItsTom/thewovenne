@@ -10,9 +10,12 @@ import ProductVideo from "@/components/product/ProductVideo";
 import ProductGrid from "@/components/shop/ProductGrid";
 import WishlistButton from "@/components/shop/WishlistButton";
 import ProductReviews from "@/components/product/ProductReviews";
+import DeliveryEstimator from "@/components/product/DeliveryEstimator";
 import Stars from "@/components/product/Stars";
 import { getReviews, getRating } from "@/lib/reviews";
 import { getBrandKnowledge } from "@/lib/storefront";
+import { getDeliveryConfig } from "@/lib/delivery";
+import { DEFAULT_COUNTRY } from "@/lib/country";
 import { cPath } from "@/lib/country";
 import type { Product } from "@/lib/types";
 import type { ProductSize } from "@/lib/sizes";
@@ -56,11 +59,18 @@ export default async function ProductDetail({
   // A query of its own rather than a column on the listing payload — see
   // getBrandKnowledge. One extra read on the one page that shows it, instead of
   // three paragraphs per product on every category page.
-  const [reviews, rating, knowledge] = await Promise.all([
+  const [reviews, rating, knowledge, deliveryConfig] = await Promise.all([
     getReviews(product.id),
     getRating(product.id),
     getBrandKnowledge({ productId: product.id }),
+    getDeliveryConfig(),
   ]);
+
+  // DECIDED ON THE SERVER. Both switches are read here, so "off" means the
+  // component is never rendered and its markup never reaches the browser —
+  // rather than being hidden with a class somebody can toggle in devtools.
+  const showEstimator =
+    deliveryConfig.estimator_enabled && deliveryConfig.estimator_on_pdp;
 
   return (
     <div className="container-wovenne section-padding pb-28 lg:pb-24">
@@ -168,6 +178,16 @@ export default async function ProductDetail({
           <div className="mt-8 border-t border-ink/10 pt-8">
             <ProductOptions product={product} sizes={sizes} />
           </div>
+
+          {/* Directly under the purchase controls, where "will this reach me,
+              and what will it cost?" is actually asked. The price passed is what
+              this one piece costs, so the free-delivery threshold is judged
+              against the order the customer is contemplating. */}
+          {showEstimator && (
+            <div className="mt-8">
+              <DeliveryEstimator market={DEFAULT_COUNTRY} orderValueInr={price} />
+            </div>
+          )}
 
           {product.fabric && (
             // The fabric named where it helps a decision; how to wash it now has
