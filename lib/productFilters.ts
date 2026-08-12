@@ -20,7 +20,7 @@ export type SizesByProduct = Record<string, ProductSize[]>;
  * answers a different question.)
  */
 export function availableSizes(
-  products: Product[],
+  products: Array<Pick<Product, "id">>,
   sizesByProduct: SizesByProduct
 ): string[] {
   const labels = new Map<string, number>();

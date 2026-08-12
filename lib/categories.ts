@@ -123,6 +123,11 @@ export async function getVisibleCategoryIds(
 ): Promise<string[]> {
   const all = await getAllCategories(ctx.client, { drafts: ctx.preview });
 
+  return visibleCategoryIds(all);
+}
+
+/** Pure visibility rule shared with catalogue reads that already fetched categories. */
+export function visibleCategoryIds(all: Category[]): string[] {
   const visibleParents = new Set(
     all.filter((c) => c.parent_id === null && c.is_visible).map((c) => c.id)
   );

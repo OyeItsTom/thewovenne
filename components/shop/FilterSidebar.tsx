@@ -3,15 +3,16 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
 import { cn, formatINR } from "@/lib/utils";
+import { NO_FILTERS, type CatalogueFilters } from "@/lib/catalogueParams";
 import { slideInFromLeft } from "@/lib/motion";
 
-export interface Filters {
-  category: string | null;
-  fabric: string | null;
-  colour: string | null;
-  size: string | null;
-  maxPrice: number | null;
-}
+/*
+ * ONE DEFINITION, NOT TWO. These are the same five fields the URL carries, so
+ * the type is the canonical one from lib/catalogueParams rather than a copy
+ * that happens to match today. A copy would let the URL contract and the
+ * controls drift apart silently, and the compiler would have nothing to say.
+ */
+export type Filters = CatalogueFilters;
 
 export interface CategoryFilterGroup {
   name: string;
@@ -32,13 +33,7 @@ export interface FilterOptions {
   sizes: string[];
 }
 
-export const EMPTY_FILTERS: Filters = {
-  category: null,
-  fabric: null,
-  colour: null,
-  size: null,
-  maxPrice: null,
-};
+export const EMPTY_FILTERS: Filters = NO_FILTERS;
 
 const PRICE_STEPS = [1500, 2500, 3500, 5000];
 

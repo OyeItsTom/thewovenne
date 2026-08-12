@@ -1,11 +1,22 @@
 import type { Metadata } from "next";
-import { getAllProducts } from "@/lib/storefront";
-import { getVisibleCategoryTree } from "@/lib/storefront";
+import {
+  getCatalogue,
+  getCatalogueCategoryTree,
+  getCatalogueFacetValues,
+  getCatalogueSizes,
+} from "@/lib/storefront";
+import { parseCatalogueParams, type RawSearchParams } from "@/lib/catalogueParams";
 import ShopFilters from "@/components/shop/ShopFilters";
-import { getSizesForProducts } from "@/lib/sizes";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 
-// Cache the catalogue for 60s so the DB isn't queried on every request.
+/*
+ * Reading searchParams makes this render dynamically — that is how App Router
+ * works and it is not avoidable while filters live in the URL. The 60s caching
+ * this page has always had did not go away, it moved: getCatalogue() caches the
+ * QUERY per filter combination. The public category-tree and displayed-size
+ * support reads use the same TTL; preview bypasses every one of those caches.
+ * See lib/storefront.
+ */
 export const revalidate = 60;
 
 export const metadata: Metadata = {
@@ -20,13 +31,26 @@ export const metadata: Metadata = {
   },
 };
 
-export default async function ShopPage() {
-  const [products, categoryTree] = await Promise.all([
-    getAllProducts(),
-    getVisibleCategoryTree(),
+export default async function ShopPage({
+  searchParams,
+}: {
+  searchParams: RawSearchParams;
+}) {
+  const filters = parseCatalogueParams(searchParams);
+
+  // THE DATABASE DOES THE FILTERING. What arrives here is the matching products
+  // and nothing else, so the page serialises a result rather than a catalogue.
+  const [{ products }, categoryTree, facetValues] = await Promise.all([
+    getCatalogue(filters),
+    getCatalogueCategoryTree(),
+    // Across the whole catalogue, not just this result — otherwise filtering to
+    // one product would leave one chip and no way back.
+    getCatalogueFacetValues(),
   ]);
-  const sizeMap = await getSizesForProducts(products.map((p) => p.id));
-  const sizesByProduct = Object.fromEntries(sizeMap);
+
+  // Only for the products actually on show. Previously this was every product
+  // in the shop whether or not a size filter was ever touched.
+  const sizesByProduct = await getCatalogueSizes(products.map((p) => p.id));
 
   return (
     <div className="container-wovenne section-padding">
@@ -40,6 +64,8 @@ export default async function ShopPage() {
         products={products}
         categoryTree={categoryTree}
         sizesByProduct={sizesByProduct}
+        facetValues={facetValues}
+        filters={filters}
       />
     </div>
   );

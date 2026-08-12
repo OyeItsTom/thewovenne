@@ -1,8 +1,11 @@
+import { unstable_cache } from "next/cache";
 import { previewCtx } from "./preview";
+import { ANON_CTX } from "./readCtx";
 import * as products from "./products";
 import * as categories from "./categories";
 import * as journal from "./journal";
 import * as pages from "./pages";
+import { getSizesForProducts } from "./sizes";
 import { getContent as readContent } from "./content";
 import type { SiteContentMap } from "./types";
 
@@ -23,6 +26,88 @@ export const getFeaturedProducts = async (limit = 4) =>
   products.getFeaturedProducts(limit, await previewCtx());
 
 export const getAllProducts = async () => products.getAllProducts(await previewCtx());
+
+/**
+ * The filtered catalogue, cached per distinct set of filters.
+ *
+ * WHY A CACHE HAS TO APPEAR HERE. Reading searchParams makes a page render
+ * dynamically, which would otherwise turn a statically generated catalogue into
+ * a database round trip for every visitor — undoing the 60s revalidate the shop
+ * page has always had. Caching the QUERY rather than the page keeps that intent:
+ * the render is dynamic, the data is not re-fetched.
+ *
+ * PREVIEW IS NEVER CACHED, and this is the important line in the file. An admin
+ * viewing drafts must not have their view stored and served to customers, and a
+ * customer's cached view must not be overwritten by a draft. Preview takes the
+ * uncached path every time.
+ *
+ * Keyed on the filters themselves, so two customers asking the same question
+ * share an answer and a different question gets its own.
+ *
+ * CARDINALITY. The URL parser admits only five named fields, drops empty values,
+ * caps text at 80 characters and caps price. The theoretical text combinations
+ * are still unbounded, but entries expire after 60 seconds and the deployed
+ * data cache is evictable. At a four-product launch catalogue, adding a second
+ * validation/cache subsystem would cost more complexity than it removes. Revisit
+ * alongside pagination or if cache/storage telemetry shows abuse.
+ */
+const cachedCatalogue = unstable_cache(
+  async (filters: products.CatalogueFilterInput, limit?: number, offset?: number) =>
+    products.getCatalogue(filters, { limit, offset }, ANON_CTX),
+  ["catalogue"],
+  { revalidate: 60, tags: ["catalogue"] }
+);
+
+export const getCatalogue = async (
+  filters: products.CatalogueFilterInput = {},
+  opts: { limit?: number; offset?: number } = {}
+) => {
+  const ctx = await previewCtx();
+  if (ctx.preview) return products.getCatalogue(filters, opts, ctx);
+  return cachedCatalogue(filters, opts.limit, opts.offset);
+};
+
+const cachedFacets = unstable_cache(
+  async () => products.getCatalogueFacetValues(ANON_CTX),
+  ["catalogue-facets"],
+  { revalidate: 60, tags: ["catalogue"] }
+);
+
+export const getCatalogueFacetValues = async () => {
+  const ctx = await previewCtx();
+  if (ctx.preview) return products.getCatalogueFacetValues(ctx);
+  return cachedFacets();
+};
+
+const cachedCategoryTree = unstable_cache(
+  async () => categories.getVisibleCategoryTree(ANON_CTX),
+  ["catalogue-category-tree"],
+  { revalidate: 60, tags: ["catalogue"] }
+);
+
+/** Public catalogue support reads share its TTL; preview remains request-local. */
+export const getCatalogueCategoryTree = async () => {
+  const ctx = await previewCtx();
+  if (ctx.preview) return categories.getVisibleCategoryTree(ctx);
+  return cachedCategoryTree();
+};
+
+const cachedCatalogueSizes = unstable_cache(
+  async (productIds: string[]) => {
+    const sizes = await getSizesForProducts(productIds, ANON_CTX.client);
+    return Object.fromEntries(sizes);
+  },
+  ["catalogue-product-sizes"],
+  { revalidate: 60, tags: ["catalogue"] }
+);
+
+export const getCatalogueSizes = async (productIds: string[]) => {
+  const ctx = await previewCtx();
+  if (ctx.preview) {
+    return Object.fromEntries(await getSizesForProducts(productIds, ctx.client));
+  }
+  return cachedCatalogueSizes(productIds);
+};
 
 /**
  * Heritage, craft and care for one piece — preview-aware, so an admin editing

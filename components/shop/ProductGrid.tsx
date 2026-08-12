@@ -1,11 +1,11 @@
-import type { Product } from "@/lib/types";
+import type { ProductListing } from "@/lib/types";
 import { ProductCardSkeleton } from "@/components/ui/Skeleton";
 import ProductCard from "./ProductCard";
 
 export default function ProductGrid({
   products,
 }: {
-  products: Product[] | null;
+  products: ProductListing[] | null;
 }) {
   if (products === null) {
     return (

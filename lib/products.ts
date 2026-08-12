@@ -1,8 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
-import { getAllCategories, getVisibleCategoryIds } from "./categories";
+import {
+  getAllCategories,
+  getVisibleCategoryIds,
+  visibleCategoryIds,
+} from "./categories";
 import { ANON_CTX, preferDraft, statesFor, type ReadCtx } from "./readCtx";
-import type { Category, Product } from "./types";
+import type { Category, Product, ProductListing } from "./types";
 
 // Storefront reads come from PUBLISHED versions, never the identity tables.
 // RLS only exposes state = 'published' to anon, so a mistake here cannot leak
@@ -23,6 +27,18 @@ export const PRODUCT_SELECT =
   "product_images(url, sort_order)";
 
 /**
+ * The smaller row shape a discovery card actually needs.
+ *
+ * The gallery remains intentional: ProductCard's manual arrows can step through
+ * every photograph. Description, fabric, colour, collection and video do not
+ * render on a card and are omitted from listing payloads.
+ */
+export const PRODUCT_LISTING_SELECT =
+  "product_id, name, slug, price_inr, category_id, stock_quantity, image_url, " +
+  "is_active, created_at, discount_type, discount_value, discount_starts_at, " +
+  "discount_ends_at, product_images(url, sort_order)";
+
+/**
  * Base query for every storefront listing.
  *
  * In preview it also pulls draft rows (and the columns needed to collapse
@@ -34,6 +50,17 @@ function storefrontQuery(ctx: ReadCtx) {
     .from("product_versions")
     .select(
       ctx.preview ? `${PRODUCT_SELECT}, state, pending_delete` : PRODUCT_SELECT
+    )
+    .in("state", statesFor(ctx));
+}
+
+function storefrontListingQuery(ctx: ReadCtx) {
+  return ctx.client
+    .from("product_versions")
+    .select(
+      ctx.preview
+        ? `${PRODUCT_LISTING_SELECT}, state, pending_delete`
+        : PRODUCT_LISTING_SELECT
     )
     .in("state", statesFor(ctx));
 }
@@ -69,6 +96,64 @@ export type ProductVersionRow = {
   /** Embedded gallery. Absent on queries that do not ask for it. */
   product_images?: { url: string | null; sort_order: number | null }[] | null;
 };
+
+export type ProductListingRow = Pick<
+  ProductVersionRow,
+  | "product_id"
+  | "name"
+  | "slug"
+  | "price_inr"
+  | "category_id"
+  | "stock_quantity"
+  | "image_url"
+  | "is_active"
+  | "created_at"
+  | "discount_type"
+  | "discount_value"
+  | "discount_starts_at"
+  | "discount_ends_at"
+  | "product_images"
+> & {
+  state?: string;
+  pending_delete?: boolean;
+  /** Present only on the preview/effective-version path. */
+  fabric?: string | null;
+  colour?: string | null;
+};
+
+export function mapListingProduct(
+  row: ProductListingRow,
+  categories: Map<string, Category>
+): ProductListing {
+  const category = row.category_id ? categories.get(row.category_id) : undefined;
+  return {
+    id: row.product_id,
+    name: row.name,
+    slug: row.slug,
+    price_inr: row.price_inr,
+    category_id: row.category_id,
+    category: category?.name ?? null,
+    category_slug: category?.slug ?? null,
+    category_parent_slug:
+      (category?.parent_id ? categories.get(category.parent_id)?.slug : null) ?? null,
+    stock_quantity: row.stock_quantity,
+    image_url: row.image_url,
+    is_active: row.is_active,
+    created_at: row.created_at,
+    discount_type: row.discount_type,
+    discount_value: row.discount_value,
+    discount_starts_at: row.discount_starts_at,
+    discount_ends_at: row.discount_ends_at,
+    images: galleryImages(row.product_images, row.image_url),
+  };
+}
+
+function finishListing(data: unknown, cats: Map<string, Category>): ProductListing[] {
+  const rows = (data as ProductListingRow[] | null) ?? [];
+  return preferDraft(rows, (r) => r.product_id).map((r) =>
+    mapListingProduct(r, cats)
+  );
+}
 
 /**
  * Flatten a version row to the Product shape callers expect: the stable
@@ -362,6 +447,276 @@ export async function getAllProducts(ctx: ReadCtx = ANON_CTX): Promise<Product[]
     return [];
   }
   return finish(data, cats);
+}
+
+/**
+ * The catalogue, filtered by the database rather than by the browser.
+ *
+ * WHAT THIS REPLACES. getAllProducts() returned every product, and the shop page
+ * handed the whole array to a client component to filter in memory. Measured on
+ * the live site that was 1,052 characters of serialised product per row — 41 KB
+ * at forty products, 411 KB at four hundred, sent to a phone so it could hide
+ * most of it again.
+ *
+ * SCOPING IS UNCHANGED AND MUST STAY THAT WAY. Every path still goes through
+ * scopeToVisible(), so hiding a category in admin still removes its products
+ * everywhere. Filtering narrows within that set; it can never widen it.
+ *
+ * SIZE NEEDS A SECOND QUERY, and only pays for one when it is used. product_sizes
+ * is a separate table, so a size filter first asks which products still have
+ * stock in that label and then constrains on the answer. No size filter, no
+ * extra round trip.
+ *
+ * `limit` and `offset` are accepted but unused by callers today. They are here
+ * so paging becomes a caller change rather than a rewrite of this function.
+ */
+export interface CatalogueFilterInput {
+  /** Sub-category slug. Resolved to an id here, so callers pass what the URL has. */
+  category?: string | null;
+  fabric?: string | null;
+  colour?: string | null;
+  size?: string | null;
+  maxPrice?: number | null;
+}
+
+/** Literal, case-insensitive comparison with surrounding whitespace ignored. */
+export function sameCatalogueValue(
+  stored: string | null | undefined,
+  requested: string | null | undefined
+): boolean {
+  return (stored ?? "").trim().toLocaleLowerCase("en") ===
+    (requested ?? "").trim().toLocaleLowerCase("en");
+}
+
+/**
+ * Filter already-collapsed effective rows. Preview must use this order: choosing
+ * rows first prevents a matching published row surviving behind a draft that no
+ * longer matches (or is inactive/hidden).
+ */
+export function filterEffectiveCatalogueRows(
+  rows: ProductListingRow[],
+  filters: CatalogueFilterInput,
+  visibleCategoryIds: string[],
+  categories: Map<string, Category>,
+  sizeProductIds: Set<string> | null
+): ProductListingRow[] {
+  const visible = new Set(visibleCategoryIds);
+  const category = filters.category
+    ? [...categories.values()].find((c) => c.slug === filters.category)
+    : null;
+  if (filters.category && (!category || !visible.has(category.id))) return [];
+
+  return preferDraft(rows, (r) => r.product_id).filter((row) => {
+    if (!row.is_active || !row.category_id || !visible.has(row.category_id)) return false;
+    if (category && row.category_id !== category.id) return false;
+    if (filters.fabric && !sameCatalogueValue(row.fabric, filters.fabric)) return false;
+    if (filters.colour && !sameCatalogueValue(row.colour, filters.colour)) return false;
+    if (filters.maxPrice != null && row.price_inr > filters.maxPrice) return false;
+    if (sizeProductIds && !sizeProductIds.has(row.product_id)) return false;
+    return true;
+  });
+}
+
+async function matchingSizeProductIds(
+  size: string | null | undefined,
+  ctx: ReadCtx
+): Promise<Set<string> | null> {
+  if (!size) return null;
+  const { data, error } = await ctx.client
+    .from("product_sizes")
+    .select("product_id, label")
+    .gt("stock_quantity", 0);
+  if (error) {
+    console.error("getCatalogue sizes:", error.message);
+    return new Set();
+  }
+  return new Set(
+    (data ?? [])
+      .filter((r) => sameCatalogueValue(r.label as string, size))
+      .map((r) => r.product_id as string)
+  );
+}
+
+async function matchingAttributeProductIds(
+  filters: CatalogueFilterInput,
+  visibleCategoryIds: string[],
+  ctx: ReadCtx
+): Promise<Set<string> | null> {
+  if (!filters.fabric && !filters.colour) return null;
+  const { data, error } = await ctx.client
+    .from("product_versions")
+    .select("product_id, fabric, colour")
+    .eq("state", "published")
+    .eq("is_active", true)
+    .in("category_id", visibleCategoryIds);
+  if (error) {
+    console.error("getCatalogue attributes:", error.message);
+    return new Set();
+  }
+  return new Set(
+    (data ?? [])
+      .filter(
+        (row) =>
+          (!filters.fabric || sameCatalogueValue(row.fabric, filters.fabric)) &&
+          (!filters.colour || sameCatalogueValue(row.colour, filters.colour))
+      )
+      .map((row) => row.product_id as string)
+  );
+}
+
+export async function getCatalogue(
+  filters: CatalogueFilterInput = {},
+  opts: { limit?: number; offset?: number } = {},
+  ctx: ReadCtx = ANON_CTX
+): Promise<{ products: ProductListing[]; total: number }> {
+  // One category read supplies both the display map and visibility scope. The
+  // previous implementation fetched the same version rows twice per cold query.
+  const allCategories = await getAllCategories(ctx.client, { drafts: ctx.preview });
+  const visibleIds = visibleCategoryIds(allCategories);
+  const cats = new Map(allCategories.map((category) => [category.id, category]));
+  if (visibleIds.length === 0) return { products: [], total: 0 };
+
+  const sizeScopedProductIds = await matchingSizeProductIds(filters.size, ctx);
+  if (sizeScopedProductIds?.size === 0) return { products: [], total: 0 };
+
+  if (ctx.preview) {
+    // Preview correctness comes before query narrowing: collapse to the effective
+    // draft/published row first, then apply every visibility/filter rule.
+    const { data, error } = await storefrontQuery(ctx)
+      .order("created_at", { ascending: false })
+      .order("product_id", { ascending: true });
+    if (error) {
+      console.error("getCatalogue preview:", error.message);
+      return { products: [], total: 0 };
+    }
+    const effective = filterEffectiveCatalogueRows(
+      (data as unknown as ProductVersionRow[]) ?? [],
+      filters,
+      visibleIds,
+      cats,
+      sizeScopedProductIds
+    );
+    const products = effective.map((row) => mapListingProduct(row, cats));
+    return { products, total: products.length };
+  }
+
+  const attributeScopedProductIds = await matchingAttributeProductIds(
+    filters,
+    visibleIds,
+    ctx
+  );
+  if (attributeScopedProductIds?.size === 0) return { products: [], total: 0 };
+
+  // A category slug narrows the visible set. An unrecognised slug narrows it to
+  // nothing, which is the honest answer — better an empty listing than silently
+  // ignoring half the URL and showing everything.
+  let scopedIds = visibleIds;
+  if (filters.category) {
+    const match = [...cats.values()].find((c) => c.slug === filters.category);
+    scopedIds = match && visibleIds.includes(match.id) ? [match.id] : [];
+    if (scopedIds.length === 0) return { products: [], total: 0 };
+  }
+
+  let query = storefrontListingQuery(ctx)
+    .eq("is_active", true)
+    .in("category_id", scopedIds);
+
+  if (attributeScopedProductIds) {
+    query = query.in("product_id", [...attributeScopedProductIds]);
+  }
+  if (filters.maxPrice !== null && filters.maxPrice !== undefined) {
+    query = query.lte("price_inr", filters.maxPrice);
+  }
+  if (sizeScopedProductIds) {
+    query = query.in("product_id", [...sizeScopedProductIds]);
+  }
+
+  query = query
+    .order("created_at", { ascending: false })
+    .order("product_id", { ascending: true });
+  if (opts.limit !== undefined) {
+    const from = opts.offset ?? 0;
+    query = query.range(from, from + opts.limit - 1);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    console.error("getCatalogue:", error.message);
+    return { products: [], total: 0 };
+  }
+
+  const products = finishListing(data, cats);
+  // Without paging the row count IS the total. When paging arrives this becomes
+  // a count query; the shape of the return value already allows for it.
+  return { products, total: products.length };
+}
+
+/**
+ * The values worth offering as filters, across the whole visible catalogue.
+ *
+ * A SEPARATE, DELIBERATELY THIN QUERY. The chips must describe the entire
+ * catalogue, not merely the page being shown — otherwise filtering down to one
+ * product would leave one chip and no way back. Reading two short text columns
+ * for every product is a fraction of reading every product: no description, no
+ * gallery, no prices, no discount window.
+ *
+ * Values are returned as stored. Normalising them is separate work; this is the
+ * query, not the vocabulary.
+ */
+export async function getCatalogueFacetValues(
+  ctx: ReadCtx = ANON_CTX
+): Promise<{ fabrics: string[]; colours: string[] }> {
+  const visibleIds = await scopeToVisible(undefined, ctx);
+  if (visibleIds.length === 0) return { fabrics: [], colours: [] };
+
+  let facetQuery = ctx.client
+    .from("product_versions")
+    .select(
+      ctx.preview
+        ? "product_id, fabric, colour, category_id, is_active, state, pending_delete"
+        : "fabric, colour"
+    )
+    .in("state", statesFor(ctx));
+  if (!ctx.preview) {
+    facetQuery = facetQuery.eq("is_active", true).in("category_id", visibleIds);
+  }
+  const { data, error } = await facetQuery;
+
+  if (error) {
+    console.error("getCatalogueFacetValues:", error.message);
+    return { fabrics: [], colours: [] };
+  }
+
+  const raw = ((data ?? []) as unknown) as {
+    product_id?: string;
+    fabric: string | null;
+    colour: string | null;
+    category_id?: string;
+    is_active?: boolean;
+    state?: string;
+    pending_delete?: boolean;
+  }[];
+  const visible = new Set(visibleIds);
+  const rows = ctx.preview
+    ? preferDraft(raw, (row) => row.product_id ?? "").filter(
+        (row) => row.is_active && visible.has(row.category_id ?? "")
+      )
+    : raw;
+  const pick = (get: (r: (typeof rows)[number]) => string | null) => {
+    // Keyed case-insensitively so "gold" and "Gold" are one chip, shown with the
+    // first spelling seen. Genuinely different fabrics stay separate — this only
+    // collapses values that differ by case or surrounding space.
+    const seen = new Map<string, string>();
+    for (const row of rows) {
+      const value = get(row)?.trim();
+      if (!value) continue;
+      const key = value.toLowerCase();
+      if (!seen.has(key)) seen.set(key, value);
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  };
+
+  return { fabrics: pick((r) => r.fabric), colours: pick((r) => r.colour) };
 }
 
 /**
