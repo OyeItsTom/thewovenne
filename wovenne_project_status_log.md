@@ -1605,3 +1605,68 @@ generated rows; they do not measure planner choices, indexes or database latency
 - Full faceted-navigation canonical/noindex policy remains future SEO work.
 - Sub-category routes retain their existing client-side filtering; #128 changes
   `/in/shop` only.
+
+---
+
+## Product guidance roadmap — owner data required before PR #124
+
+PR #124 remains **open and unmerged**. Its contextual PDP link is technically
+accepted, but the published `/in/size-guide` destination is still placeholder
+copy and must not be presented as buying guidance until the underlying facts
+exist.
+
+Wovenne needs three customer-facing guide types rather than one universal
+apparel chart:
+
+1. **Size guide** — garments with verified body and/or garment measurements.
+2. **Dimensions** — jewellery and other dimensional products.
+3. **Dimensions & drape** — sarees: physical dimensions, blouse-piece facts,
+   fabric behaviour and handmade tolerance.
+
+Do not create artificial S/M/L variants for sarees, jewellery or one-size
+products merely to make a link appear. Stock size labels are operational
+variants and remain conceptually separate from measurement data.
+
+### Conceptual architecture — no schema yet
+
+`Category chart → product override → variant/size measurements`, plus independent
+product-dimension data for non-apparel products. A product should resolve the
+appropriate guide type and link wording from factual data; no resolved guide
+means no PDP link. No migration is approved yet.
+
+### OWNER DATA REQUIRED
+
+**Dress 1**
+
+- True one-size or graded sizing
+- Target age/height
+- Exact garment and/or body measurements
+- Intended fit/ease
+- Unit
+- Handmade/manufacturing tolerance
+
+**Cotton shirt**
+
+- Correct product and fabric identity
+- True one-size or graded sizing
+- Exact body and garment measurements
+- Intended fit
+- Unit
+- Tolerance
+
+**Chain 001**
+
+- Physical meaning of S and M
+- Exact dimensions for each variant
+- Whether clasp, extension and pendant are included in each measurement
+- Tolerance
+
+**Parrot green 120 count handloom Mul cotton saree**
+
+- Saree length
+- Saree width
+- Whether a blouse piece is included
+- Blouse-piece length and width
+- Whether the blouse piece is attached or separate
+- Dimensional tolerance
+- Optional border and pallu dimensions
