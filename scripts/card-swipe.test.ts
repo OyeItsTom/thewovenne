@@ -1,5 +1,5 @@
 /** Product-card tap/swipe boundary, exercised without a browser. */
-import { decideCardGesture, type SwipeInput } from "../lib/cardSwipe";
+import { cardImageOffset, decideCardGesture, type SwipeInput } from "../lib/cardSwipe";
 
 let pass = 0;
 let fail = 0;
@@ -40,6 +40,20 @@ check("last image does not wrap", { index: 2, endX: 40 }, { kind: "swipe", nextI
 check("single-image product ignores swipe", { index: 0, imageCount: 1, endX: 40 }, { kind: "ignored", nextIndex: 0, suppressClick: false });
 check("multi-touch is ignored", { multiTouch: true, endX: 40 }, at1("ignored", false));
 check("pointer cancellation clears without navigation", { cancelled: true, endX: 40 }, at1("cancelled", false));
+
+console.log("\n=== symmetric visual direction ===");
+const visualChecks = [
+  ["left swipe: old image exits left", cardImageOffset(0, 1), -1],
+  ["left swipe: next image settles in frame", cardImageOffset(1, 1), 0],
+  ["right swipe: old image exits right", cardImageOffset(1, 0), 1],
+  ["right swipe: previous image settles in frame", cardImageOffset(0, 0), 0],
+] as const;
+for (const [name, actual, expected] of visualChecks) {
+  const ok = actual === expected;
+  console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}`);
+  if (ok) pass++;
+  else fail++;
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

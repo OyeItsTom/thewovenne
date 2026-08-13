@@ -16,6 +16,13 @@ export interface SwipeDecision {
   suppressClick: boolean;
 }
 
+/** Direction shared by every mounted image: previous/current/next. */
+export function cardImageOffset(imageIndex: number, currentIndex: number) {
+  if (imageIndex < currentIndex) return -1 as const;
+  if (imageIndex > currentIndex) return 1 as const;
+  return 0 as const;
+}
+
 const TAP_SLOP = 10;
 const SWIPE_DISTANCE = 36;
 const AXIS_BIAS = 1.15;

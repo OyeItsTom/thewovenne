@@ -12,6 +12,7 @@ function check(name: string, condition: boolean) {
 }
 
 const card = readFileSync("components/shop/ProductCard.tsx", "utf8");
+const grid = readFileSync("components/shop/ProductGrid.tsx", "utf8");
 
 console.log("\n=== preserved business presentation ===");
 const sale = effectivePrice({
@@ -41,6 +42,7 @@ check("sold-out state remains text", card.includes(">\n              Sold out\n"
 check("multi-image cards expose a gallery indicator", card.includes("data-gallery-indicator"));
 check("indicator is conditional on multiple images", card.includes("{hasMany && ("));
 check("single-image cards have no status or indicator", card.includes("images.length > 1"));
+check("only the first grid card owns discovery", grid.includes("discoveryHint={productIndex === 0}"));
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

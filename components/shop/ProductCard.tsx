@@ -9,7 +9,7 @@ import type { ProductListing } from "@/lib/types";
 import { formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
 import { productHref } from "@/lib/urls";
-import { decideCardGesture } from "@/lib/cardSwipe";
+import { cardImageOffset, decideCardGesture } from "@/lib/cardSwipe";
 import { nextPeekStage, type PeekStage } from "@/lib/cardPeek";
 import WishlistButton from "./WishlistButton";
 import { useReveal, revealClass } from "@/lib/useReveal";
@@ -26,7 +26,13 @@ interface Gesture {
 
 const EDGE_GESTURE_GUTTER = 20;
 
-export default function ProductCard({ product }: { product: ProductListing }) {
+export default function ProductCard({
+  product,
+  discoveryHint = false,
+}: {
+  product: ProductListing;
+  discoveryHint?: boolean;
+}) {
   const { ref, revealed } = useReveal<HTMLDivElement>();
   const images = product.images?.length
     ? product.images
@@ -47,6 +53,12 @@ export default function ProductCard({ product }: { product: ProductListing }) {
   const atEnd = index === images.length - 1;
   const stock = stockState(product.stock_quantity);
   const { price, wasPrice } = effectivePrice(product);
+  const imagePosition = (imageIndex: number) => {
+    const offset = cardImageOffset(imageIndex, index);
+    if (offset < 0) return "-translate-x-full";
+    if (offset > 0) return "translate-x-full";
+    return "translate-x-0";
+  };
 
   const clearPeekTimers = useCallback(() => {
     peekTimers.current.forEach(clearTimeout);
@@ -83,7 +95,7 @@ export default function ProductCard({ product }: { product: ProductListing }) {
       "(prefers-reduced-motion: reduce)"
     ).matches;
     const mobile = window.matchMedia?.("(max-width: 767px)").matches;
-    if (!node || !mobile || imageCount <= 1 || reducedMotion) {
+    if (!node || !discoveryHint || !mobile || imageCount <= 1 || reducedMotion) {
       peekStageRef.current = "done";
       setPeekStage("done");
       return;
@@ -110,11 +122,18 @@ export default function ProductCard({ product }: { product: ProductListing }) {
       observer.disconnect();
       clearPeekTimers();
     };
-  }, [clearPeekTimers, imageCount, movePeek, ref]);
+  }, [clearPeekTimers, discoveryHint, imageCount, movePeek, ref]);
 
   const show = (next: number) => {
     if (next === index || next < 0 || next >= images.length) return;
-    setMounted((current) => Math.max(current, next));
+    if (next > mounted) {
+      setMounted(next);
+      // Let the requested image mount just outside the frame before both
+      // photographs move. Without this frame, a newly requested image appears
+      // directly on top of the current one instead of entering from its side.
+      requestAnimationFrame(() => requestAnimationFrame(() => setIndex(next)));
+      return;
+    }
     setIndex(next);
   };
 
@@ -205,8 +224,12 @@ export default function ProductCard({ product }: { product: ProductListing }) {
               alt={product.name}
               fill
               sizes="(max-width: 639px) 50vw, (max-width: 1023px) 33vw, 25vw"
-              className={`object-cover transition-transform duration-500 ease-out motion-reduce:transition-none md:duration-700 md:group-hover:scale-[1.025] ${
-                peekStage === "peeking" ? "-translate-x-[18%]" : "translate-x-0"
+              className={`object-cover transition-transform duration-500 ease-out motion-reduce:transition-none ${
+                index > 0
+                  ? imagePosition(0)
+                  : peekStage === "peeking"
+                    ? "-translate-x-[18%]"
+                    : "translate-x-0 md:group-hover:scale-[1.025]"
               }`}
             />
           )}
@@ -219,12 +242,12 @@ export default function ProductCard({ product }: { product: ProductListing }) {
               fill
               onLoad={imageIndex === 0 ? startPeekTimers : undefined}
               sizes="(max-width: 639px) 50vw, (max-width: 1023px) 33vw, 25vw"
-              className={`object-cover transition-[opacity,transform] duration-500 ease-out motion-reduce:transition-none ${
-                index === imageIndex + 1
-                  ? "translate-x-0 opacity-100"
-                  : imageIndex === 0 && (peekStage === "peeking" || peekStage === "returning")
-                    ? `${peekStage === "peeking" ? "translate-x-[82%]" : "translate-x-full"} opacity-100`
-                    : "translate-x-full opacity-0"
+              className={`object-cover transition-transform duration-500 ease-out motion-reduce:transition-none ${
+                imageIndex + 1 <= index
+                  ? imagePosition(imageIndex + 1)
+                    : imageIndex === 0 && peekStage === "peeking"
+                      ? "translate-x-[82%]"
+                      : "translate-x-full"
               }`}
             />
           ))}
@@ -279,9 +302,9 @@ export default function ProductCard({ product }: { product: ProductListing }) {
         />
       </div>
 
-      <div className="h-[76px] px-2 pb-1 pt-2 sm:h-auto sm:px-0 sm:pt-3">
+      <div className="h-[76px] px-1 pb-1 pt-2 sm:h-auto sm:px-0 sm:pt-3">
         <Link href={productHref(product)} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">
-          <h3 className="line-clamp-2 min-h-10 font-heading text-base leading-5 text-ink sm:min-h-0 sm:text-lg sm:leading-tight">
+          <h3 className="line-clamp-2 min-h-9 font-body text-sm font-normal leading-[18px] tracking-[0.01em] text-ink sm:min-h-0 sm:text-base sm:leading-5">
             {product.name}
           </h3>
         </Link>
