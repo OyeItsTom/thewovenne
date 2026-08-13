@@ -96,7 +96,7 @@ export default function ShopFilters({
         onClose={() => setMobileFiltersOpen(false)}
       />
 
-      <div className="flex-1">
+      <div className="min-w-0 flex-1">
         {/* aria-busy rather than a spinner: the results are already on screen and
             about to be replaced, so the honest signal is that they are stale,
             not that the page is empty. */}

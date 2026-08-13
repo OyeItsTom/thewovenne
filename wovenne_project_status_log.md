@@ -1670,3 +1670,10 @@ means no PDP link. No migration is approved yet.
 - Whether the blouse piece is attached or separate
 - Dimensional tolerance
 - Optional border and pallu dimensions
+
+### Later merchandising option — not part of the product-grid redesign
+
+If editorial catalogue names should genuinely differ from full PDP titles,
+consider an optional `card_title` field in a separate, evidence-led change. The
+current redesign uses a two-line visual clamp while preserving the full product
+name in the DOM; it does not add a schema or CMS field.

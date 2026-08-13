@@ -9,7 +9,7 @@ export default function ProductGrid({
 }) {
   if (products === null) {
     return (
-      <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4 md:gap-8">
+      <div className="-mx-5 grid grid-cols-2 gap-x-0 gap-y-6 sm:mx-0 sm:grid-cols-3 sm:gap-6 lg:grid-cols-4 lg:gap-8">
         {Array.from({ length: 8 }).map((_, i) => (
           <ProductCardSkeleton key={i} />
         ))}
@@ -26,7 +26,7 @@ export default function ProductGrid({
   }
 
   return (
-    <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4 md:gap-8">
+    <div className="-mx-5 grid grid-cols-2 gap-x-0 gap-y-6 sm:mx-0 sm:grid-cols-3 sm:gap-6 lg:grid-cols-4 lg:gap-8">
       {products.map((product) => (
         <ProductCard key={product.id} product={product} />
       ))}
