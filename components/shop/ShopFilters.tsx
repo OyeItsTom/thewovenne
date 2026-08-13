@@ -80,7 +80,7 @@ export default function ShopFilters({
   };
 
   return (
-    <div className="mt-12 flex flex-col gap-10 lg:flex-row lg:gap-12">
+    <div className="mt-10 flex flex-col gap-6 sm:mt-12 sm:gap-8 lg:flex-row lg:gap-12">
       <button
         onClick={() => setMobileFiltersOpen(true)}
         className="flex items-center gap-2 self-start rounded-full border border-ink/15 px-5 py-2.5 text-sm uppercase tracking-wider text-ink lg:hidden"

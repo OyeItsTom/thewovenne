@@ -18,11 +18,13 @@ export default function WishlistButton({
   productName,
   className,
   size = "md",
+  appearance = "disc",
 }: {
   productId: string;
   productName: string;
   className?: string;
   size?: "sm" | "md";
+  appearance?: "disc" | "overlay";
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -63,14 +65,24 @@ export default function WishlistButton({
       }
       title={saved ? "Saved" : "Save for later"}
       className={cn(
-        "tap-44 relative flex items-center justify-center rounded-full bg-cream/90 text-ink shadow-soft backdrop-blur transition-colors",
+        "tap-44 relative flex items-center justify-center rounded-full transition-colors",
+        appearance === "overlay"
+          ? "bg-transparent text-white shadow-none [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.8))]"
+          : "bg-cream/90 text-ink shadow-soft backdrop-blur",
         "hover:text-terracotta disabled:opacity-60",
         px,
         className
       )}
     >
       <Heart
-        className={cn(icon, "transition-all", saved && "fill-terracotta text-terracotta")}
+        className={cn(
+          icon,
+          "transition-all",
+          saved &&
+            (appearance === "overlay"
+              ? "fill-white text-white"
+              : "fill-terracotta text-terracotta")
+        )}
         strokeWidth={1.5}
       />
     </button>

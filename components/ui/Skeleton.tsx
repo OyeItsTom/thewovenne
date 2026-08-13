@@ -8,8 +8,8 @@ export function ProductCardSkeleton() {
   return (
     <div>
       <Skeleton className="aspect-[4/5] w-full rounded-none sm:rounded-lg" />
-      <div className="space-y-2 px-2 pb-1 pt-2 sm:px-0 sm:pt-3">
-        <Skeleton className="h-4 w-3/4" />
+      <div className="h-[76px] space-y-2 px-2 pb-1 pt-2 sm:h-auto sm:px-0 sm:pt-3">
+        <Skeleton className="h-10 w-3/4" />
         <Skeleton className="h-4 w-1/4" />
       </div>
     </div>

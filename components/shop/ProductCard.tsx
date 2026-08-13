@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent, PointerEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
@@ -10,6 +10,7 @@ import { formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
 import { productHref } from "@/lib/urls";
 import { decideCardGesture } from "@/lib/cardSwipe";
+import { nextPeekStage, type PeekStage } from "@/lib/cardPeek";
 import WishlistButton from "./WishlistButton";
 import { useReveal, revealClass } from "@/lib/useReveal";
 import { stockState } from "@/lib/stock";
@@ -32,16 +33,84 @@ export default function ProductCard({ product }: { product: ProductListing }) {
     : product.image_url
       ? [product.image_url]
       : [];
+  const imageCount = images.length;
   const [index, setIndex] = useState(0);
   const [mounted, setMounted] = useState(0);
   const gesture = useRef<Gesture | null>(null);
   const suppressClick = useRef(false);
+  const peekStageRef = useRef<PeekStage>("idle");
+  const peekTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const [peekStage, setPeekStage] = useState<PeekStage>("idle");
 
   const hasMany = images.length > 1;
   const atStart = index === 0;
   const atEnd = index === images.length - 1;
   const stock = stockState(product.stock_quantity);
   const { price, wasPrice } = effectivePrice(product);
+
+  const clearPeekTimers = useCallback(() => {
+    peekTimers.current.forEach(clearTimeout);
+    peekTimers.current = [];
+  }, []);
+
+  const movePeek = useCallback((action: Parameters<typeof nextPeekStage>[1]) => {
+    const next = nextPeekStage(peekStageRef.current, action, {
+      imageCount,
+      reducedMotion: false,
+    });
+    peekStageRef.current = next;
+    setPeekStage(next);
+    if (next === "done") clearPeekTimers();
+    return next;
+  }, [clearPeekTimers, imageCount]);
+
+  const cancelPeek = () => {
+    if (peekStageRef.current !== "done") movePeek("interact");
+  };
+
+  const startPeekTimers = useCallback(() => {
+    if (peekStageRef.current !== "waiting" || peekTimers.current.length > 0) return;
+    peekTimers.current = [
+      setTimeout(() => movePeek("timer"), 1100),
+      setTimeout(() => movePeek("return"), 1700),
+      setTimeout(() => movePeek("complete"), 2200),
+    ];
+  }, [movePeek]);
+
+  useEffect(() => {
+    const node = ref.current;
+    const reducedMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
+    const mobile = window.matchMedia?.("(max-width: 767px)").matches;
+    if (!node || !mobile || imageCount <= 1 || reducedMotion) {
+      peekStageRef.current = "done";
+      setPeekStage("done");
+      return;
+    }
+    if (typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) {
+          movePeek("hidden");
+          return;
+        }
+        if (movePeek("visible") !== "waiting") return;
+
+        // Only the one adjacent photograph required for the hint is prepared,
+        // and only after this particular card is genuinely on screen.
+        setMounted((current) => Math.max(current, 1));
+      },
+      { threshold: 0.55 }
+    );
+
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      clearPeekTimers();
+    };
+  }, [clearPeekTimers, imageCount, movePeek, ref]);
 
   const show = (next: number) => {
     if (next === index || next < 0 || next >= images.length) return;
@@ -112,7 +181,13 @@ export default function ProductCard({ product }: { product: ProductListing }) {
   };
 
   return (
-    <article ref={ref} className={`group min-w-0 ${revealClass(revealed)}`}>
+    <article
+      ref={ref}
+      className={`group min-w-0 ${revealClass(revealed)}`}
+      onPointerDownCapture={cancelPeek}
+      onClickCapture={cancelPeek}
+      onKeyDownCapture={cancelPeek}
+    >
       <div className="relative aspect-[4/5] overflow-hidden bg-linen sm:rounded-xl">
         <Link
           href={productHref(product)}
@@ -130,7 +205,9 @@ export default function ProductCard({ product }: { product: ProductListing }) {
               alt={product.name}
               fill
               sizes="(max-width: 639px) 50vw, (max-width: 1023px) 33vw, 25vw"
-              className="object-cover transition-transform duration-700 md:group-hover:scale-[1.025] motion-reduce:transition-none"
+              className={`object-cover transition-transform duration-500 ease-out motion-reduce:transition-none md:duration-700 md:group-hover:scale-[1.025] ${
+                peekStage === "peeking" ? "-translate-x-[18%]" : "translate-x-0"
+              }`}
             />
           )}
           {images.slice(1, mounted + 1).map((src, imageIndex) => (
@@ -140,9 +217,14 @@ export default function ProductCard({ product }: { product: ProductListing }) {
               alt=""
               aria-hidden
               fill
+              onLoad={imageIndex === 0 ? startPeekTimers : undefined}
               sizes="(max-width: 639px) 50vw, (max-width: 1023px) 33vw, 25vw"
-              className={`object-cover transition-opacity duration-300 motion-reduce:transition-none ${
-                index === imageIndex + 1 ? "opacity-100" : "opacity-0"
+              className={`object-cover transition-[opacity,transform] duration-500 ease-out motion-reduce:transition-none ${
+                index === imageIndex + 1
+                  ? "translate-x-0 opacity-100"
+                  : imageIndex === 0 && (peekStage === "peeking" || peekStage === "returning")
+                    ? `${peekStage === "peeking" ? "translate-x-[82%]" : "translate-x-full"} opacity-100`
+                    : "translate-x-full opacity-0"
               }`}
             />
           ))}
@@ -171,15 +253,33 @@ export default function ProductCard({ product }: { product: ProductListing }) {
           </>
         )}
 
+        {hasMany && (
+          <div
+            className="pointer-events-none absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 gap-1 drop-shadow-[0_1px_2px_rgba(0,0,0,0.65)]"
+            aria-hidden="true"
+            data-gallery-indicator
+          >
+            {images.map((_, dotIndex) => (
+              <span
+                key={dotIndex}
+                className={`h-1 w-1 rounded-full transition-colors motion-reduce:transition-none ${
+                  dotIndex === index ? "bg-white" : "bg-white/55"
+                }`}
+              />
+            ))}
+          </div>
+        )}
+
         <WishlistButton
           productId={product.id}
           productName={product.name}
           size="sm"
-          className="absolute right-2 top-2 z-30 bg-cream/75 shadow-none md:right-3 md:top-3 md:opacity-0 md:shadow-soft md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
+          appearance="overlay"
+          className="absolute right-2 top-2 z-30 md:right-3 md:top-3 md:bg-cream/85 md:text-ink md:opacity-0 md:shadow-soft md:backdrop-blur md:[filter:none] md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
         />
       </div>
 
-      <div className="px-2 pb-1 pt-2 sm:px-0 sm:pt-3">
+      <div className="h-[76px] px-2 pb-1 pt-2 sm:h-auto sm:px-0 sm:pt-3">
         <Link href={productHref(product)} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">
           <h3 className="line-clamp-2 min-h-10 font-heading text-base leading-5 text-ink sm:min-h-0 sm:text-lg sm:leading-tight">
             {product.name}
