@@ -1,7 +1,13 @@
 # THE WOVENNE — project status log
 
-Last updated: 10 August 2026 (seventh session)
+Last updated: 15 August 2026 (repository reconstruction)
 
+> **`main` is `a6138c4` — PR #129, merged 14 August 2026.** The two newest
+> sections are at the bottom of this file: "Photography-first product grid" and
+> "Status check — 15 August 2026". Everything above them is older and dated
+> where it stands; in particular the four-product figures below describe
+> 10 August, and the shop now serves 27 published products.
+>
 > **PRs #97–#100 are all merged to `main`.** Migrations `0044`–`0051` are applied
 > and verified against the database.
 >
@@ -1537,6 +1543,11 @@ customer receives it — has not been walked end to end on production.
 | Publish queue | empty — no pending product, category or journal drafts |
 | Ask Wovenne | **off** |
 
+**This table is a record of 10 August 2026 and has not been superseded in place.**
+The catalogue has since grown: see "Status check — 15 August 2026" at the bottom
+of this file, where 27 published products were observed. No other row here was
+re-verified on that date.
+
 ### Still inert, and known to be
 
 **WhatsApp** — `parseInbound()` returns null and `sendReply()` is a no-op; four
@@ -1677,3 +1688,267 @@ If editorial catalogue names should genuinely differ from full PDP titles,
 consider an optional `card_title` field in a separate, evidence-led change. The
 current redesign uses a two-line visual clamp while preserving the full product
 name in the DOM; it does not add a schema or CMS field.
+
+---
+
+## Photography-first product grid — PR #129, merged 14 August 2026
+
+**Merged and live.** Approved head `0a24f890ebc018fc270547f4107e990f1a757377`,
+merge commit `a6138c4abc6c510eee7de0961ee3c763aa50c9d5`, which is `main` and
+`origin/main`. Vercel Production succeeded automatically on the merge; no manual
+production deployment was performed. The source branch was retained deliberately.
+
+The catalogue now leads with the photograph. Everything that used to compete with
+it on a phone — the category label above the name, the Quick Add button, the
+permanently visible gallery arrows — is gone, and the space they occupied went to
+the image.
+
+### The grid
+
+Two columns on mobile, and only two. `8px` at each viewport edge and `8px`
+between the columns, with a `20px` row gap: the photographs sit close enough to
+read as a sheet of images rather than as boxed cards. Implemented as
+`-mx-3` against the `px-5` of `.container-wovenne`, which is where the 8px comes
+from — the grid reaches further out than its container.
+
+The arithmetic that follows from that, at the four widths worth caring about:
+
+| Viewport | Column | Image height |
+|---|---|---|
+| 320px | 148px | 185px |
+| 375px | 175.5px | 219.375px |
+| 390px | 183px | 228.75px |
+| 430px | 203px | 253.75px |
+
+Three columns with `24px` gutters on tablet, four with `32px` on desktop. Every
+photograph is `4:5`, and the information region beneath it is a fixed `76px` on
+mobile so that a two-line name and a one-line name leave the next row starting at
+the same place. Above `sm` the region returns to its natural height.
+
+### The card
+
+Titles are DM Sans — `14px`, weight 400, `18px` line height, `0.01em` letter
+spacing, clamped to two lines, rising to `16px`/`20px` on tablet and desktop. The
+full name stays in the DOM; only the display is clamped. **Cormorant Garamond
+remains the display face** everywhere it already was; this is a deliberate
+exception for the one place where a small, dense, repeated label has to stay
+legible at 148px wide.
+
+The card keeps everything that was load-bearing: wishlist, price, discounted
+price, sold-out truth, PDP navigation, the `ProductListing` boundary from #128,
+the ordered gallery, cover-first loading and on-demand loading of later images.
+
+**Wishlist is quieter.** The heart is visually restrained, but its effective
+touch target remains ≥44px, and its accessibility, authentication and event
+isolation are unchanged.
+
+### Swipe, without a carousel
+
+Gallery movement is a manual gesture with no carousel dependency. The decision is
+a pure function in `lib/cardSwipe.ts`; the component only records pointer
+positions in refs, so dragging a card never re-renders on every pointer move.
+
+Every mounted image takes one of three positions relative to the active index:
+`translateX(-100%)` before it, `translateX(0)` at it, `translateX(100%)` after
+it. That single shared direction model is what fixed the earlier right-swipe
+overlap, where a previous image arrived on top of the current one instead of
+entering from its side.
+
+Swipe left and the next photograph enters from the right; swipe right and the
+previous one enters from the left. One image per gesture, no wrap at either end.
+Vertical page scrolling is untouched, a tap is distinguished from a swipe, and a
+swipe never opens the PDP by accident. A `20px` gutter at each screen edge is
+left to the system's own back gesture.
+
+**Do not replace this with a carousel library without a real architectural
+reason.** The dependency was the thing being avoided.
+
+**The arrow buttons still exist, and that is deliberate.** What was removed is
+their permanent visibility, not the controls: for multi-image products they are
+still rendered, transparent and non-interactive, and are revealed on hover or
+focus from tablet width up. They also reveal on `focus-visible` at **any** width,
+so a keyboard user on a narrow viewport keeps a way through the gallery that a
+touch gesture would not give them. A gesture is not an accessible control on its
+own.
+
+### Indicators and the discovery hint
+
+Multi-image products carry small, subtle dots that track the active image.
+Single-image products carry none. They are meant to stay restrained.
+
+The discovery hint is a small automatic movement that reveals part of the second
+photograph and returns, so that a customer learns the gallery exists without
+being shown a demonstration. It never changes the actual gallery index and it
+never repeats.
+
+**Precisely what "first" means here, because the wording matters.** `ProductGrid`
+marks its **own first `ProductCard`** as eligible — `discoveryHint={productIndex
+=== 0}`. It is first-card-per-`ProductGrid`, **not** once globally per page or
+per session. `ProductGrid` is rendered in nine places (shop, search, collection,
+category, `CategoryFilters`, `ShopFilters`, wishlist, account profile and the
+related-products row on a product page), and each of those grids marks its own
+index-0 card. A product page showing related products therefore has an eligible
+card of its own.
+
+Eligibility is necessary, not sufficient. The hint also requires two or more
+images, a mobile viewport, the card genuinely on screen, and no prior interaction
+— and any pointer, click or key press ends that card's one opportunity
+permanently. Leaving the viewport mid-movement ends it too; scrolling back does
+not restart it.
+
+If the first product has only one image, **no other card is promoted in its
+place**. The opportunity is simply not taken.
+
+**Reduced motion is respected**: `prefers-reduced-motion: reduce` disables the
+hint outright and the image transitions along with it. This is not per-card
+intersection-triggered animation and should not be turned back into it —
+scrolling past later products must never produce further automatic movement.
+
+### Verification
+
+At merge: full repository suite **520/520**, swipe 18/18, discovery 14/14,
+ProductCard contracts 19/19, product mapping and gallery 59/59, stock 29/29.
+TypeScript, ESLint, the production build and `git diff --check` all passed, the
+Vercel exact-head check was green, and the post-merge production deployment
+succeeded.
+
+Re-run on `a6138c4` during the 15 August reconstruction: all 20 test scripts
+exit 0, TypeScript clean, ESLint reporting no warnings or errors. The suite total
+counts **521** assertions rather than 520 — the same twenty scripts and the same
+per-suite figures, so this is an arithmetic correction to the merge note, not a
+behavioural difference. The production build was not re-run during
+reconstruction; the passing build recorded at merge stands.
+
+---
+
+## Status check — 15 August 2026 (repository reconstruction)
+
+Reconstructed from git, the GitHub PR history, the deployed site and the code
+itself, after a period of work carried out with a different coding agent. This
+section records what was observed, and is deliberate about what it did **not**
+verify.
+
+### Repository
+
+`main` and `origin/main` are both `a6138c4abc6c510eee7de0961ee3c763aa50c9d5`,
+with a clean working tree. The most recent migration on `main` is
+`0057_migration_ledger.sql`.
+
+### The catalogue is no longer four products
+
+**The shop is serving 27 published products.** `https://www.thewovenne.com/in/shop`
+returns 200 and its markup carries the #129 grid; 27 product cards were counted
+in that markup, all 27 of them carrying a gallery indicator (so all 27 are
+multi-image), and none showing a sold-out state.
+
+**How that number was obtained, and its limits.** It is a count of rendered
+public HTML, not a database read. It therefore means "products visible on
+`/in/shop`" — published, active, and in a visible category — and it says nothing
+about drafts, hidden categories or inactive rows. No other figure was re-checked:
+orders, credit notes, stock movements, customer accounts, brand-knowledge
+coverage, size coverage and the publish queue were **not** re-verified in this
+pass.
+
+**The 10 August "Verified data state" table above is historical.** It described a
+four-product catalogue and remains an accurate record of 10 August. It is not the
+current state and should not be read as such.
+
+**#128's payload measurement is a four-product benchmark and stays one.** The
+3,906 → 3,142 byte reduction (19.6%) was measured against the four-product
+catalogue and is tied to that PR as evidence for the `ProductListing` boundary.
+It is not a current figure and must not be updated in place — re-measuring at 27
+products would answer a different question and destroy the comparison. What the
+growth does change is priority: an unpaginated `/in/shop` now serves roughly
+seven times the rows that measurement was taken against, which moves pagination
+from a noted limitation toward a real one.
+
+**Colour families already exist in the data, by hand.** Among the 27 are "Micro
+Check - Pink", "Micro Check - Green" and "Micro Check - Red" as three unrelated
+products, alongside several near-sibling border variants. Nothing links them —
+there is no family, style key or swatch anywhere in the schema or the code. The
+grouping exists only in the product names, and a customer looking at one colour
+has no route to its siblings.
+
+### Open pull requests
+
+Only two, and neither was touched during reconstruction.
+
+**PR #124 — "The size guide sits beside the sizes"**, branch
+`feat/pdp-size-guide-link`, head `580dfd0`. Open and unmerged. GitHub reports it
+mergeable and conflict-free, but the branch is **six commits behind current
+`main`** — its earlier rebase and verification were against an older `main` and
+are stale. One file only (`components/product/SizeSelector.tsx`). It stays
+unmerged for the reason recorded in "Product guidance roadmap" above: the
+published `/in/size-guide` destination is still placeholder copy, and the owner
+measurement data listed there has not been supplied.
+
+**PR #117 — Razorpay settlement/idempotency**, branch
+`fix/payment-settlement-idempotency`, head `37fbad7`. **Parked**, waiting on
+Razorpay account and end-to-end settlement capability. Nineteen commits behind
+`main`. It is not to be modified, rebased, merged or revived without an explicit
+instruction.
+
+### Migration numbering — `0058` is spoken for
+
+`main` stops at `0057`. PR #117 carries
+`supabase/migrations/0058_settlement_is_idempotent.sql` on its branch. **The next
+migration written on `main` must therefore take `0059` or later**, or reviving
+#117 becomes a collision to untangle rather than a rebase.
+
+### Future architecture — audited, none of it implemented
+
+A read-only audit covered four areas. Each was re-checked against `a6138c4`
+during reconstruction and confirmed absent from the code and the schema. **No
+schema changes exist for any of them; assume nothing has been built.**
+
+| Area | Status |
+|---|---|
+| Deeper/recursive category hierarchy | Audited — **not implemented** |
+| Product colour families | Audited — **not implemented** |
+| Expanded bulk Excel / media import | Audited — **not implemented** |
+| Product HEIC/HEIF ingestion | Audited — **not implemented** |
+
+**Categories** remain two levels in practice. `categories.parent_id` is a
+self-referencing adjacency list that could hold any depth, but `CategoryNode`
+carries a flat `children: Category[]`, `productHref()` builds
+`/{parent}/{child}/{slug}`, and the routes stop at
+`/in/[slug]/[child]/[product]`. A third level would need genuinely recursive
+work — ancestors, descendants, visibility, admin tree, `category_path`, routing,
+historical redirects, sitemap, safe deletion and import — not a hardcoded
+"sub-subcategory".
+
+**Colour families** have no `family_id`, `style_key`, colour label, swatch or
+family sort order anywhere. The intended shape keeps each colour a real product
+with its own URL, SKU, images, stock, sizes and availability, with the product
+page navigating to a sibling; reviews, wishlist, orders and inventory should not
+collapse across siblings.
+
+**The importer** is four kinds — new products, product updates, courier costs and
+expenses — parsed with ExcelJS, all-or-nothing, landing products as drafts. New
+products accept Name, Category, Selling price, Cost price, Stock, Material,
+Colour and HSN code, and nothing else: no sizes, descriptions, images, video,
+discounts, deeper category paths or families. The audited direction is a workbook
+of several sheets plus a folder or ZIP of images referenced by filename, in
+preference to photographs embedded in cells.
+
+**HEIC is refused on the product path, and that refusal is correct.**
+`lib/storage.ts` accepts jpg, jpeg, png, webp, avif and gif, and rejects
+heic/heif by extension and MIME type, because Chrome, Firefox and Edge cannot
+render it and Next's optimizer passes it through untouched. The upload path also
+still lacks magic-byte validation, pixel-dimension limits, metadata handling,
+duplicate detection and derivative generation.
+
+There is one working precedent worth knowing about before that work is designed:
+**Customer Style already accepts HEIC**, in `lib/styleMedia.ts`, and never stores
+it — the browser draws the photograph to a canvas and re-encodes JPEG on the way
+out, so the iPhone that produced the HEIC is also the browser that can decode it.
+The audit's conclusion that request-bound Vercel functions are a poor place for
+server-side HEIC decoding (native libheif, runtime and resource concerns) is
+unchanged; a worker, a queued staging pipeline or a managed image service remain
+the candidates for admin-side ingestion.
+
+### What this section does not do
+
+Nothing here changes application code, tests, schema, migrations, product data,
+environment variables or either open pull request. It is a documentation update
+only.
