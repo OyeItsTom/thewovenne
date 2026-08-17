@@ -88,12 +88,16 @@ export default async function Footer() {
           >
             {/* The emblem is dark maroon on transparent, so it would vanish on
                 the ink footer — invert it to white to sit with the cream text. */}
+            {/* Dimensions describe the slot, not the file — see the same
+                change in NavbarClient. `h-8 md:h-9 w-auto` still decides the
+                rendered size; these set the pre-load aspect ratio and give Next
+                a two-rung 1x/2x ladder (64 and 96) in place of every configured
+                width with a 1920-wide `src` fallback. */}
             <Image
               src="/logo_emblem_transparent.png"
               alt=""
-              width={3096}
-              height={2792}
-              sizes="44px"
+              width={40}
+              height={36}
               className="h-8 w-auto brightness-0 invert md:h-9"
             />
             THE WOVENNE

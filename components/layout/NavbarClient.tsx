@@ -89,13 +89,26 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
           aria-label="THE WOVENNE — home"
           className="flex items-center text-ink transition-opacity hover:opacity-70"
         >
+          {/* THE DIMENSIONS DESCRIBE THE SLOT, NOT THE FILE. Passing the
+              emblem's intrinsic 3096×2792 alongside a fixed-pixel `sizes` made
+              Next offer every configured width for a 49px mark, and name the
+              largest of them in `src` — so a client that ignores srcset fetched
+              a 1920-wide emblem (48 write units) to draw it at 49.
+
+              Rendered size is unchanged: `h-10 sm:h-11 w-auto` still decides
+              that, as it always did. These numbers only set the aspect ratio
+              that reserves space before load, and the 1x/2x ladder Next builds
+              for a genuinely fixed-size image. Two candidates now: 64 and 128.
+
+              A 3x screen takes the 2x file, which is Next's deliberate default
+              and its own documented reasoning — the third pixel is not visible
+              on an emblem this size and costs several times the bytes. */}
           <Image
             src="/logo_emblem_transparent.png"
             alt=""
-            width={3096}
-            height={2792}
+            width={49}
+            height={44}
             priority
-            sizes="48px"
             className="h-10 w-auto sm:h-11"
           />
         </Link>
