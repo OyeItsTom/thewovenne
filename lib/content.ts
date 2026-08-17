@@ -43,6 +43,50 @@ export const DEFAULT_CONTENT: SiteContentMap = {
     title: "From the loom, to you",
     body: "THE WOVENNE works directly with handloom artisans across Kerala. No middleman, no compromise — just honest cloth, woven the way it has been for generations, sent straight to you.",
   },
+  footer: {
+    brand_description:
+      "Woven in India. Worn for life. Authentic handloom linen, sent direct from the source to your door in the UK.",
+    brand_description_visible: true,
+    /*
+     * ONE DEFAULT OVERRIDE, AND IT IS A CASING FIX.
+     *
+     * The Terms & Conditions page is titled "TERMS & CONDITIONS" in the CMS, so
+     * the footer — which has always shown the page's own title — printed one
+     * shouting link in a column of title-cased ones.
+     *
+     * Correcting it HERE rather than in CSS is the difference between fixing the
+     * label and hiding it: a text-transform would leave the underlying word
+     * wrong everywhere it is read aloud or copied, and would have to be applied
+     * to one link and no other, which is exactly the special case worth
+     * avoiding. Correcting it here rather than by renaming the page is
+     * deliberate too — the page's own heading and browser title are the
+     * owner's editorial decision, and this change does not reach into them.
+     *
+     * The owner can change or remove this from Admin → Footer like any other
+     * label; if that page is ever renamed or unpublished, this row simply stops
+     * matching anything and does nothing.
+     */
+    explore: [{ id: "page:policies", label: "Terms & Conditions" }],
+    whatsapp: {
+      visible: true,
+      label: "WhatsApp",
+      // Blank on purpose: the number stays in the environment unless somebody
+      // deliberately overrides it here. See lib/whatsapp.
+      number: "",
+    },
+    email: {
+      visible: true,
+      address: "hello@thewovenne.com",
+    },
+    instagram: {
+      visible: true,
+      // Both taken from the address the footer already linked, not invented.
+      username: "thewovenne",
+      url: "https://www.instagram.com/thewovenne",
+    },
+    bottom_note: "Made with care in India",
+    bottom_note_visible: true,
+  },
 };
 
 /** Fetch one content block by key, falling back to the built-in default. */

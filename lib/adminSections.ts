@@ -8,6 +8,7 @@ import {
   Mail,
   MessageSquareText,
   Package,
+  PanelBottom,
   Receipt,
   Rocket,
   Scroll,
@@ -73,6 +74,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: "/admin/dashboard/pages",
     blurb: "About, policies, size guide and the rest",
     icon: FileText,
+  },
+  {
+    id: "footer",
+    label: "Footer",
+    href: "/admin/dashboard/footer",
+    blurb: "Footer wording, links and contact details",
+    icon: PanelBottom,
   },
   {
     id: "journal",

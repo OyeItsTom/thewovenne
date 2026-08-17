@@ -39,6 +39,11 @@ export default function ContentEditor({ onChange }: { onChange?: () => void }) {
           brand_story: { ...DEFAULT_CONTENT.brand_story, ...((rows.get("brand_story") as object) ?? {}) },
           seasonal_edit: { ...DEFAULT_CONTENT.seasonal_edit, ...((rows.get("seasonal_edit") as object) ?? {}) },
           lookbook: { ...DEFAULT_CONTENT.lookbook, ...((rows.get("lookbook") as object) ?? {}) },
+          // Carried, not edited. The footer is a content block like these but
+          // has its own section (Admin → Footer); it is held here only so this
+          // editor's state stays a complete SiteContentMap, and no Save button
+          // on this page ever writes it.
+          footer: { ...DEFAULT_CONTENT.footer, ...((rows.get("footer") as object) ?? {}) },
         });
         setLoading(false);
       });
