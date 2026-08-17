@@ -254,10 +254,71 @@ export interface LookbookContent {
   sections: LookbookSection[];
 }
 
+/**
+ * One editable Explore link in the footer.
+ *
+ * AN OVERRIDE, NOT A LINK. The footer's Explore list is assembled from what
+ * actually exists — five built-in routes plus every published page marked
+ * "shown in footer" — and these rows only adjust what is already there. Storing
+ * whole links instead would let the admin keep a footer entry pointing at a page
+ * that has since been unpublished or renamed, which is how a footer grows a 404.
+ *
+ * `id` is the stable identity: "home", "shop", "about", "journal",
+ * "customer-style" for the built-ins, and `page:<slug>` for a CMS page.
+ *
+ * Every field is optional because an override is a difference from the default,
+ * not a copy of it. An absent label means "whatever the page is called".
+ */
+export interface FooterExploreItem {
+  id: string;
+  /** Blank or absent falls back to the built-in name or the page title. */
+  label?: string;
+  /** Internal path only, e.g. "/shop". Anything else is ignored — see lib/footer. */
+  href?: string;
+  /** Only an explicit false hides a link; absent means shown. */
+  visible?: boolean;
+}
+
+/**
+ * The footer, as the admin edits it.
+ *
+ * IDENTITY IS NOT COPY. The emblem, the wordmark and the market are not here on
+ * purpose: they are what the business IS, and a footer editor is the wrong place
+ * to be able to change them by accident. Everything in this block is either
+ * wording or a contact destination.
+ */
+export interface FooterContent {
+  brand_description: string;
+  brand_description_visible: boolean;
+  /** Ordered. Position in this array is the order of the links on the site. */
+  explore: FooterExploreItem[];
+  whatsapp: {
+    visible: boolean;
+    label: string;
+    /** Blank falls back to NEXT_PUBLIC_WHATSAPP_NUMBER. */
+    number: string;
+  };
+  email: {
+    visible: boolean;
+    address: string;
+  };
+  instagram: {
+    visible: boolean;
+    /** Shown to the customer as "@username". Stored without the @. */
+    username: string;
+    /** Where the row goes. Must be an instagram.com address. */
+    url: string;
+  };
+  /** The quiet line beside the copyright. The copyright itself is not editable. */
+  bottom_note: string;
+  bottom_note_visible: boolean;
+}
+
 export interface SiteContentMap {
   home_hero: HomeHeroContent;
   why_linen: WhyLinenContent;
   brand_story: BrandStoryContent;
   seasonal_edit: SeasonalEditContent;
   lookbook: LookbookContent;
+  footer: FooterContent;
 }

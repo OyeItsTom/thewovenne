@@ -22,7 +22,30 @@
  * bundled callers get the value inlined and no runtime lookup happens.
  */
 export function whatsappHref(message: string): string | null {
-  const number = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
-  if (!number) return null;
-  return `https://wa.me/${number}?text=${encodeURIComponent(message)}`;
+  return whatsappHrefFor(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER, message);
+}
+
+/**
+ * The same link, for a number that came from somewhere other than the
+ * environment — currently the footer, where the owner may override it.
+ *
+ * STILL ONE BUILDER. The point of this module is that no second place writes a
+ * wa.me string; a caller with its own number passes it in rather than
+ * interpolating its own template, so the validation below applies to every
+ * link the site emits regardless of where the digits came from.
+ *
+ * VALIDATION, BECAUSE A TYPED NUMBER IS NOT AN ENVIRONMENT VARIABLE. Somebody
+ * entering a number in an admin form will write it the way people write phone
+ * numbers — "+91 98765 43210", "(91) 98765-43210" — and wa.me accepts none of
+ * that. The separators people actually use are removed, and what must remain is
+ * 8 to 15 digits, which is E.164's range. Anything else returns null and the
+ * caller shows no link at all, which is the whole rule.
+ */
+export function whatsappHrefFor(
+  number: string | null | undefined,
+  message: string
+): string | null {
+  const digits = (number ?? "").replace(/[\s()+.-]/g, "");
+  if (!/^[0-9]{8,15}$/.test(digits)) return null;
+  return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
 }

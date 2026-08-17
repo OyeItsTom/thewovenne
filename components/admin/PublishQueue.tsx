@@ -24,8 +24,37 @@ const KIND_LABEL: Record<DraftKind, string> = {
   category: "Category",
   journal: "Journal post",
   page: "Page",
-  content: "Homepage content",
+  content: "Site content",
 };
+
+/**
+ * Content blocks are one row per key, and the key is a column name rather than
+ * anything an admin would recognise. The queue used to print it raw, which was
+ * survivable while every block was homepage copy; the footer arriving as
+ * "footer" under a heading that said "Homepage content" is where that stopped
+ * reading as English.
+ *
+ * Anything not listed falls back to its key with the underscores taken out, so
+ * a block added later is untidy rather than wrong.
+ */
+const CONTENT_LABEL: Record<string, string> = {
+  home_hero: "Homepage hero",
+  why_linen: "“Why linen” section",
+  brand_story: "Brand story",
+  seasonal_edit: "Seasonal edit",
+  lookbook: "Lookbook sections",
+  footer: "Footer",
+  store_settings: "Store settings",
+  delivery: "Delivery settings",
+  shipping: "Shipping settings",
+};
+
+function contentLabel(key: string): string {
+  return (
+    CONTENT_LABEL[key] ??
+    key.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())
+  );
+}
 
 /** Which admin tab edits this kind of thing. */
 const KIND_TAB: Record<DraftKind, string> = {
@@ -188,7 +217,9 @@ export default function PublishQueue({
                 <p className="text-xs uppercase tracking-wider text-ink/50">
                   {KIND_LABEL[item.kind]}
                 </p>
-                <h3 className="font-heading text-xl text-ink">{item.label}</h3>
+                <h3 className="font-heading text-xl text-ink">
+                  {item.kind === "content" ? contentLabel(item.label) : item.label}
+                </h3>
                 <p className="mt-1 text-xs text-ink/50">
                   {new Date(item.changed_at).toLocaleString("en-GB", {
                     dateStyle: "medium",
