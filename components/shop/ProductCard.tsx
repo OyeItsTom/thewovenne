@@ -26,6 +26,25 @@ interface Gesture {
 
 const EDGE_GESTURE_GUTTER = 20;
 
+/**
+ * What a card photograph is ACTUALLY as wide as, at each layout.
+ *
+ * The last clause is the one that matters. `25vw` was true only while the grid
+ * kept growing with the window, and it stops growing at 1280: the container is
+ * `max-w-7xl` (1280) with `lg:px-12` (48 a side) and `lg:gap-8` (32 between
+ * four columns), so from 1280 up every card is exactly
+ * (1280 − 96 − 96) / 4 = 272px and stays there. `25vw` on a 1920 monitor claims
+ * 480px for a 272px card, and the browser dutifully fetches a variant nearly
+ * twice the size it can display.
+ *
+ * The earlier clauses stay approximate on purpose — they overstate by the
+ * gutters (12px on mobile, ~37px on tablet), which is the safe direction and
+ * keeps the expression readable. Nothing here underserves a dense screen: at
+ * 272px a 3x device asks for 816 and the 828 candidate is available.
+ */
+const CARD_SIZES =
+  "(max-width: 639px) 50vw, (max-width: 1023px) 33vw, (max-width: 1279px) 25vw, 272px";
+
 export default function ProductCard({
   product,
   discoveryHint = false,
@@ -223,7 +242,7 @@ export default function ProductCard({
               src={images[0]}
               alt={product.name}
               fill
-              sizes="(max-width: 639px) 50vw, (max-width: 1023px) 33vw, 25vw"
+              sizes={CARD_SIZES}
               className={`object-cover transition-transform duration-500 ease-out motion-reduce:transition-none ${
                 index > 0
                   ? imagePosition(0)
@@ -241,7 +260,7 @@ export default function ProductCard({
               aria-hidden
               fill
               onLoad={imageIndex === 0 ? startPeekTimers : undefined}
-              sizes="(max-width: 639px) 50vw, (max-width: 1023px) 33vw, 25vw"
+              sizes={CARD_SIZES}
               className={`object-cover transition-transform duration-500 ease-out motion-reduce:transition-none ${
                 imageIndex + 1 <= index
                   ? imagePosition(imageIndex + 1)
