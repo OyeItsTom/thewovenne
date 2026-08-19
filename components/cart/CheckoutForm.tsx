@@ -99,17 +99,44 @@ export default function CheckoutForm({
         // Already typed above — no reason to ask twice.
         prefill: data.prefill,
         handler: async (response: RazorpayPaymentResponse) => {
-          const verifyRes = await fetch("/api/checkout/razorpay", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "verify", items, ...response }),
-          });
-          const verifyData = await verifyRes.json();
-          if (verifyData.verified) {
-            clearCart();
-            router.push("/in/checkout/success");
-          } else {
-            router.push("/in/checkout/cancel");
+          // THREE OUTCOMES, NOT TWO. This used to treat everything that was not
+          // an explicit `verified: true` as a cancellation, which meant a dropped
+          // connection sent somebody who had just paid to a page telling them
+          // their payment did not go through.
+          //
+          //   verified        → paid and recorded. Clear and confirm.
+          //   not verified    → the signature failed. That is a real failure.
+          //   threw           → WE DO NOT KNOW. The money may well have moved.
+          //
+          // The third case is the common one on a phone: UPI hands the customer
+          // to GPay or PhonePe and the network is often still recovering when
+          // they come back. Razorpay's webhook settles the order regardless —
+          // see app/api/checkout/razorpay/webhook — so the honest thing here is
+          // to say we are confirming, and above all not to invite a second
+          // payment.
+          try {
+            const verifyRes = await fetch("/api/checkout/razorpay", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "verify", items, ...response }),
+            });
+            const verifyData = await verifyRes.json();
+            if (verifyData.verified) {
+              clearCart();
+              router.push("/in/checkout/success");
+            } else {
+              router.push("/in/checkout/cancel");
+            }
+          } catch {
+            // The cart is deliberately NOT cleared. If the payment somehow did
+            // not complete, the customer still has their basket; if it did, the
+            // webhook has the order and the confirmation email is on its way.
+            setLoading(false);
+            setError(
+              "Your payment may have gone through — please do not pay again. " +
+                "We are confirming it now, and your confirmation email will follow shortly. " +
+                "If nothing arrives within an hour, contact us and we will find your order."
+            );
           }
         },
         modal: { ondismiss: () => setLoading(false) },
