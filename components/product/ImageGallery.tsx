@@ -40,6 +40,18 @@ import { cardImageOffset, decideCardGesture } from "@/lib/cardSwipe";
  * set backwards — and at a boundary the honest answer is that there is nothing
  * further that way.
  */
+/**
+ * What the main frame asks the optimizer for.
+ *
+ * A CONSTANT BECAUSE TWO PLACES DEPEND ON IT BEING THE SAME STRING. The
+ * inspection popup renders its first layer with this exact value, so it selects
+ * the exact variant this frame has already downloaded and opens instantly. A
+ * copy of the string here and a copy there would drift, and the symptom would
+ * not be a broken layout — it would be a popup that quietly started taking a
+ * second to appear.
+ */
+export const PDP_FRAME_SIZES = "(min-width: 1024px) 50vw, 100vw";
+
 export default function ImageGallery({
   images,
   alt,
@@ -189,7 +201,7 @@ export default function ImageGallery({
               loading={
                 i === 0 ? undefined : Math.abs(i - active) <= 1 ? "eager" : "lazy"
               }
-              sizes="(min-width: 1024px) 50vw, 100vw"
+              sizes={PDP_FRAME_SIZES}
               className={cn(
                 "object-cover transition-transform duration-500 ease-out motion-reduce:transition-none",
                 offset < 0 && "-translate-x-full",
@@ -301,6 +313,7 @@ export default function ImageGallery({
           index={active}
           onIndexChange={setActive}
           onClose={() => setViewerOpen(false)}
+          baseSizes={PDP_FRAME_SIZES}
         />
       )}
     </div>

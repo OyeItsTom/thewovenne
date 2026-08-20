@@ -51,38 +51,20 @@ export function maxZoomFor({
   naturalWidth,
   displayedWidth,
   dpr = 1,
+  floor = ZOOM_FLOOR,
+  ceiling = ZOOM_CEILING,
 }: {
   naturalWidth: number;
   displayedWidth: number;
   dpr?: number;
+  /** The lens and the touch zoom want different ranges from the same ratio. */
+  floor?: number;
+  ceiling?: number;
 }): number {
-  if (!naturalWidth || !displayedWidth || displayedWidth <= 0) return ZOOM_FLOOR;
+  if (!naturalWidth || !displayedWidth || displayedWidth <= 0) return floor;
   const detail = naturalWidth / (displayedWidth * Math.max(dpr, 1));
-  if (!Number.isFinite(detail)) return ZOOM_FLOOR;
-  return Math.min(ZOOM_CEILING, Math.max(ZOOM_FLOOR, detail));
-}
-
-/**
- * How wide the photograph is actually DRAWN inside the frame.
- *
- * `object-contain` letterboxes: a 3:4 photograph in a landscape viewport is
- * limited by height, and is narrower than the frame it sits in. Measuring the
- * frame instead would overstate the drawn size and understate how much source
- * detail is left, so the magnifier would stop short of what the file can show.
- */
-export function containedWidth({
-  naturalWidth,
-  naturalHeight,
-  frameWidth,
-  frameHeight,
-}: {
-  naturalWidth: number;
-  naturalHeight: number;
-  frameWidth: number;
-  frameHeight: number;
-}): number {
-  if (!naturalWidth || !naturalHeight || !frameWidth || !frameHeight) return frameWidth || 0;
-  return Math.min(frameWidth, (frameHeight * naturalWidth) / naturalHeight);
+  if (!Number.isFinite(detail)) return floor;
+  return Math.min(ceiling, Math.max(floor, detail));
 }
 
 export function clampZoom(zoom: number, max: number): number {
@@ -162,20 +144,6 @@ export function pinchZoom({
   return clampZoom((currentDistance / startDistance) * startZoom, max);
 }
 
-/** A wheel notch or a trackpad pinch, as a multiplier on the current zoom. */
-export function wheelZoom({
-  zoom,
-  deltaY,
-  max,
-}: {
-  zoom: number;
-  deltaY: number;
-  max: number;
-}): number {
-  // Exponential, so a notch feels the same at 1x as at 2.5x.
-  return clampZoom(zoom * Math.exp(-deltaY / 260), max);
-}
-
 /** A double-tap toggles: fitted ⇄ magnified, never a third state to discover. */
 export function doubleTapZoom(zoom: number, max: number): number {
   return zoom > MIN_ZOOM + 0.01 ? MIN_ZOOM : clampZoom(DOUBLE_TAP_ZOOM, max);
@@ -236,12 +204,22 @@ export function decideViewerGesture(input: {
  * and cannot widen it. #132 removed 2048 and 3840 because nothing could display
  * them; this reaches the top of what survived and stops.
  *
- * A PIXEL WIDTH, NOT A vw EXPRESSION. Both emit the same candidate list — Next
- * offers every configured width whenever `sizes` is set on a `fill` image — but
- * they SELECT differently, and selection is what gets fetched. `1920px` asks for
- * 1920 on every device. `200vw` asks for twice the viewport, which on a 320px
- * phone at dpr 1 is 640: a screen-sized file handed to a magnifier. The px form
- * is the only one that means "the largest variant" everywhere.
+ * A PIXEL WIDTH, NOT A vw EXPRESSION, FOR TWO REASONS.
+ *
+ * SELECTION. Both forms emit the same candidate list — Next offers every
+ * configured width whenever `sizes` is set on a `fill` image — but they choose
+ * differently, and the choice is what gets fetched. `1920px` asks for 1920 on
+ * every device. `200vw` asks for twice the viewport, which on a 320px phone at
+ * dpr 1 is 640: a screen-sized file handed to a magnifier.
+ *
+ * AND MEASUREMENT, which is less obvious and easier to break. `naturalWidth` is
+ * DENSITY-CORRECTED for a srcset with `w` descriptors: the product page's frame
+ * loads a real 1200px file and reports `naturalWidth === 390`, because 1200
+ * across a 390px slot is treated as a 3.08x image. Every zoom and lens ceiling
+ * in this module is a ratio of naturalWidth to drawn pixels, so reading it off
+ * a vw-sized layer would understate the available detail by the device's own
+ * density and quietly cap the magnifier. A fixed px `sizes` gives a density of
+ * 1, and therefore a naturalWidth that is a true pixel count.
  *
  * Asking for the largest variant is the point. The viewer exists for what you
  * see AFTER you magnify, so sizing the request to the fitted image would mean
@@ -251,4 +229,147 @@ export const ZOOM_REQUEST_WIDTH = 1920;
 
 export function viewerSizes(): string {
   return `${ZOOM_REQUEST_WIDTH}px`;
+}
+
+/* ------------------------------------------------------------------ the lens */
+
+/**
+ * What counts as a device that can hold a magnifying glass.
+ *
+ * NOT A WIDTH. An iPad Pro reports a 1024px viewport and has no mouse; a small
+ * laptop window reports 900px and has one. Asking the pointer itself is the only
+ * question that gets both right — `hover: hover` rules out devices that merely
+ * simulate a hover on tap, and `pointer: fine` rules out a fingertip, which
+ * cannot aim a 180px lens at a thread.
+ *
+ * Watched rather than read once, because it genuinely changes under you: pairing
+ * a mouse with a tablet flips it mid-session.
+ */
+export const FINE_POINTER_QUERY = "(hover: hover) and (pointer: fine)";
+
+/**
+ * The lens is sized from the stage, not fixed.
+ *
+ * A 180px circle over a 600px photograph is a considered detail; the same circle
+ * over a 320px one is a porthole covering most of the picture. A share of the
+ * stage keeps the proportion — and therefore the restraint — the same
+ * everywhere, within bounds that stop it becoming either a dot or a takeover.
+ */
+export const LENS_MIN_DIAMETER = 120;
+export const LENS_MAX_DIAMETER = 220;
+export const LENS_STAGE_SHARE = 0.34;
+
+export function lensDiameterFor(stageWidth: number): number {
+  if (!stageWidth || stageWidth <= 0) return LENS_MIN_DIAMETER;
+  const wanted = stageWidth * LENS_STAGE_SHARE;
+  const bounded = Math.min(LENS_MAX_DIAMETER, Math.max(LENS_MIN_DIAMETER, wanted));
+  // On a genuinely small stage the bounds could still exceed it; never allow a
+  // lens wider than the thing it is inspecting.
+  return Math.min(bounded, stageWidth);
+}
+
+/**
+ * How much the lens magnifies.
+ *
+ * Lower floor than the touch zoom, higher demand for honesty: a lens sits on top
+ * of a photograph the customer can already see, so its whole value is that the
+ * pixels inside it are REAL. It magnifies what the loaded file actually holds
+ * and stops — this is the same detail ratio the touch zoom uses, read against a
+ * narrower range.
+ */
+export const LENS_MIN_MAGNIFICATION = 1.8;
+export const LENS_MAX_MAGNIFICATION = 3;
+
+export function lensMagnificationFor({
+  naturalWidth,
+  stageWidth,
+  dpr = 1,
+}: {
+  naturalWidth: number;
+  stageWidth: number;
+  dpr?: number;
+}): number {
+  return maxZoomFor({
+    naturalWidth,
+    displayedWidth: stageWidth,
+    dpr,
+    floor: LENS_MIN_MAGNIFICATION,
+    ceiling: LENS_MAX_MAGNIFICATION,
+  });
+}
+
+export interface LensGeometry {
+  centerX: number;
+  centerY: number;
+  diameter: number;
+  backgroundWidth: number;
+  backgroundHeight: number;
+  backgroundX: number;
+  backgroundY: number;
+}
+
+/**
+ * Where the lens sits, and which part of the photograph shows inside it.
+ *
+ * TWO THINGS HAVE TO AGREE. The stage draws the photograph with `object-cover`
+ * at 3:4 — the same crop the product page uses — and the lens draws the same
+ * file as a CSS background. If the background were simply stretched to the
+ * stage, a source that is not 3:4 would be subtly distorted inside the circle
+ * and match nothing around it. So the cover crop is reproduced here: scale to
+ * whichever axis binds, then discard the overflow evenly from both sides.
+ *
+ * THE CENTRE IS CLAMPED, AND THE VIEW FOLLOWS THE CENTRE. Clamping keeps the
+ * circle inside the picture, which is what stops a crescent of backdrop
+ * appearing at the edges. Anchoring the magnified view to the clamped centre
+ * rather than the raw pointer is what keeps the lens FULL of photograph: within
+ * half a lens of an edge the two part company, and the alternative would be
+ * empty space inside the glass.
+ */
+export function lensGeometry({
+  pointerX,
+  pointerY,
+  stageWidth,
+  stageHeight,
+  naturalWidth,
+  naturalHeight,
+  magnification,
+  diameter,
+}: {
+  pointerX: number;
+  pointerY: number;
+  stageWidth: number;
+  stageHeight: number;
+  naturalWidth: number;
+  naturalHeight: number;
+  magnification: number;
+  diameter: number;
+}): LensGeometry {
+  const d = Math.min(diameter, stageWidth, stageHeight);
+  const r = d / 2;
+  const clamp = (v: number, min: number, max: number) =>
+    max < min ? (min + max) / 2 : Math.min(Math.max(v, min), max);
+
+  const centerX = clamp(pointerX, r, stageWidth - r);
+  const centerY = clamp(pointerY, r, stageHeight - r);
+
+  // Reproduce `object-cover`, so the glass and the picture under it agree.
+  const coverScale =
+    naturalWidth > 0 && naturalHeight > 0
+      ? Math.max(stageWidth / naturalWidth, stageHeight / naturalHeight)
+      : 1;
+  const drawnWidth = (naturalWidth || stageWidth) * coverScale;
+  const drawnHeight = (naturalHeight || stageHeight) * coverScale;
+  const cropX = (drawnWidth - stageWidth) / 2;
+  const cropY = (drawnHeight - stageHeight) / 2;
+
+  return {
+    centerX,
+    centerY,
+    diameter: d,
+    backgroundWidth: drawnWidth * magnification,
+    backgroundHeight: drawnHeight * magnification,
+    // Put the stage point under the lens centre at the centre of the circle.
+    backgroundX: r - (centerX + cropX) * magnification,
+    backgroundY: r - (centerY + cropY) * magnification,
+  };
 }

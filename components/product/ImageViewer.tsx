@@ -6,38 +6,47 @@ import Image from "next/image";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
+  FINE_POINTER_QUERY,
   MIN_ZOOM,
   clampPan,
   clampZoom,
-  containedWidth,
   decideViewerGesture,
   doubleTapZoom,
+  lensDiameterFor,
+  lensGeometry,
+  lensMagnificationFor,
   maxZoomFor,
   pinchZoom,
   pointDistance,
   viewerSizes,
-  wheelZoom,
 } from "@/lib/imageZoom";
 
 /**
- * Full-screen product-image viewer.
+ * The product-inspection popup: the photograph brought closer, on the page it
+ * belongs to.
  *
- * WHY IT IS NOT components/ui/Modal. That component is a cream card with
- * padding, a rounded border and a lift shadow — the right frame for a form and
- * the wrong one for a photograph. Here the photograph IS the interface: a deep
- * ink ground, the picture, and the two smallest controls that can still be
- * operated. No panel, no toolbar, no zoom percentage, no plus and minus.
+ * WHAT THIS REPLACED, AND WHY. The first version was `fixed inset-0` with an
+ * opaque ground and a `flex-1` frame — which is a full-screen image page, not a
+ * popup. Nothing of the product survived behind it, the photograph stretched to
+ * the whole viewport, and it read as having navigated somewhere. It also asked
+ * for a 1920 variant under a `sizes` the product page never uses, so the first
+ * thing a customer saw was an empty frame waiting on a fresh download.
  *
- * THE LARGER FILE IS REQUESTED HERE AND ONLY HERE. Nothing in this component
- * renders until somebody opens it, so a visitor who never zooms never asks the
- * optimizer for a zoom-sized variant. The PDP frame and the cards keep the
- * responsive sizes #132 tuned; this asks for the top of that same ladder,
- * capped by the existing 1920 ceiling, and never widens it.
+ * SO THE STAGE IS THE SAME PHOTOGRAPH. Same 3:4 crop, same `object-cover`, and
+ * — this is the part that makes it instant — the same `sizes` string as the PDP
+ * frame. Same string means the same chosen variant means the same URL, which
+ * the browser already has. The picture is simply there.
  *
- * ONE GESTURE MODEL. Pointer events cover mouse, pen and touch together, so
- * pinch is two pointers rather than a separate touch-event path, and the same
- * decideCardGesture that drives the cards decides a fitted swipe. All of the
- * arithmetic is in lib/imageZoom.
+ * THE DETAIL LAYER ARRIVES AFTERWARDS. A second copy at the 1920 ceiling loads
+ * on top, transparent until ready, then fades in over an identical crop — so
+ * nothing moves, nothing flashes, and the only difference is that there is now
+ * more to look at. Until it lands, the magnifier and the pinch work on what is
+ * already here rather than refusing to open.
+ *
+ * TWO INSTRUMENTS, CHOSEN BY THE POINTER. A mouse gets a circular lens and the
+ * photograph never moves. A finger gets pinch and pan, because a lens follows a
+ * cursor and there is no cursor. Neither is the accessible route: arrow keys, a
+ * focus trap and a live region work regardless of what is in your hand.
  */
 export default function ImageViewer({
   images,
@@ -45,68 +54,109 @@ export default function ImageViewer({
   index,
   onIndexChange,
   onClose,
+  /** The PDP frame's own `sizes`. Passed in so the two cannot drift apart. */
+  baseSizes,
 }: {
   images: string[];
   alt: string;
   index: number;
   onIndexChange: (next: number) => void;
   onClose: () => void;
+  baseSizes: string;
 }) {
   const [zoom, setZoom] = useState(MIN_ZOOM);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [maxZoom, setMaxZoom] = useState(2);
-  const [reduced, setReduced] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [reduced, setReduced] = useState(false);
+  const [finePointer, setFinePointer] = useState(false);
 
-  const frameRef = useRef<HTMLDivElement>(null);
+  /** The 1920 copy of the CURRENT image, once it has arrived. */
+  const [detail, setDetail] = useState<{
+    src: string;
+    url: string;
+    naturalWidth: number;
+    naturalHeight: number;
+  } | null>(null);
+  const [lens, setLens] = useState<{ x: number; y: number } | null>(null);
+
+  const stageRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  // Live values the pointer handlers read without re-rendering per move.
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const start = useRef({ x: 0, y: 0, offX: 0, offY: 0, dist: 0, zoom: 1, multi: false });
-  const moved = useRef(false);
   const lastTap = useRef(0);
 
   const hasMany = images.length > 1;
   const atStart = index === 0;
   const atEnd = index === images.length - 1;
+  const src = images[index];
+  const detailReady = detail?.src === src;
 
-  const frame = () =>
-    frameRef.current?.getBoundingClientRect() ?? { width: 0, height: 0 };
+  const stage = () =>
+    stageRef.current?.getBoundingClientRect() ??
+    ({ width: 0, height: 0, left: 0, top: 0 } as DOMRect);
 
-  const applyPan = useCallback((x: number, y: number, z: number) => {
-    const rect = frame();
-    setOffset(
-      clampPan({ x, y, zoom: z, frameWidth: rect.width, frameHeight: rect.height })
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  /* ------------------------------------------------------------ capabilities */
+
+  useEffect(() => {
+    const motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    const pointer = window.matchMedia?.(FINE_POINTER_QUERY);
+    setReduced(!!motion?.matches);
+    setFinePointer(!!pointer?.matches);
+    // Watched, not read once: pairing a mouse with a tablet flips this
+    // mid-session, and the viewer should change instrument when it does.
+    const onPointerChange = (e: MediaQueryListEvent) => {
+      setFinePointer(e.matches);
+      setLens(null);
+    };
+    pointer?.addEventListener?.("change", onPointerChange);
+    return () => pointer?.removeEventListener?.("change", onPointerChange);
   }, []);
 
-  const setZoomAround = useCallback(
-    (next: number) => {
-      const z = clampZoom(next, maxZoom);
-      setZoom(z);
-      // Re-clamp the existing offset against the new scale, so zooming out
-      // never leaves the picture stranded off-centre.
-      setOffset((o) => {
-        const rect = frame();
-        return clampPan({
-          x: z <= MIN_ZOOM ? 0 : o.x,
-          y: z <= MIN_ZOOM ? 0 : o.y,
-          zoom: z,
-          frameWidth: rect.width,
-          frameHeight: rect.height,
-        });
-      });
-    },
-    [maxZoom]
-  );
+  /* --------------------------------------------------------------- lifecycle */
 
-  /** Fitting resets the magnification — a new photograph starts fitted. */
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    // overflow alone, deliberately: `position: fixed` on the body would scroll
+    // the page to the top and land the customer somewhere else on close.
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      opener?.focus?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const restore = () => {
+      setTimeout(() => {
+        const node = dialogRef.current;
+        if (node && !node.contains(document.activeElement)) closeRef.current?.focus();
+      }, 0);
+    };
+    const onFocusIn = (e: FocusEvent) => {
+      const node = dialogRef.current;
+      if (node && !node.contains(e.target as Node)) restore();
+    };
+    // Both, because they describe different escapes: `focusin` catches focus
+    // landing on something outside, `focusout` catches it falling to <body>,
+    // which fires no focusin at all.
+    document.addEventListener("focusin", onFocusIn);
+    document.addEventListener("focusout", restore);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("focusout", restore);
+    };
+  }, []);
+
+  /* -------------------------------------------------------------- navigation */
+
   const reset = useCallback(() => {
     setZoom(MIN_ZOOM);
     setOffset({ x: 0, y: 0 });
+    setLens(null);
   }, []);
 
   const go = useCallback(
@@ -119,79 +169,12 @@ export default function ImageViewer({
     [images.length, index, onIndexChange, reset]
   );
 
-  /* ---------------------------------------------------------------- effects */
-
-  useEffect(() => {
-    setReduced(
-      typeof window !== "undefined" &&
-        !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-    );
-  }, []);
-
-  /*
-   * SCROLL LOCK AND FOCUS RESTORATION, in one effect so they cannot get out of
-   * step. The element that opened the viewer is captured on mount and focused
-   * again on unmount — without it, closing drops focus onto <body> and a
-   * keyboard user is returned to the top of the document rather than to the
-   * photograph they were looking at.
-   */
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    closeRef.current?.focus();
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      opener?.focus?.();
-    };
-  }, []);
-
-  /*
-   * FOCUS CANNOT LEAVE, even when something outside takes it.
-   *
-   * The Tab handler below covers keyboards. This covers everything else — and
-   * the case that made it necessary is the ordinary one: a tap opens the viewer,
-   * the browser then delivers the deferred synthetic click to the gallery now
-   * sitting BEHIND the dialog, and focus lands on <body>. A screen-reader user
-   * on a phone would open the viewer and find themselves outside it.
-   */
-  useEffect(() => {
-    // BOTH events, because they describe different escapes. `focusin` catches
-    // focus landing on something focusable outside. `focusout` catches focus
-    // falling to <body>, which fires no focusin at all — and that is the exact
-    // case here, so listening to focusin alone silently does nothing.
-    const restore = () => {
-      // Deferred: during a legitimate move WITHIN the dialog there is an instant
-      // where activeElement is <body>, and reacting to it would fight the user.
-      setTimeout(() => {
-        const node = dialogRef.current;
-        if (node && !node.contains(document.activeElement)) closeRef.current?.focus();
-      }, 0);
-    };
-    const onFocusIn = (e: FocusEvent) => {
-      const node = dialogRef.current;
-      if (node && !node.contains(e.target as Node)) restore();
-    };
-    document.addEventListener("focusin", onFocusIn);
-    document.addEventListener("focusout", restore);
-    return () => {
-      document.removeEventListener("focusin", onFocusIn);
-      document.removeEventListener("focusout", restore);
-    };
-  }, []);
-
-  /* Escape, arrows, and a Tab that cannot leave the dialog. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-        return;
-      }
+      if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); go(1); return; }
       if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); return; }
       if (e.key !== "Tab") return;
-
       const focusables = dialogRef.current?.querySelectorAll<HTMLElement>(
         'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
       );
@@ -211,28 +194,74 @@ export default function ImageViewer({
     return () => document.removeEventListener("keydown", onKey);
   }, [go, onClose]);
 
-  /*
-   * Wheel and trackpad pinch. Non-passive, because a viewer that lets the wheel
-   * fall through would scroll the page behind it. Registered on the node rather
-   * than through React, whose onWheel is passive and cannot preventDefault.
-   */
-  useEffect(() => {
-    const node = frameRef.current;
-    if (!node) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      setZoomAround(wheelZoom({ zoom, deltaY: e.deltaY, max: maxZoom }));
-    };
-    node.addEventListener("wheel", onWheel, { passive: false });
-    return () => node.removeEventListener("wheel", onWheel);
-  }, [maxZoom, setZoomAround, zoom]);
+  /* --------------------------------------------------------- the lens (mouse) */
 
-  /* ---------------------------------------------------------------- pointers */
+  const magnification = detailReady
+    ? lensMagnificationFor({
+        naturalWidth: detail.naturalWidth,
+        stageWidth: stage().width,
+        dpr: typeof window !== "undefined" ? window.devicePixelRatio : 1,
+      })
+    : // Nothing has arrived yet: magnify gently rather than refuse. What is on
+      // screen is the product-page variant, and pushing it hard would only
+      // enlarge pixels the customer can already see.
+      lensMagnificationFor({ naturalWidth: 0, stageWidth: stage().width });
+
+  const onStagePointerHover = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!finePointer || e.pointerType !== "mouse") return;
+    const rect = stage();
+    setLens({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  };
+
+  const lensView = (() => {
+    if (!finePointer || !lens) return null;
+    const rect = stage();
+    if (!rect.width || !rect.height) return null;
+    return lensGeometry({
+      pointerX: lens.x,
+      pointerY: lens.y,
+      stageWidth: rect.width,
+      stageHeight: rect.height,
+      // Before the detail copy lands, the crop is the stage's own 3:4.
+      naturalWidth: detail?.naturalWidth ?? 3,
+      naturalHeight: detail?.naturalHeight ?? 4,
+      magnification,
+      diameter: lensDiameterFor(rect.width),
+    });
+  })();
+
+  /* ------------------------------------------------------- pinch/pan (touch) */
+
+  const maxZoom = detailReady
+    ? maxZoomFor({
+        naturalWidth: detail.naturalWidth,
+        displayedWidth: stage().width,
+        dpr: typeof window !== "undefined" ? window.devicePixelRatio : 1,
+      })
+    : maxZoomFor({ naturalWidth: 0, displayedWidth: stage().width });
+
+  const setZoomTo = useCallback(
+    (next: number) => {
+      const z = clampZoom(next, maxZoom);
+      setZoom(z);
+      setOffset((o) => {
+        const rect = stage();
+        return clampPan({
+          x: z <= MIN_ZOOM ? 0 : o.x,
+          y: z <= MIN_ZOOM ? 0 : o.y,
+          zoom: z,
+          frameWidth: rect.width,
+          frameHeight: rect.height,
+        });
+      });
+    },
+    [maxZoom]
+  );
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (finePointer && e.pointerType === "mouse") return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    moved.current = false;
 
     if (pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()];
@@ -246,18 +275,11 @@ export default function ImageViewer({
       };
       return;
     }
-    if (pointers.current.size > 2) {
-      start.current.multi = true;
-      return;
-    }
+    if (pointers.current.size > 2) { start.current.multi = true; return; }
     start.current = {
-      x: e.clientX,
-      y: e.clientY,
-      offX: offset.x,
-      offY: offset.y,
-      dist: 0,
-      zoom,
-      multi: false,
+      x: e.clientX, y: e.clientY,
+      offX: offset.x, offY: offset.y,
+      dist: 0, zoom, multi: false,
     };
     setDragging(true);
   };
@@ -268,37 +290,41 @@ export default function ImageViewer({
 
     if (pointers.current.size >= 2) {
       const [a, b] = [...pointers.current.values()];
-      const next = pinchZoom({
-        startDistance: start.current.dist,
-        currentDistance: pointDistance(a, b),
-        startZoom: start.current.zoom,
-        max: maxZoom,
-      });
-      moved.current = true;
-      setZoomAround(next);
+      setZoomTo(
+        pinchZoom({
+          startDistance: start.current.dist,
+          currentDistance: pointDistance(a, b),
+          startZoom: start.current.zoom,
+          max: maxZoom,
+        })
+      );
       return;
     }
-
-    const dx = e.clientX - start.current.x;
-    const dy = e.clientY - start.current.y;
-    if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved.current = true;
     // Only a magnified photograph moves under the finger. Fitted, the drag is
     // being measured for a swipe and the picture stays where it is.
-    if (zoom > MIN_ZOOM + 0.01) {
-      applyPan(start.current.offX + dx, start.current.offY + dy, zoom);
-    }
+    if (zoom <= MIN_ZOOM + 0.01) return;
+    const rect = stage();
+    setOffset(
+      clampPan({
+        x: start.current.offX + (e.clientX - start.current.x),
+        y: start.current.offY + (e.clientY - start.current.y),
+        zoom,
+        frameWidth: rect.width,
+        frameHeight: rect.height,
+      })
+    );
   };
 
   const finish = (e: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
     const had = pointers.current.has(e.pointerId);
     pointers.current.delete(e.pointerId);
-    if (pointers.current.size > 0) return; // still pinching
+    if (pointers.current.size > 0) return;
     setDragging(false);
     if (!had) return;
 
     const multi = start.current.multi;
     start.current.multi = false;
-    if (multi) return; // a pinch never also navigates
+    if (multi) return;
 
     const decision = decideViewerGesture({
       zoom,
@@ -314,12 +340,10 @@ export default function ImageViewer({
     if (decision.kind === "navigate") { go(decision.nextIndex - index); return; }
     if (decision.kind !== "tap" || cancelled) return;
 
-    // A tap: double within 300ms toggles magnification, single does nothing —
-    // closing on a stray tap is how a viewer loses somebody mid-inspection.
     const now = Date.now();
     if (now - lastTap.current < 300) {
       lastTap.current = 0;
-      setZoomAround(doubleTapZoom(zoom, maxZoom));
+      setZoomTo(doubleTapZoom(zoom, maxZoom));
     } else {
       lastTap.current = now;
     }
@@ -329,70 +353,138 @@ export default function ImageViewer({
 
   const zoomed = zoom > MIN_ZOOM + 0.01;
   const navClass =
-    "tap-44 pointer-events-none absolute top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full text-white/70 opacity-0 transition-opacity hover:text-white disabled:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60";
+    "tap-44 pointer-events-none absolute top-1/2 z-20 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-white opacity-0 transition-opacity [filter:drop-shadow(0_1px_3px_rgba(0,0,0,0.85))] disabled:opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70";
 
   return (
     <div
       ref={dialogRef}
       role="dialog"
       aria-modal="true"
-      aria-label={`${alt} — full screen`}
-      className="group fixed inset-0 z-[70] flex flex-col bg-ink"
+      aria-label={`${alt} — closer look`}
+      className="fixed inset-0 z-[70] flex items-center justify-center"
     >
-      {/* The photograph, and nothing framing it. */}
+      {/*
+        The product page stays visible through this. Ink at 45% with a light
+        blur is the site's own overlay treatment (components/ui/Modal), not a
+        gallery blackout — the customer should still see the piece they were
+        reading about.
+      */}
       <div
-        ref={frameRef}
+        className="absolute inset-0 bg-ink/45 backdrop-blur-sm"
+        aria-hidden="true"
+        onClick={onClose}
+      />
+
+      {/*
+        THE STAGE. Height-led, because the photograph is 3:4 and a screen is
+        not: the binding dimension is nearly always vertical, so the width
+        follows from it and the margins take care of themselves. Mobile takes
+        nearly the whole viewport; a desktop keeps deliberate margins so the
+        page stays legible around it. dvh rather than vh so mobile browser
+        chrome cannot crop the bottom of the picture.
+      */}
+      <div
+        ref={stageRef}
         className={cn(
-          "relative flex-1 touch-none select-none overflow-hidden",
-          zoomed ? (dragging ? "cursor-grabbing" : "cursor-grab") : "cursor-zoom-in"
+          // .inspect-stage derives the width so this 3:4 box fits BOTH axes;
+          // see app/globals.css for why a max-width cap is not enough.
+          "inspect-stage group relative aspect-[3/4] overflow-hidden rounded-2xl bg-linen",
+          // TOUCH-ACTION IS OURS ON A TOUCHSCREEN, AT EVERY ZOOM LEVEL.
+          // Conditioning this on `zoomed` looked tidier and broke both
+          // gestures: at 1x the browser claimed the touch for its own panning
+          // and cancelled the pointer stream, so a pinch never started and a
+          // swipe arrived as `pointercancel`. Nothing is stolen from the
+          // customer by taking it — the page beneath is scroll-locked while the
+          // popup is open, and this applies to the stage alone.
+          !finePointer && "touch-none",
+          finePointer && "cursor-none"
         )}
+        style={{
+          marginTop: "env(safe-area-inset-top)",
+          marginBottom: "env(safe-area-inset-bottom)",
+        }}
         onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
+        onPointerMove={(e) => { onStagePointerHover(e); onPointerMove(e); }}
         onPointerUp={(e) => finish(e)}
         onPointerCancel={(e) => finish(e, true)}
+        onPointerLeave={(e) => { setLens(null); finish(e, true); }}
       >
         <div
           className={cn(
             "absolute inset-0",
-            // The transition is for the double-tap and the wheel; a drag sets
-            // the offset every frame and must not be smoothed, or it lags the
-            // finger. Reduced motion removes it entirely.
             !dragging && !reduced && "transition-transform duration-200 ease-out",
             reduced && "transition-none"
           )}
-          style={{
-            transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${zoom})`,
-          }}
+          style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${zoom})` }}
         >
+          {/*
+            LAYER ONE — already in the browser. Identical src, identical crop and
+            identical `sizes` to the product page's own frame, so this resolves
+            to a variant that has been downloaded and decoded already. It is what
+            makes the popup appear rather than load.
+          */}
           <Image
-            key={images[index]}
-            src={images[index]}
+            key={`base-${src}`}
+            src={src}
             alt={alt}
             fill
-            // The zoom-sized request, made only because this component mounted.
-            sizes={viewerSizes()}
-            className="object-contain"
+            sizes={baseSizes}
             priority
+            className="object-cover"
+          />
+
+          {/*
+            LAYER TWO — the inspection copy, for THIS image only. Transparent
+            until it has decoded, then faded in over an identical crop, so the
+            upgrade is invisible except in what you can now see. No spinner: the
+            photograph is already on screen, and a spinner over a visible picture
+            reports on something the customer is not waiting for.
+          */}
+          <Image
+            key={`detail-${src}`}
+            src={src}
+            alt=""
+            aria-hidden="true"
+            fill
+            sizes={viewerSizes()}
+            className={cn(
+              "object-cover",
+              detailReady ? "opacity-100" : "opacity-0",
+              reduced ? "transition-none" : "transition-opacity duration-300"
+            )}
             onLoad={(e) => {
-              // How much magnification this particular file can honestly
-              // support, measured from the variant that actually arrived.
               const img = e.currentTarget;
-              const rect = frame();
-              setMaxZoom(
-                maxZoomFor({
-                  naturalWidth: img.naturalWidth,
-                  displayedWidth: containedWidth({
-                    naturalWidth: img.naturalWidth,
-                    naturalHeight: img.naturalHeight,
-                    frameWidth: rect.width,
-                    frameHeight: rect.height,
-                  }),
-                  dpr: typeof window !== "undefined" ? window.devicePixelRatio : 1,
-                })
-              );
+              setDetail({
+                src,
+                url: img.currentSrc || img.src,
+                naturalWidth: img.naturalWidth,
+                naturalHeight: img.naturalHeight,
+              });
             }}
           />
         </div>
+
+        {/*
+          THE LENS. A circle of the same photograph, drawn larger. The base does
+          not move — that is the whole point of this instrument over dragging a
+          magnified picture around. Hairline ring, no shadow, no chrome.
+        */}
+        {lensView && detailReady && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute rounded-full ring-1 ring-white/40"
+            style={{
+              width: lensView.diameter,
+              height: lensView.diameter,
+              left: lensView.centerX - lensView.diameter / 2,
+              top: lensView.centerY - lensView.diameter / 2,
+              backgroundImage: `url("${detail.url}")`,
+              backgroundSize: `${lensView.backgroundWidth}px ${lensView.backgroundHeight}px`,
+              backgroundPosition: `${lensView.backgroundX}px ${lensView.backgroundY}px`,
+              backgroundRepeat: "no-repeat",
+            }}
+          />
+        )}
 
         {hasMany && (
           <>
@@ -401,45 +493,45 @@ export default function ImageViewer({
               onClick={(e) => { e.stopPropagation(); go(-1); }}
               disabled={atStart}
               aria-label="Previous image"
-              className={cn(navClass, "left-2 md:left-4")}
+              className={cn(navClass, "left-2 sm:left-3")}
             >
-              <ChevronLeft className="h-6 w-6" strokeWidth={1.25} />
+              <ChevronLeft className="h-5 w-5" strokeWidth={1.5} />
             </button>
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); go(1); }}
               disabled={atEnd}
               aria-label="Next image"
-              className={cn(navClass, "right-2 md:right-4")}
+              className={cn(navClass, "right-2 sm:right-3")}
             >
-              <ChevronRight className="h-6 w-6" strokeWidth={1.25} />
+              <ChevronRight className="h-5 w-5" strokeWidth={1.5} />
             </button>
+
+            <span
+              className="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 font-body text-xs tabular-nums tracking-widest text-white/70 [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.8))]"
+              aria-hidden="true"
+            >
+              {index + 1} / {images.length}
+            </span>
           </>
         )}
+
+        <button
+          ref={closeRef}
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+          aria-label="Close closer look"
+          className="tap-44 absolute right-2 top-2 z-30 flex h-9 w-9 items-center justify-center rounded-full text-white [filter:drop-shadow(0_1px_3px_rgba(0,0,0,0.85))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:right-3 sm:top-3"
+        >
+          <X className="h-5 w-5" strokeWidth={1.5} />
+        </button>
       </div>
 
-      {/* Close: the one control that is always visible, and it is small. */}
-      <button
-        ref={closeRef}
-        type="button"
-        onClick={onClose}
-        aria-label="Close image viewer"
-        className="tap-44 absolute right-3 top-3 z-30 flex h-10 w-10 items-center justify-center rounded-full text-white/70 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 md:right-5 md:top-5"
-      >
-        <X className="h-5 w-5" strokeWidth={1.25} />
-      </button>
-
-      {hasMany && (
-        <span
-          className="pointer-events-none absolute bottom-5 left-1/2 z-30 -translate-x-1/2 font-body text-xs tabular-nums tracking-widest text-white/55"
-          aria-hidden="true"
-        >
-          {index + 1} / {images.length}
-        </span>
-      )}
-
-      {/* Position for anyone who cannot see the counter, including after a
-          swipe — which has no control for a screen reader to announce. */}
+      {/*
+        Position for anyone who cannot see the counter. The lens deliberately
+        announces nothing — it moves with every pixel of pointer travel, and
+        reporting that would be a stream of noise.
+      */}
       <p className="sr-only" role="status" aria-live="polite">
         Image {index + 1} of {images.length}
       </p>

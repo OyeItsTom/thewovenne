@@ -50,8 +50,16 @@ const svhAt = rule.indexOf("calc(100svh");
 check("the fallback comes FIRST, or svh never applies", vhAt >= 0 && svhAt > vhAt);
 
 console.log("\n=== svh, because dvh would resize while you scroll ===");
-check("dvh is not used", !cssCode.includes("dvh") && !heroCode.includes("dvh"));
-check("lvh is not used either", !cssCode.includes("lvh") && !heroCode.includes("lvh"));
+// SCOPED TO THE HERO RULE, deliberately. The ban exists because the hero is
+// scrolled past: dvh would resize it as browser chrome retracts, which is the
+// jumping this fix removed. It is not a ban on dvh in the stylesheet — the
+// inspection popup is a momentary fixed overlay and SHOULD track the viewport
+// actually visible while it is open.
+const heroRule = cssCode.slice(cssCode.indexOf(".hero-viewport"), cssCode.indexOf(".hero-viewport") + 200);
+check("the hero rule uses no dvh", !heroRule.includes("dvh"), heroRule);
+check("nor lvh", !heroRule.includes("lvh"));
+check("and the hero component names no viewport unit of its own",
+  !heroCode.includes("dvh") && !heroCode.includes("lvh"));
 
 console.log("\n=== the header height is declared once, and is real ===");
 check("--header-h is defined on :root", /:root\s*\{[^}]*--header-h:\s*73px/.test(css));

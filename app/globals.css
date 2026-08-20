@@ -88,6 +88,52 @@
   }
 
   /*
+   * The product-inspection stage.
+   *
+   * IT MUST STAY 3:4, because that is the crop the product page shows and the
+   * popup's whole claim is that it is the SAME photograph, closer. Capping a
+   * fixed-height box with `max-width` does not do that: on a tall phone the
+   * width clamps, the height does not follow, and the box quietly becomes
+   * 0.45:1 — `object-cover` then eats the sides and the customer is shown a
+   * different picture from the one they tapped.
+   *
+   * So the width is derived to satisfy BOTH axes at once, and `aspect-ratio`
+   * takes the height from it. min() of "what the viewport allows sideways" and
+   * "what a 3:4 box may be, given the height available".
+   *
+   * The margins are the difference between the two ends of the range: barely
+   * any on a phone, where the picture should own the screen, and a deliberate
+   * frame on a desktop, where the page must stay legible around it.
+   *
+   * dvh rather than vh so retracting mobile browser chrome cannot crop the
+   * bottom of the photograph; the vh line above it is the fallback.
+   */
+  .inspect-stage {
+    /* A phone screen is ~0.46:1 and the photograph is 0.75:1, so on mobile the
+       WIDTH is what binds — the stage cannot grow taller without cropping the
+       picture differently, which is the one thing it must not do. The side
+       margin is therefore as small as it can be while still reading as an
+       overlay: the picture takes essentially the full width, and the space
+       above and below is the product page showing through. */
+    width: min(calc(100vw - 1rem), calc((100vh - 1rem) * 3 / 4));
+    width: min(calc(100vw - 1rem), calc((100dvh - 1rem) * 3 / 4));
+  }
+
+  @media (min-width: 640px) {
+    .inspect-stage {
+      width: min(calc(100vw - 4rem), calc((100vh - 4rem) * 3 / 4));
+      width: min(calc(100vw - 4rem), calc((100dvh - 4rem) * 3 / 4));
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .inspect-stage {
+      width: min(calc(100vw - 8rem), calc((100vh - 6rem) * 3 / 4));
+      width: min(calc(100vw - 8rem), calc((100dvh - 6rem) * 3 / 4));
+    }
+  }
+
+  /*
    * A section that owns the first screen, and exactly the first screen.
    *
    * WHY NOT min-h-[82vh]. 82vh plus the header is not 100vh, so whether the
