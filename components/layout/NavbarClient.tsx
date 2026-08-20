@@ -87,7 +87,11 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
         <Link
           href="/in"
           aria-label="THE WOVENNE — home"
-          className="flex items-center text-ink transition-opacity hover:opacity-70"
+          // shrink-0: a brand mark is not slack. Without it the emblem is the
+          // flex item that yields when the row is short, which is how it came
+          // to be drawn 9px wide at 768 — a distortion that looked like a
+          // design choice rather than the overflow it actually was.
+          className="flex shrink-0 items-center text-ink transition-opacity hover:opacity-70"
         >
           {/* THE DIMENSIONS DESCRIBE THE SLOT, NOT THE FILE. Passing the
               emblem's intrinsic 3096×2792 alongside a fixed-pixel `sizes` made
@@ -113,7 +117,21 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
           />
         </Link>
 
-        <div className="hidden items-center gap-8 md:flex">
+        {/*
+          lg, NOT md. The desktop nav needs 668px of its own, plus 156px of
+          controls and a 49px emblem — 873px of inner width. Below 1024 the
+          container gives it `sm:px-8`, so the viewport has to be 937px before
+          that fits, and md is 768. What happened in between was not a graceful
+          squeeze: the row wrapped to 93px from 768 to ~820, and the emblem was
+          crushed to NINE pixels wide at 768, still only 42 at 830 and 46 at
+          900, reaching its true 49 only at 1024. The brand mark was silently
+          absorbing a real horizontal overflow.
+
+          1024 rather than a custom 940: it is a named breakpoint already used
+          by this header's own container, it is where that container widens to
+          `lg:px-12`, and it leaves 45px spare instead of zero.
+        */}
+        <div className="hidden items-center gap-8 lg:flex">
           {navLinks.map((link) => {
             const children = link.children ?? [];
             const hasMenu = children.length > 0;
@@ -231,10 +249,15 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
             )}
           </button>
 
+          {/* aria-expanded because this control now carries the navigation for
+              every tablet, not just phones — moving the desktop nav to `lg`
+              widened its responsibility from <768 to <1024. The search button
+              beside it already announces its state; this one did not. */}
           <button
             onClick={() => setMobileOpen((v) => !v)}
             aria-label="Toggle menu"
-            className="-m-2.5 p-2.5 text-ink md:hidden"
+            aria-expanded={mobileOpen}
+            className="-m-2.5 p-2.5 text-ink lg:hidden"
           >
             {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
           </button>
@@ -271,7 +294,7 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-            className="overflow-hidden border-t border-ink/5 md:hidden"
+            className="overflow-hidden border-t border-ink/5 lg:hidden"
           >
             <div className="container-wovenne flex flex-col gap-4 py-4">
               {navLinks.map((link) => {

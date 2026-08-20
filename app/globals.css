@@ -18,12 +18,13 @@
    * 73px below sm and 77px from sm up (container-wovenne's py-4 plus the mark,
    * plus the 1px rule).
    *
-   * DELIBERATELY NOT EXACT BETWEEN 768 AND ~829px. In that band the desktop nav
-   * appears before it fits, wraps, and pushes the header to 92px. Erring low
-   * there makes the hero 15px TALLER than the exact remainder, which shows as
-   * nothing at all — whereas erring high would let the next section peek, which
-   * is the bug this variable exists to kill. The header wrap is a separate
-   * latent bug and is not fixed here.
+   * NOW EXACT AT EVERY WIDTH. It used to understate the header by 15px between
+   * 768 and ~829, where the desktop nav appeared before it fitted and wrapped
+   * the row to 92px. Erring low was safe — it made the hero slightly TALLER
+   * than the exact remainder, which shows as nothing — but it was still a
+   * number that did not describe the page. The nav now waits for `lg`, so the
+   * header is 73px below sm and 77px everywhere above it, and these two values
+   * are the whole truth.
    */
   --header-h: 73px;
 }
