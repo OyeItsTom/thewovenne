@@ -18,7 +18,7 @@ import { youtubeId } from "@/lib/youtube";
 import { getAllCategories } from "@/lib/categories";
 import { getDraftProductImages } from "@/lib/products";
 import { newProductDraft, productDraftId, settleDraft } from "@/lib/drafts";
-import { uploadImage } from "@/lib/storage";
+import { uploadProductImage } from "@/lib/storage";
 import {
   getProductSizes,
   saveProductSizes,
@@ -133,6 +133,8 @@ export default function ProductModal({
   // Gallery is edited locally and written on save, so cancelling leaves the
   // existing gallery untouched.
   const [images, setImages] = useState<string[]>([]);
+  /** What the admin is told while a photograph is on its way in. */
+  const [stage, setStage] = useState<string | null>(null);
   // Sizes live OUTSIDE draft/publish — see migration 0021. Loaded and saved
   // directly, and the UI says so, because an admin who expects Publish to gate
   // a stock change would oversell.
@@ -303,15 +305,33 @@ export default function ProductModal({
     // report the failures rather than dropping them silently.
     const uploaded: string[] = [];
     const failures: string[] = [];
-    for (const file of files) {
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i];
+      const of = files.length > 1 ? ` ${i + 1} of ${files.length}` : "";
       try {
-        uploaded.push(await uploadImage(file, "products"));
+        // Two words, because they are two waits and the second one is not the
+        // first stalling. The photograph is sent, then it is prepared: a camera
+        // original spends a couple of seconds being turned into the master the
+        // shop actually serves, and silence there reads as a hang.
+        setStage(`Uploading${of}…`);
+        const prepared = await new Promise<Awaited<ReturnType<typeof uploadProductImage>>>(
+          (resolve, reject) => {
+            setStage(`Uploading${of}…`);
+            uploadProductImage(file).then(resolve, reject);
+            // The processing half begins as soon as the bytes are gone; the
+            // exact moment is the server's, so this leans on elapsed time
+            // rather than pretending to know it.
+            setTimeout(() => setStage(`Processing${of}…`), 1200);
+          }
+        );
+        uploaded.push(prepared.url);
       } catch (err) {
         failures.push(
           `${file.name}: ${err instanceof Error ? err.message : "upload failed"}`
         );
       }
     }
+    setStage(null);
 
     if (uploaded.length) setImages((prev) => [...prev, ...uploaded]);
     if (failures.length) setError(failures.join("\n"));
@@ -887,7 +907,11 @@ export default function ProductModal({
           <div className="flex items-baseline justify-between">
             <span className="text-sm font-medium text-ink/70">Photos</span>
             <span className="text-xs text-ink/40">
-              {images.length} added{images.length > 1 && " · first is the cover"}
+              {stage ?? (
+                <>
+                  {images.length} added{images.length > 1 && " · first is the cover"}
+                </>
+              )}
             </span>
           </div>
 
