@@ -78,7 +78,7 @@ check("arrow keys still work", g.includes('e.key === "ArrowRight"') && g.include
 check("the frame is still reachable by keyboard", g.includes("tabIndex={0}"));
 check("a change is still announced", g.includes('aria-live="polite"'));
 check("the counter survives", g.includes("{active + 1} / {images.length}"));
-check("the lightbox survives", g.includes("setLightboxOpen(true)"));
+check("the full-screen viewer replaces the lightbox", g.includes("setViewerOpen(true)") && g.includes("<ImageViewer"));
 check("reduced motion is honoured", g.includes("motion-reduce:transition-none"));
 
 console.log("\n=== no blank frame mid-swipe ===");

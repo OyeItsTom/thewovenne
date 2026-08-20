@@ -1,5 +1,6 @@
 import { getImgProps } from "next/dist/shared/lib/get-img-props";
 import nextConfig from "../next.config.mjs";
+import { ZOOM_REQUEST_WIDTH, viewerSizes } from "../lib/imageZoom";
 
 /**
  * What Next will actually ask the optimizer for, per surface.
@@ -113,6 +114,38 @@ console.log("\n=== PDP ===");
 const pdp = candidates({ src: PHOTO, fill: true, sizes: "(min-width: 1024px) 50vw, 100vw" });
 check("main frame offers no width above 1920", Math.max(...pdp.widths), 1920);
 check("main frame keeps 1920 for a retina desktop frame", pdp.widths.includes(1920), true);
+
+/*
+ * THE ZOOM VIEWER, which is the only surface allowed to ask for a bigger file —
+ * and only once a customer opens it. It must stay inside the ceiling #132 set:
+ * measured on a real 8160x6120 photograph, w=1920 is 1.1 MB / 139 write units
+ * against w=3840 at 3.3 MB / 404. Sources narrower than 1920 cost nothing extra
+ * here, because the optimizer does not enlarge — a 1122px source asked for 1920
+ * comes back 1122px, the same bytes as its w=1200 entry.
+ */
+const zoom = candidates({ src: PHOTO, fill: true, sizes: viewerSizes() });
+check("the viewer offers no width above 1920", Math.max(...zoom.widths), 1920);
+check("the viewer src fallback is 1920, not 3840", zoom.src, 1920);
+check("the viewer reaches the top of the existing ladder", zoom.widths.includes(1920), true);
+// Next offers every configured width whenever `sizes` is set, so what matters
+// is not the length of the list but which entry a browser SELECTS. With a px
+// `sizes` the answer is the same on every device: 1920, the top of the ladder.
+const selects = (cssWidth: number, dpr: number) =>
+  zoom.widths.find((w) => w >= cssWidth * dpr) ?? Math.max(...zoom.widths);
+for (const [w, dpr] of [[320, 1], [390, 3], [768, 2], [1440, 2], [1920, 1]] as [number, number][]) {
+  check(`a ${w}px screen at ${dpr}x selects the top variant`, selects(ZOOM_REQUEST_WIDTH, dpr), 1920);
+}
+check(
+  "and it is a width the PDP frame already produced, so no new cache entry",
+  pdp.widths.includes(ZOOM_REQUEST_WIDTH),
+  true
+);
+check(
+  "the zoom request cannot drift above the configured ceiling",
+  ZOOM_REQUEST_WIDTH <= Math.max(...deviceSizes),
+  true
+);
+
 const thumb = candidates({ src: PHOTO, fill: true, sizes: "120px" });
 check("thumbnail src fallback is 1920, not 3840", thumb.src, 1920);
 check("thumbnail keeps 128 at 1x", thumb.widths.includes(128), true);

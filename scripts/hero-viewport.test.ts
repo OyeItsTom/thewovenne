@@ -54,8 +54,8 @@ check("dvh is not used", !cssCode.includes("dvh") && !heroCode.includes("dvh"));
 check("lvh is not used either", !cssCode.includes("lvh") && !heroCode.includes("lvh"));
 
 console.log("\n=== the header height is declared once, and is real ===");
-check("--header-h is defined on :root", /:root\s*\{[^}]*--header-h:\s*73px/s.test(css));
-check("it steps up at the sm breakpoint", /@media \(min-width: 640px\)\s*\{\s*:root\s*\{\s*--header-h:\s*77px/s.test(css));
+check("--header-h is defined on :root", /:root\s*\{[^}]*--header-h:\s*73px/.test(css));
+check("it steps up at the sm breakpoint", /@media \(min-width: 640px\)\s*\{\s*:root\s*\{\s*--header-h:\s*77px/.test(css));
 check("no device-name or breakpoint hack in the hero", !/iphone|ipad|android|safari/i.test(heroCode));
 
 console.log("\n=== the header the number describes ===");

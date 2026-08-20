@@ -3,10 +3,10 @@
 import { useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import Image from "next/image";
-import { ChevronLeft, ChevronRight, Expand } from "lucide-react";
+import { ChevronLeft, ChevronRight, ZoomIn } from "lucide-react";
 import { cn } from "@/lib/utils";
-import Modal from "@/components/ui/Modal";
 import ImageWeaveOverlay from "@/components/weave/ImageWeaveOverlay";
+import ImageViewer from "./ImageViewer";
 import { cardImageOffset, decideCardGesture } from "@/lib/cardSwipe";
 
 /**
@@ -48,8 +48,11 @@ export default function ImageGallery({
   alt: string;
 }) {
   const [active, setActive] = useState(0);
-  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const [pointer, setPointer] = useState({ x: 0, y: 0, active: false });
+  // A swipe on a touchscreen is followed by a synthetic click. Without this the
+  // gesture that changed the photograph would also open the viewer.
+  const suppressClick = useRef(false);
   const gesture = useRef<{
     pointerId: number;
     startX: number;
@@ -113,7 +116,17 @@ export default function ImageGallery({
       cancelled,
     });
     gesture.current = null;
+    suppressClick.current = decision.kind !== "tap";
     if (decision.kind === "swipe") setActive(decision.nextIndex);
+    // A tap on the photograph is the way in to the viewer on a touchscreen —
+    // there is no hover there to reveal a cue, and a picture you can tap to see
+    // larger is the one convention every phone owner already has.
+    if (decision.kind === "tap") setViewerOpen(true);
+  };
+
+  const onFrameClick = () => {
+    if (suppressClick.current) { suppressClick.current = false; return; }
+    setViewerOpen(true);
   };
 
   // A product can legitimately have no photo yet — render the frame rather
@@ -145,9 +158,10 @@ export default function ImageGallery({
         }}
         // touch-pan-y hands every vertical movement straight to the page, so
         // reading down a product never fights the gallery for the gesture.
-        className="group relative aspect-[3/4] w-full touch-pan-y overflow-hidden rounded-2xl bg-linen focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-terracotta/40"
+        className="group relative aspect-[3/4] w-full cursor-zoom-in touch-pan-y overflow-hidden rounded-2xl bg-linen focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-terracotta/40"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
+        onClick={onFrameClick}
         onPointerUp={(e) => finishGesture(e)}
         // A pointercancel is the system taking the gesture away (a notification,
         // an edge swipe). Treated as "nothing happened", never as a swipe.
@@ -216,13 +230,17 @@ export default function ImageGallery({
           </>
         )}
 
+        {/* A cue, not a control: the whole photograph is already the target.
+            It exists for pointer users, who have no tap convention to fall back
+            on, and for keyboard users, who need something focusable to press.
+            Invisible until hover or focus, and never on the way on a phone. */}
         <button
           type="button"
-          onClick={() => setLightboxOpen(true)}
-          aria-label="Open full image"
-          className="tap-44 absolute bottom-3 right-3 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-cream/80 text-ink opacity-0 backdrop-blur transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+          onClick={(e) => { e.stopPropagation(); setViewerOpen(true); }}
+          aria-label={`View ${alt} full screen`}
+          className="tap-44 absolute bottom-3 right-3 z-20 flex h-9 w-9 items-center justify-center rounded-full text-white opacity-0 transition-opacity [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.8))] md:group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"
         >
-          <Expand className="h-4 w-4" />
+          <ZoomIn className="h-4 w-4" strokeWidth={1.5} />
         </button>
       </div>
 
@@ -274,43 +292,17 @@ export default function ImageGallery({
         </div>
       )}
 
-      <Modal
-        isOpen={lightboxOpen}
-        onClose={() => setLightboxOpen(false)}
-        className="max-w-2xl"
-      >
-        <div className="relative aspect-[4/5] w-full overflow-hidden rounded-xl bg-linen">
-          <Image
-            src={images[active]}
-            alt={alt}
-            fill
-            sizes="(min-width: 1024px) 640px, 90vw"
-            className="object-cover"
-          />
-          {images.length > 1 && (
-            <>
-              <button
-                type="button"
-                onClick={() => go(-1)}
-                disabled={atStart}
-                aria-label="Previous image"
-                className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink backdrop-blur transition-colors hover:bg-cream disabled:opacity-30"
-              >
-                <ChevronLeft className="h-5 w-5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => go(1)}
-                disabled={atEnd}
-                aria-label="Next image"
-                className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink backdrop-blur transition-colors hover:bg-cream disabled:opacity-30"
-              >
-                <ChevronRight className="h-5 w-5" />
-              </button>
-            </>
-          )}
-        </div>
-      </Modal>
+      {/* MOUNTED ONLY WHEN OPEN. This is what keeps the zoom-sized variant off
+          the wire for every visitor who never asks to see the cloth closely. */}
+      {viewerOpen && (
+        <ImageViewer
+          images={images}
+          alt={alt}
+          index={active}
+          onIndexChange={setActive}
+          onClose={() => setViewerOpen(false)}
+        />
+      )}
     </div>
   );
 }
