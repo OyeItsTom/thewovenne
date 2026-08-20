@@ -1,34 +1,44 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import Image from "next/image";
 import { ChevronLeft, ChevronRight, Expand } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Modal from "@/components/ui/Modal";
 import ImageWeaveOverlay from "@/components/weave/ImageWeaveOverlay";
+import { cardImageOffset, decideCardGesture } from "@/lib/cardSwipe";
 
 /**
  * The gallery.
  *
- * ONE IMAGE PER FRAME, CROSS-FADED. Every photograph is rendered stacked and
- * only the active one is opaque, so changing angle is a 500ms fade rather than a
- * swap that flashes the linen backing while the next file decodes. That costs
- * the whole gallery up front — which is why only the FIRST is `priority` and the
- * rest are lazy: they are in the DOM but a browser fetches them when they matter.
+ * ONE IMAGE PER FRAME, SLID SIDEWAYS. Every photograph is rendered stacked and
+ * moved as a set: the ones before the active image sit at -100%, the ones after
+ * at +100%, the active one at 0. Changing angle therefore travels in the
+ * direction you asked for, which is what makes a swipe feel like it moved the
+ * picture rather than dissolved it.
  *
- * TALLER THAN IT WAS. 4:5 is a category-card shape; a product page is where
- * somebody looks closely, so the main frame is 3:4 and rises to the full column
- * on desktop. The lightbox stays for anyone who wants it larger still.
+ * THIS REPLACED A CROSS-FADE, DELIBERATELY. A fade cannot express direction, so
+ * a leftward swipe and a rightward swipe looked identical and the gallery read
+ * as broken on a phone. Desktop gets the same slide rather than keeping the
+ * fade, because one gallery with two different transitions is a bug that looks
+ * like a decision.
  *
- * ARROWS YOU CAN SEE AND PRESS. The first version of this shipped keyboard
- * arrows only — which is not navigation, it is a secret. Almost nobody tries the
- * arrow keys on a photograph, so the gallery read as "click each thumbnail
- * individually" and the cross-fade looked broken. The buttons are the primary
- * control now; the keys still work for anyone who does reach for them.
+ * SWIPE IS THE MOBILE CONTROL; THE ARROWS ARE THE POINTER ONE. The buttons used
+ * to be 44px cream discs sitting on the photograph at every width — two white
+ * circles over the cloth on the device where you would never press them, because
+ * you would swipe. They are gone below md and appear on hover or keyboard focus
+ * above it, drawn as bare chevrons.
  *
- * THEY ARE ALWAYS VISIBLE ON TOUCH and fade in on hover on desktop. A control
- * that only appears on hover does not exist on a phone, and hiding it there
- * would repeat the same mistake in a different way.
+ * NOBODY LOSES A ROUTE THROUGH THE SET. Swipe is an addition, never the only
+ * way: the thumbnail strip, the arrow keys on the focused frame and the live
+ * region below it all still work, and none of them depend on being able to make
+ * a gesture.
+ *
+ * NO WRAP. `go` clamps instead of taking a modulo. Wrapping and direction
+ * contradict each other — a "next" from the last image would slide the whole
+ * set backwards — and at a boundary the honest answer is that there is nothing
+ * further that way.
  */
 export default function ImageGallery({
   images,
@@ -40,9 +50,71 @@ export default function ImageGallery({
   const [active, setActive] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [pointer, setPointer] = useState({ x: 0, y: 0, active: false });
+  const gesture = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+    multiTouch: boolean;
+  } | null>(null);
 
+  // Clamped, not wrapped — see the note above.
   const go = (dir: number) =>
-    setActive((i) => (i + dir + images.length) % images.length);
+    setActive((i) => Math.max(0, Math.min(images.length - 1, i + dir)));
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // A mouse has the arrows and the thumbnails; dragging a photograph with one
+    // is not a gesture anybody makes.
+    if (event.pointerType === "mouse") return;
+    if (!event.isPrimary || gesture.current) {
+      // A second finger lands mid-gesture: this is a pinch or a two-finger
+      // scroll, and neither should change the picture.
+      if (gesture.current) gesture.current.multiTouch = true;
+      return;
+    }
+    gesture.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      endX: event.clientX,
+      endY: event.clientY,
+      multiTouch: false,
+    };
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // The weave overlay wants every move; the gesture only wants the last one.
+    const rect = event.currentTarget.getBoundingClientRect();
+    setPointer({ x: event.clientX - rect.left, y: event.clientY - rect.top, active: true });
+
+    const current = gesture.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    // Refs, not state: a drag never asks React to render once per pointer move.
+    current.endX = event.clientX;
+    current.endY = event.clientY;
+  };
+
+  const finishGesture = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    cancelled = false
+  ) => {
+    const current = gesture.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    current.endX = event.clientX;
+    current.endY = event.clientY;
+    // The same decision the product cards make: a 10px slop that is still a
+    // tap, an axis bias so a diagonal follows its dominant direction, a 36px
+    // minimum before anything moves, and a clamp at both ends.
+    const decision = decideCardGesture({
+      ...current,
+      index: active,
+      imageCount: images.length,
+      cancelled,
+    });
+    gesture.current = null;
+    if (decision.kind === "swipe") setActive(decision.nextIndex);
+  };
 
   // A product can legitimately have no photo yet — render the frame rather
   // than passing undefined to next/image.
@@ -54,6 +126,13 @@ export default function ImageGallery({
     );
   }
 
+  const atStart = active === 0;
+  const atEnd = active === images.length - 1;
+
+  /* Bare chevron, no disc. Shared by both arrows so they cannot drift apart. */
+  const arrowClass =
+    "tap-44 pointer-events-none absolute top-1/2 z-20 hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-white opacity-0 transition-opacity [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.8))] disabled:opacity-0 md:flex md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta";
+
   return (
     <div>
       <div
@@ -64,66 +143,96 @@ export default function ImageGallery({
           if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
           if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
         }}
-        className="group relative aspect-[3/4] w-full overflow-hidden rounded-2xl bg-linen focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-terracotta/40"
-        onPointerMove={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          setPointer({ x: e.clientX - rect.left, y: e.clientY - rect.top, active: true });
+        // touch-pan-y hands every vertical movement straight to the page, so
+        // reading down a product never fights the gallery for the gesture.
+        className="group relative aspect-[3/4] w-full touch-pan-y overflow-hidden rounded-2xl bg-linen focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-terracotta/40"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={(e) => finishGesture(e)}
+        // A pointercancel is the system taking the gesture away (a notification,
+        // an edge swipe). Treated as "nothing happened", never as a swipe.
+        onPointerCancel={(e) => finishGesture(e, true)}
+        onPointerLeave={(e) => {
+          setPointer((p) => ({ ...p, active: false }));
+          finishGesture(e, true);
         }}
-        onPointerLeave={() => setPointer((p) => ({ ...p, active: false }))}
       >
-        {/* Stacked, not swapped. The active one fades in over the last, so an
-            angle change never shows the empty frame underneath. */}
-        {images.map((src, i) => (
-          <Image
-            key={src + i}
-            src={src}
-            alt={i === active ? alt : ""}
-            aria-hidden={i !== active}
-            fill
-            // Only the cover is priority: it is the page's LCP. The others are
-            // lazy — present in the markup, fetched when the browser decides.
-            priority={i === 0}
-            sizes="(min-width: 1024px) 50vw, 100vw"
-            className={`object-cover transition-opacity duration-500 ease-out motion-reduce:transition-none ${
-              i === active ? "opacity-100" : "opacity-0"
-            }`}
-          />
-        ))}
+        {images.map((src, i) => {
+          const offset = cardImageOffset(i, active);
+          return (
+            <Image
+              key={src + i}
+              src={src}
+              alt={i === active ? alt : ""}
+              aria-hidden={i !== active}
+              fill
+              // Only the cover is priority: it is the page's LCP. Its immediate
+              // neighbours are eager because a slid-away image leaves the
+              // viewport, and a lazy one would arrive as a blank frame halfway
+              // through the swipe that asked for it. Everything further out
+              // stays lazy — at most three files are ever in flight.
+              priority={i === 0}
+              loading={
+                i === 0 ? undefined : Math.abs(i - active) <= 1 ? "eager" : "lazy"
+              }
+              sizes="(min-width: 1024px) 50vw, 100vw"
+              className={cn(
+                "object-cover transition-transform duration-500 ease-out motion-reduce:transition-none",
+                offset < 0 && "-translate-x-full",
+                offset > 0 && "translate-x-full",
+                offset === 0 && "translate-x-0"
+              )}
+            />
+          );
+        })}
         {/* Interactive weave — the cloth reacts to your hand. */}
         <ImageWeaveOverlay pointer={pointer} />
         {images.length > 1 && (
           <>
             <button
+              type="button"
               onClick={(e) => { e.stopPropagation(); go(-1); }}
+              disabled={atStart}
               aria-label="Previous image"
-              className="absolute left-3 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink shadow-soft backdrop-blur transition-all duration-300 hover:bg-cream lg:opacity-0 lg:group-hover:opacity-100 lg:focus-visible:opacity-100"
+              className={cn(arrowClass, "left-3")}
             >
-              <ChevronLeft className="h-5 w-5" />
+              <ChevronLeft className="h-5 w-5" strokeWidth={1.5} />
             </button>
             <button
+              type="button"
               onClick={(e) => { e.stopPropagation(); go(1); }}
+              disabled={atEnd}
               aria-label="Next image"
-              className="absolute right-3 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink shadow-soft backdrop-blur transition-all duration-300 hover:bg-cream lg:opacity-0 lg:group-hover:opacity-100 lg:focus-visible:opacity-100"
+              className={cn(arrowClass, "right-3")}
             >
-              <ChevronRight className="h-5 w-5" />
+              <ChevronRight className="h-5 w-5" strokeWidth={1.5} />
             </button>
 
             {/* Where you are in the set, for anyone who does not want to count
                 thumbnails. Bottom left, so it never sits under the arrows. */}
-            <span className="pointer-events-none absolute bottom-3 left-3 rounded-full bg-cream/80 px-3 py-1 text-xs tabular-nums text-ink/70 backdrop-blur">
+            <span className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-full bg-cream/80 px-3 py-1 text-xs tabular-nums text-ink/70 backdrop-blur">
               {active + 1} / {images.length}
             </span>
           </>
         )}
 
         <button
+          type="button"
           onClick={() => setLightboxOpen(true)}
           aria-label="Open full image"
-          className="tap-44 absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-full bg-cream/80 text-ink opacity-0 backdrop-blur transition-opacity group-hover:opacity-100"
+          className="tap-44 absolute bottom-3 right-3 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-cream/80 text-ink opacity-0 backdrop-blur transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
         >
           <Expand className="h-4 w-4" />
         </button>
       </div>
+
+      {/* Which image is showing, for anyone who cannot see that it changed —
+          including after a swipe, which has no control to announce for it. */}
+      {images.length > 1 && (
+        <p className="sr-only" role="status" aria-live="polite">
+          Image {active + 1} of {images.length}
+        </p>
+      )}
 
       {images.length > 1 && (
         // THE STRIP IS SHORTER ON A PHONE, and the main photograph is not
@@ -181,16 +290,20 @@ export default function ImageGallery({
           {images.length > 1 && (
             <>
               <button
+                type="button"
                 onClick={() => go(-1)}
+                disabled={atStart}
                 aria-label="Previous image"
-                className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink backdrop-blur transition-colors hover:bg-cream"
+                className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink backdrop-blur transition-colors hover:bg-cream disabled:opacity-30"
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
               <button
+                type="button"
                 onClick={() => go(1)}
+                disabled={atEnd}
                 aria-label="Next image"
-                className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink backdrop-blur transition-colors hover:bg-cream"
+                className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink backdrop-blur transition-colors hover:bg-cream disabled:opacity-30"
               >
                 <ChevronRight className="h-5 w-5" />
               </button>

@@ -126,7 +126,10 @@ export default async function ProductDetail({
             <WishlistButton
               productId={product.id}
               productName={product.name}
-              className="mt-1 shrink-0 border border-ink/10"
+              // `relative` is this caller's own: the button carries a 44px
+              // tap-target pseudo-element that needs a positioned box, and the
+              // component no longer supplies one (see WishlistButton).
+              className="relative mt-1 shrink-0 border border-ink/10"
             />
           </div>
           {/* Only once there is something to say. A row of empty stars reading

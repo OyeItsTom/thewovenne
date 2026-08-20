@@ -279,18 +279,18 @@ export default function ProductCard({
               onClick={step(-1)}
               disabled={atStart}
               aria-label={`Previous image of ${product.name}`}
-              className="tap-44 pointer-events-none absolute left-1 top-1/2 z-30 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink opacity-0 shadow-soft backdrop-blur transition-opacity disabled:opacity-0 md:left-2 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"
+              className="tap-44 pointer-events-none absolute left-1 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-white opacity-0 transition-opacity [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.8))] disabled:opacity-0 md:left-2 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"
             >
-              <ChevronLeft className="h-4 w-4" />
+              <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
             </button>
             <button
               type="button"
               onClick={step(1)}
               disabled={atEnd}
               aria-label={`Next image of ${product.name}`}
-              className="tap-44 pointer-events-none absolute right-1 top-1/2 z-30 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-cream/85 text-ink opacity-0 shadow-soft backdrop-blur transition-opacity disabled:opacity-0 md:right-2 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"
+              className="tap-44 pointer-events-none absolute right-1 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-white opacity-0 transition-opacity [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.8))] disabled:opacity-0 md:right-2 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"
             >
-              <ChevronRight className="h-4 w-4" />
+              <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
             </button>
           </>
         )}
@@ -317,7 +317,16 @@ export default function ProductCard({
           productName={product.name}
           size="sm"
           appearance="overlay"
-          className="absolute right-2 top-2 z-30 md:right-3 md:top-3 md:bg-cream/85 md:text-ink md:opacity-0 md:shadow-soft md:backdrop-blur md:[filter:none] md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
+          // ONE HEART AT EVERY WIDTH. This used to become a cream disc that
+          // faded in on desktop hover — a white circle parked on the
+          // photograph, and invisible until you happened to hover. The overlay
+          // treatment (transparent, white glyph, a shadow to hold it against a
+          // pale cloth) is quieter than the disc AND always present, so the
+          // control is discoverable without competing with the picture.
+          //
+          // `absolute` now applies unopposed; the 44px target sits 2px inside
+          // the frame on both axes, so overflow-hidden never clips it.
+          className="absolute right-2 top-2 z-30 md:right-3 md:top-3"
         />
       </div>
 

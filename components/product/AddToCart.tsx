@@ -6,7 +6,7 @@ import type { Product } from "@/lib/types";
 import { useCartStore } from "@/lib/store";
 import Button from "@/components/ui/Button";
 import { effectivePrice } from "@/lib/pricing";
-import { whatsappHref } from "@/lib/whatsapp";
+import { whatsappProductEnquiry } from "@/lib/whatsapp";
 
 export default function AddToCart({
   product,
@@ -46,7 +46,9 @@ export default function AddToCart({
     openCart();
   };
 
-  const waHref = whatsappHref(`Hi, I'd like to know more about ${product.name}`);
+  // Name AND the absolute product link, composed in lib/whatsapp so the message
+  // has one definition rather than one per page that offers to ask.
+  const waHref = whatsappProductEnquiry(product);
 
   return (
     <div className="space-y-6">

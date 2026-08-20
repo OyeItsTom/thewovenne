@@ -8,6 +8,30 @@
   --color-terracotta: #c2714f;
   --color-gold: #c9a84c;
   --color-cream: #ffffff;
+
+  /*
+   * How tall the sticky header actually is, so a section can ask for "the rest
+   * of the first screen" without guessing.
+   *
+   * The header is `sticky top-0` and therefore still occupies flow at the top of
+   * the page: the first screenful is header + hero, nothing else. Measured
+   * 73px below sm and 77px from sm up (container-wovenne's py-4 plus the mark,
+   * plus the 1px rule).
+   *
+   * DELIBERATELY NOT EXACT BETWEEN 768 AND ~829px. In that band the desktop nav
+   * appears before it fits, wraps, and pushes the header to 92px. Erring low
+   * there makes the hero 15px TALLER than the exact remainder, which shows as
+   * nothing at all — whereas erring high would let the next section peek, which
+   * is the bug this variable exists to kill. The header wrap is a separate
+   * latent bug and is not fixed here.
+   */
+  --header-h: 73px;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --header-h: 77px;
+  }
 }
 
 @layer base {
@@ -61,6 +85,30 @@
 
   .section-padding {
     @apply py-16 md:py-24;
+  }
+
+  /*
+   * A section that owns the first screen, and exactly the first screen.
+   *
+   * WHY NOT min-h-[82vh]. 82vh plus the header is not 100vh, so whether the
+   * next section peeps above the fold depended on whether the hero's own
+   * content happened to be taller than 82vh — i.e. on the viewport's aspect
+   * ratio. That is why it looked right on a MacBook and wrong on an iPad, an
+   * Android and an external monitor: measured peeks of 71px (360x800), 79px
+   * (390x844), 86px (1920x1080), 95px (430x932) and 35px (iPad portrait).
+   *
+   * svh, NOT dvh. `dvh` tracks the viewport as mobile browser chrome retracts,
+   * so the hero would resize while you scroll — the jumping this is meant to
+   * remove. `svh` is the viewport with the chrome SHOWING, which is exactly
+   * "what you see when the page loads", and it is a fixed number for the whole
+   * scroll, so there is no re-layout and no CLS.
+   *
+   * The vh line is the fallback and must come first: browsers without svh keep
+   * it, browsers with svh discard it for the line below.
+   */
+  .hero-viewport {
+    min-height: calc(100vh - var(--header-h));
+    min-height: calc(100svh - var(--header-h));
   }
 
   /* Section eyebrow — the script-accent label above headings. */

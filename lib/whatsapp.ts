@@ -1,3 +1,7 @@
+import { customerUrl } from "./seo";
+import type { Product } from "./types";
+import { productHref } from "./urls";
+
 /**
  * The one place a wa.me link is built.
  *
@@ -48,4 +52,37 @@ export function whatsappHrefFor(
   const digits = (number ?? "").replace(/[\s()+.-]/g, "");
   if (!/^[0-9]{8,15}$/.test(digits)) return null;
   return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+}
+
+/**
+ * "Ask on WhatsApp", from a product page.
+ *
+ * WHAT WAS MISSING WAS THE LINK. The message already named the piece, which is
+ * enough for the customer and not enough for the person answering: a name
+ * arrives in an inbox next to a dozen others, and "Kerala Kasavu" does not say
+ * which listing, which colour, or how to reach it in one tap. The absolute URL
+ * is the part that turns a question into a conversation somebody can answer —
+ * and it has to be absolute, because a chat thread has no origin to resolve
+ * against.
+ *
+ * BUILT FROM THE APP'S OWN HELPERS. `productHref` already knows the catalogue's
+ * shape (country prefix, category hierarchy, the flat fallback for a product
+ * whose filing is incomplete) and `customerUrl` already knows which origin a
+ * customer may be sent to. Writing the path here by hand would be a second
+ * definition of the URL that silently stops matching the first.
+ *
+ * NO PRICE. It is available and it is deliberately left out: a price pasted
+ * into a chat is a quote, it does not update when the catalogue does, and a
+ * sale that ended is an argument at the till. The link always shows today's.
+ *
+ * Encoding is `whatsappHrefFor`'s job — encodeURIComponent covers the newlines,
+ * the punctuation and any non-ASCII in a product's name.
+ */
+export function whatsappProductEnquiry(
+  product: Pick<Product, "name" | "slug" | "category_slug" | "category_parent_slug">
+): string | null {
+  const url = customerUrl(productHref(product));
+  return whatsappHref(
+    `Hi, I'd like to know more about ${product.name}.\n${url}\n\nCould you tell me about availability and delivery?`
+  );
 }
