@@ -8,6 +8,30 @@
   --color-terracotta: #c2714f;
   --color-gold: #c9a84c;
   --color-cream: #ffffff;
+
+  /*
+   * How tall the sticky header actually is, so a section can ask for "the rest
+   * of the first screen" without guessing.
+   *
+   * The header is `sticky top-0` and therefore still occupies flow at the top of
+   * the page: the first screenful is header + hero, nothing else. Measured
+   * 73px below sm and 77px from sm up (container-wovenne's py-4 plus the mark,
+   * plus the 1px rule).
+   *
+   * DELIBERATELY NOT EXACT BETWEEN 768 AND ~829px. In that band the desktop nav
+   * appears before it fits, wraps, and pushes the header to 92px. Erring low
+   * there makes the hero 15px TALLER than the exact remainder, which shows as
+   * nothing at all — whereas erring high would let the next section peek, which
+   * is the bug this variable exists to kill. The header wrap is a separate
+   * latent bug and is not fixed here.
+   */
+  --header-h: 73px;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --header-h: 77px;
+  }
 }
 
 @layer base {
@@ -61,6 +85,76 @@
 
   .section-padding {
     @apply py-16 md:py-24;
+  }
+
+  /*
+   * The product-inspection stage.
+   *
+   * IT MUST STAY 3:4, because that is the crop the product page shows and the
+   * popup's whole claim is that it is the SAME photograph, closer. Capping a
+   * fixed-height box with `max-width` does not do that: on a tall phone the
+   * width clamps, the height does not follow, and the box quietly becomes
+   * 0.45:1 — `object-cover` then eats the sides and the customer is shown a
+   * different picture from the one they tapped.
+   *
+   * So the width is derived to satisfy BOTH axes at once, and `aspect-ratio`
+   * takes the height from it. min() of "what the viewport allows sideways" and
+   * "what a 3:4 box may be, given the height available".
+   *
+   * The margins are the difference between the two ends of the range: barely
+   * any on a phone, where the picture should own the screen, and a deliberate
+   * frame on a desktop, where the page must stay legible around it.
+   *
+   * dvh rather than vh so retracting mobile browser chrome cannot crop the
+   * bottom of the photograph; the vh line above it is the fallback.
+   */
+  .inspect-stage {
+    /* A phone screen is ~0.46:1 and the photograph is 0.75:1, so on mobile the
+       WIDTH is what binds — the stage cannot grow taller without cropping the
+       picture differently, which is the one thing it must not do. The side
+       margin is therefore as small as it can be while still reading as an
+       overlay: the picture takes essentially the full width, and the space
+       above and below is the product page showing through. */
+    width: min(calc(100vw - 1rem), calc((100vh - 1rem) * 3 / 4));
+    width: min(calc(100vw - 1rem), calc((100dvh - 1rem) * 3 / 4));
+  }
+
+  @media (min-width: 640px) {
+    .inspect-stage {
+      width: min(calc(100vw - 4rem), calc((100vh - 4rem) * 3 / 4));
+      width: min(calc(100vw - 4rem), calc((100dvh - 4rem) * 3 / 4));
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .inspect-stage {
+      width: min(calc(100vw - 8rem), calc((100vh - 6rem) * 3 / 4));
+      width: min(calc(100vw - 8rem), calc((100dvh - 6rem) * 3 / 4));
+    }
+  }
+
+  /*
+   * A section that owns the first screen, and exactly the first screen.
+   *
+   * WHY NOT min-h-[82vh]. 82vh plus the header is not 100vh, so whether the
+   * next section peeps above the fold depended on whether the hero's own
+   * content happened to be taller than 82vh — i.e. on the viewport's aspect
+   * ratio. That is why it looked right on a MacBook and wrong on an iPad, an
+   * Android and an external monitor: measured peeks of 71px (360x800), 79px
+   * (390x844), 86px (1920x1080), 95px (430x932) and 35px (iPad portrait).
+   *
+   * svh, NOT dvh. `dvh` tracks the viewport as mobile browser chrome retracts,
+   * so the hero would resize while you scroll — the jumping this is meant to
+   * remove. `svh` is the viewport with the chrome SHOWING, which is exactly
+   * "what you see when the page loads", and it is a fixed number for the whole
+   * scroll, so there is no re-layout and no CLS.
+   *
+   * The vh line is the fallback and must come first: browsers without svh keep
+   * it, browsers with svh discard it for the line below.
+   */
+  .hero-viewport {
+    min-height: calc(100vh - var(--header-h));
+    min-height: calc(100svh - var(--header-h));
   }
 
   /* Section eyebrow — the script-accent label above headings. */

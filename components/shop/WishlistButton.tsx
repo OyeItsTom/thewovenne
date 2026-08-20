@@ -65,7 +65,15 @@ export default function WishlistButton({
       }
       title={saved ? "Saved" : "Save for later"}
       className={cn(
-        "tap-44 relative flex items-center justify-center rounded-full transition-colors",
+        // NO POSITIONING HERE. `cn()` is a plain join with no conflict
+        // resolution (this project has no tailwind-merge), so a base `relative`
+        // and a caller's `absolute` BOTH land in the class attribute — and
+        // Tailwind emits `.relative` after `.absolute`, so the base silently
+        // wins. On the product card that turned `right-2` into `left: -8px` and
+        // hung the heart outside the photograph, where overflow-hidden clipped
+        // it. Positioning is the caller's job; `tap-44` only needs SOME
+        // positioned box, and every caller supplies one.
+        "tap-44 flex items-center justify-center rounded-full transition-colors",
         appearance === "overlay"
           ? "bg-transparent text-white shadow-none [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.8))]"
           : "bg-cream/90 text-ink shadow-soft backdrop-blur",

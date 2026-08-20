@@ -23,7 +23,9 @@ export function cardImageOffset(imageIndex: number, currentIndex: number) {
   return 0 as const;
 }
 
-const TAP_SLOP = 10;
+/** Movement below this is a tap, not a drag. Exported so the image viewer can
+ *  recognise a tap by the same rule rather than inventing a second one. */
+export const TAP_SLOP = 10;
 const SWIPE_DISTANCE = 36;
 const AXIS_BIAS = 1.15;
 

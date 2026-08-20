@@ -20,7 +20,11 @@ export default function Hero({ content }: { content?: HomeHeroContent }) {
   const c = content ?? DEFAULT_CONTENT.home_hero;
 
   return (
-    <section className="flex min-h-[82vh] flex-col items-center justify-center bg-cream px-6 py-20">
+    // hero-viewport, not a vh fraction: the hero is the first screen and the
+    // next section starts below the fold at every aspect ratio. py-12 below sm
+    // because at 320x568 the old py-20 made the content taller than the space
+    // it had, which is the same fault from the other direction.
+    <section className="hero-viewport flex flex-col items-center justify-center bg-cream px-6 py-12 sm:py-20">
       <Image
         src="/logo_emblem_transparent.png"
         alt=""
