@@ -7,7 +7,7 @@
  * browser — the same split lib/cardSwipe already makes for the card gallery.
  */
 
-import { decideCardGesture } from "./cardSwipe";
+import { TAP_SLOP, decideCardGesture } from "./cardSwipe";
 
 /** Fitted to the screen. There is no reason to shrink a photograph further. */
 export const MIN_ZOOM = 1;
@@ -57,7 +57,7 @@ export function maxZoomFor({
   naturalWidth: number;
   displayedWidth: number;
   dpr?: number;
-  /** The lens and the touch zoom want different ranges from the same ratio. */
+  /** Callers may narrow the range; the defaults are the viewer's own. */
   floor?: number;
   ceiling?: number;
 }): number {
@@ -158,14 +158,23 @@ export type ViewerGesture =
 /**
  * What a one-finger drag means.
  *
- * ZOOMED, IT ALWAYS PANS. This is the rule that stops the viewer feeling
- * possessed: once you are in close on a border, dragging sideways to follow
- * that border must not throw you onto the next photograph.
+ * A TAP IS RECOGNISED FIRST, AT EVERY ZOOM LEVEL. This ordering is the whole
+ * bug fix. The previous version answered "pan" for anything at all while the
+ * photograph was magnified — which is true of a DRAG and false of a TAP, and it
+ * made the double-tap that zooms back out unreachable: every release while
+ * zoomed was classified as a pan, so the caller returned before it could ever
+ * see a second tap. Zoom in worked, zoom out could not, and no amount of timing
+ * or touch-action would have changed it.
+ *
+ * So: a release that did not move is a tap, whatever the zoom. Only once we
+ * know the finger actually travelled does zoom decide the meaning.
+ *
+ * ZOOMED, A TRAVELLING DRAG ALWAYS PANS. Once you are in close on a border,
+ * dragging sideways to follow it must not throw you onto the next photograph.
  *
  * FITTED, IT IS THE GALLERY'S OWN DECISION — decideCardGesture, the same
- * function the product cards and the PDP gallery use, so the slop, the axis
- * bias, the 36px threshold, the multi-touch rejection and the clamp at the ends
- * are defined once for the whole site rather than three times.
+ * function the product cards and the PDP gallery use, so the axis bias, the
+ * 36px threshold and the clamp at the ends are defined once for the site.
  */
 export function decideViewerGesture(input: {
   zoom: number;
@@ -178,6 +187,15 @@ export function decideViewerGesture(input: {
   cancelled?: boolean;
   multiTouch?: boolean;
 }): ViewerGesture {
+  if (input.cancelled || input.multiTouch) return { kind: "none" };
+
+  const dx = input.endX - input.startX;
+  const dy = input.endY - input.startY;
+  // Before anything else, and deliberately independent of decideCardGesture,
+  // which reports "ignored" for a single-image product and would otherwise
+  // deny those products a double-tap.
+  if (Math.abs(dx) <= TAP_SLOP && Math.abs(dy) <= TAP_SLOP) return { kind: "tap" };
+
   if (input.zoom > MIN_ZOOM + 0.01) return { kind: "pan" };
 
   const decision = decideCardGesture({
@@ -187,13 +205,69 @@ export function decideViewerGesture(input: {
     endY: input.endY,
     index: input.index,
     imageCount: input.imageCount,
-    cancelled: input.cancelled,
-    multiTouch: input.multiTouch,
   });
 
   if (decision.kind === "swipe") return { kind: "navigate", nextIndex: decision.nextIndex };
-  if (decision.kind === "tap") return { kind: "tap" };
   return { kind: "none" };
+}
+
+/**
+ * Where the photograph must sit so the point you asked about stays put.
+ *
+ * The stage scales about its centre, so a point p lands at
+ *   screen = centre + (p - centre) * zoom + offset
+ * Holding that fixed across a zoom change gives
+ *   offset' = offset + (p - centre) * (zoom - zoom')
+ * which is the whole of it. Double-clicking embroidery in the lower right
+ * therefore enlarges around the embroidery instead of the middle of the frame.
+ *
+ * Bounded by the same clamp as a drag, so a focal zoom cannot park the picture
+ * somewhere a drag would not have been allowed to reach — and returning to
+ * fitted is exactly (0, 0), never a residue of wherever you happened to click.
+ */
+export function focalPan({
+  pointerX,
+  pointerY,
+  stageWidth,
+  stageHeight,
+  fromZoom,
+  toZoom,
+  offsetX,
+  offsetY,
+}: {
+  pointerX: number;
+  pointerY: number;
+  stageWidth: number;
+  stageHeight: number;
+  fromZoom: number;
+  toZoom: number;
+  offsetX: number;
+  offsetY: number;
+}): { x: number; y: number } {
+  if (toZoom <= MIN_ZOOM + 0.01) return { x: 0, y: 0 };
+  if (!stageWidth || !stageHeight) return { x: 0, y: 0 };
+  const shiftX = (pointerX - stageWidth / 2) * (fromZoom - toZoom);
+  const shiftY = (pointerY - stageHeight / 2) * (fromZoom - toZoom);
+  return clampPan({
+    x: Number.isFinite(shiftX) ? offsetX + shiftX : offsetX,
+    y: Number.isFinite(shiftY) ? offsetY + shiftY : offsetY,
+    zoom: toZoom,
+    frameWidth: stageWidth,
+    frameHeight: stageHeight,
+  });
+}
+
+/**
+ * The zoom the viewer settles on, with fitted meaning EXACTLY fitted.
+ *
+ * A pinch that drifts to 1.004 leaves a scale that is not 1 and a transform
+ * that is not identity — invisible, and enough to keep a stale pan alive and to
+ * make the next gesture read as "still zoomed". Anything within a hair of the
+ * fit becomes the fit.
+ */
+export function settleZoom(zoom: number, max: number): number {
+  const z = clampZoom(zoom, max);
+  return z <= MIN_ZOOM + 0.01 ? MIN_ZOOM : z;
 }
 
 /**
@@ -215,7 +289,7 @@ export function decideViewerGesture(input: {
  * AND MEASUREMENT, which is less obvious and easier to break. `naturalWidth` is
  * DENSITY-CORRECTED for a srcset with `w` descriptors: the product page's frame
  * loads a real 1200px file and reports `naturalWidth === 390`, because 1200
- * across a 390px slot is treated as a 3.08x image. Every zoom and lens ceiling
+ * across a 390px slot is treated as a 3.08x image. Every zoom ceiling
  * in this module is a ratio of naturalWidth to drawn pixels, so reading it off
  * a vw-sized layer would understate the available detail by the device's own
  * density and quietly cap the magnifier. A fixed px `sizes` gives a density of
@@ -231,145 +305,16 @@ export function viewerSizes(): string {
   return `${ZOOM_REQUEST_WIDTH}px`;
 }
 
-/* ------------------------------------------------------------------ the lens */
-
 /**
- * What counts as a device that can hold a magnifying glass.
+ * Which double gesture the device gets.
  *
  * NOT A WIDTH. An iPad Pro reports a 1024px viewport and has no mouse; a small
- * laptop window reports 900px and has one. Asking the pointer itself is the only
- * question that gets both right — `hover: hover` rules out devices that merely
- * simulate a hover on tap, and `pointer: fine` rules out a fingertip, which
- * cannot aim a 180px lens at a thread.
+ * laptop window reports 900px and has one. A fine pointer gets the browser's own
+ * `dblclick`, which is reliable and needs no timing code; a finger gets the
+ * hand-rolled double-tap, because mobile browsers delay or withhold `dblclick`
+ * where they reserve it for their own page zoom.
  *
- * Watched rather than read once, because it genuinely changes under you: pairing
- * a mouse with a tablet flips it mid-session.
+ * Both drive the SAME zoom state — there is one scale and one offset in this
+ * viewer, never a separate one per input.
  */
 export const FINE_POINTER_QUERY = "(hover: hover) and (pointer: fine)";
-
-/**
- * The lens is sized from the stage, not fixed.
- *
- * A 180px circle over a 600px photograph is a considered detail; the same circle
- * over a 320px one is a porthole covering most of the picture. A share of the
- * stage keeps the proportion — and therefore the restraint — the same
- * everywhere, within bounds that stop it becoming either a dot or a takeover.
- */
-export const LENS_MIN_DIAMETER = 120;
-export const LENS_MAX_DIAMETER = 220;
-export const LENS_STAGE_SHARE = 0.34;
-
-export function lensDiameterFor(stageWidth: number): number {
-  if (!stageWidth || stageWidth <= 0) return LENS_MIN_DIAMETER;
-  const wanted = stageWidth * LENS_STAGE_SHARE;
-  const bounded = Math.min(LENS_MAX_DIAMETER, Math.max(LENS_MIN_DIAMETER, wanted));
-  // On a genuinely small stage the bounds could still exceed it; never allow a
-  // lens wider than the thing it is inspecting.
-  return Math.min(bounded, stageWidth);
-}
-
-/**
- * How much the lens magnifies.
- *
- * Lower floor than the touch zoom, higher demand for honesty: a lens sits on top
- * of a photograph the customer can already see, so its whole value is that the
- * pixels inside it are REAL. It magnifies what the loaded file actually holds
- * and stops — this is the same detail ratio the touch zoom uses, read against a
- * narrower range.
- */
-export const LENS_MIN_MAGNIFICATION = 1.8;
-export const LENS_MAX_MAGNIFICATION = 3;
-
-export function lensMagnificationFor({
-  naturalWidth,
-  stageWidth,
-  dpr = 1,
-}: {
-  naturalWidth: number;
-  stageWidth: number;
-  dpr?: number;
-}): number {
-  return maxZoomFor({
-    naturalWidth,
-    displayedWidth: stageWidth,
-    dpr,
-    floor: LENS_MIN_MAGNIFICATION,
-    ceiling: LENS_MAX_MAGNIFICATION,
-  });
-}
-
-export interface LensGeometry {
-  centerX: number;
-  centerY: number;
-  diameter: number;
-  backgroundWidth: number;
-  backgroundHeight: number;
-  backgroundX: number;
-  backgroundY: number;
-}
-
-/**
- * Where the lens sits, and which part of the photograph shows inside it.
- *
- * TWO THINGS HAVE TO AGREE. The stage draws the photograph with `object-cover`
- * at 3:4 — the same crop the product page uses — and the lens draws the same
- * file as a CSS background. If the background were simply stretched to the
- * stage, a source that is not 3:4 would be subtly distorted inside the circle
- * and match nothing around it. So the cover crop is reproduced here: scale to
- * whichever axis binds, then discard the overflow evenly from both sides.
- *
- * THE CENTRE IS CLAMPED, AND THE VIEW FOLLOWS THE CENTRE. Clamping keeps the
- * circle inside the picture, which is what stops a crescent of backdrop
- * appearing at the edges. Anchoring the magnified view to the clamped centre
- * rather than the raw pointer is what keeps the lens FULL of photograph: within
- * half a lens of an edge the two part company, and the alternative would be
- * empty space inside the glass.
- */
-export function lensGeometry({
-  pointerX,
-  pointerY,
-  stageWidth,
-  stageHeight,
-  naturalWidth,
-  naturalHeight,
-  magnification,
-  diameter,
-}: {
-  pointerX: number;
-  pointerY: number;
-  stageWidth: number;
-  stageHeight: number;
-  naturalWidth: number;
-  naturalHeight: number;
-  magnification: number;
-  diameter: number;
-}): LensGeometry {
-  const d = Math.min(diameter, stageWidth, stageHeight);
-  const r = d / 2;
-  const clamp = (v: number, min: number, max: number) =>
-    max < min ? (min + max) / 2 : Math.min(Math.max(v, min), max);
-
-  const centerX = clamp(pointerX, r, stageWidth - r);
-  const centerY = clamp(pointerY, r, stageHeight - r);
-
-  // Reproduce `object-cover`, so the glass and the picture under it agree.
-  const coverScale =
-    naturalWidth > 0 && naturalHeight > 0
-      ? Math.max(stageWidth / naturalWidth, stageHeight / naturalHeight)
-      : 1;
-  const drawnWidth = (naturalWidth || stageWidth) * coverScale;
-  const drawnHeight = (naturalHeight || stageHeight) * coverScale;
-  const cropX = (drawnWidth - stageWidth) / 2;
-  const cropY = (drawnHeight - stageHeight) / 2;
-
-  return {
-    centerX,
-    centerY,
-    diameter: d,
-    backgroundWidth: drawnWidth * magnification,
-    backgroundHeight: drawnHeight * magnification,
-    // Put the stage point under the lens centre at the centre of the circle.
-    backgroundX: r - (centerX + cropX) * magnification,
-    backgroundY: r - (centerY + cropY) * magnification,
-  };
-}

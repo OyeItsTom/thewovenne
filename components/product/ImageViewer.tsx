@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import Image from "next/image";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -9,15 +9,13 @@ import {
   FINE_POINTER_QUERY,
   MIN_ZOOM,
   clampPan,
-  clampZoom,
   decideViewerGesture,
   doubleTapZoom,
-  lensDiameterFor,
-  lensGeometry,
-  lensMagnificationFor,
+  focalPan,
   maxZoomFor,
   pinchZoom,
   pointDistance,
+  settleZoom,
   viewerSizes,
 } from "@/lib/imageZoom";
 
@@ -43,11 +41,19 @@ import {
  * more to look at. Until it lands, the magnifier and the pinch work on what is
  * already here rather than refusing to open.
  *
- * TWO INSTRUMENTS, CHOSEN BY THE POINTER. A mouse gets a circular lens and the
- * photograph never moves. A finger gets pinch and pan, because a lens follows a
- * cursor and there is no cursor. Neither is the accessible route: arrow keys, a
- * focus trap and a live region work regardless of what is in your hand.
+ * ONE ZOOM, ONE LANGUAGE. The photograph itself enlarges, on every device: a
+ * double-click or a double-tap toggles it, a pinch drives it continuously, and
+ * a drag pans it once it is larger than its frame. A circular cursor-following
+ * magnifier lived here briefly and is gone — it was a second way of looking at a
+ * picture, and one is better. There is a single scale and a single offset in
+ * this component; nothing keeps a competing zoom state per input.
+ *
+ * None of it is the accessible route: arrow keys, a focus trap and a live region
+ * work regardless of what is in your hand.
  */
+/** How long after a tap a second one still counts as a double. See finish(). */
+const DOUBLE_TAP_MS = 400;
+
 export default function ImageViewer({
   images,
   alt,
@@ -73,11 +79,8 @@ export default function ImageViewer({
   /** The 1920 copy of the CURRENT image, once it has arrived. */
   const [detail, setDetail] = useState<{
     src: string;
-    url: string;
     naturalWidth: number;
-    naturalHeight: number;
   } | null>(null);
-  const [lens, setLens] = useState<{ x: number; y: number } | null>(null);
 
   const stageRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -106,10 +109,7 @@ export default function ImageViewer({
     setFinePointer(!!pointer?.matches);
     // Watched, not read once: pairing a mouse with a tablet flips this
     // mid-session, and the viewer should change instrument when it does.
-    const onPointerChange = (e: MediaQueryListEvent) => {
-      setFinePointer(e.matches);
-      setLens(null);
-    };
+    const onPointerChange = (e: MediaQueryListEvent) => setFinePointer(e.matches);
     pointer?.addEventListener?.("change", onPointerChange);
     return () => pointer?.removeEventListener?.("change", onPointerChange);
   }, []);
@@ -153,10 +153,10 @@ export default function ImageViewer({
 
   /* -------------------------------------------------------------- navigation */
 
+  /** Fitted, exactly: scale 1 and no translation, with nothing left over. */
   const reset = useCallback(() => {
     setZoom(MIN_ZOOM);
     setOffset({ x: 0, y: 0 });
-    setLens(null);
   }, []);
 
   const go = useCallback(
@@ -194,44 +194,10 @@ export default function ImageViewer({
     return () => document.removeEventListener("keydown", onKey);
   }, [go, onClose]);
 
-  /* --------------------------------------------------------- the lens (mouse) */
-
-  const magnification = detailReady
-    ? lensMagnificationFor({
-        naturalWidth: detail.naturalWidth,
-        stageWidth: stage().width,
-        dpr: typeof window !== "undefined" ? window.devicePixelRatio : 1,
-      })
-    : // Nothing has arrived yet: magnify gently rather than refuse. What is on
-      // screen is the product-page variant, and pushing it hard would only
-      // enlarge pixels the customer can already see.
-      lensMagnificationFor({ naturalWidth: 0, stageWidth: stage().width });
-
-  const onStagePointerHover = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!finePointer || e.pointerType !== "mouse") return;
-    const rect = stage();
-    setLens({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-  };
-
-  const lensView = (() => {
-    if (!finePointer || !lens) return null;
-    const rect = stage();
-    if (!rect.width || !rect.height) return null;
-    return lensGeometry({
-      pointerX: lens.x,
-      pointerY: lens.y,
-      stageWidth: rect.width,
-      stageHeight: rect.height,
-      // Before the detail copy lands, the crop is the stage's own 3:4.
-      naturalWidth: detail?.naturalWidth ?? 3,
-      naturalHeight: detail?.naturalHeight ?? 4,
-      magnification,
-      diameter: lensDiameterFor(rect.width),
-    });
-  })();
-
   /* ------------------------------------------------------- pinch/pan (touch) */
 
+  // How far this photograph can honestly be enlarged, from the variant that
+  // actually arrived. Until it does, the floor — never a refusal to zoom.
   const maxZoom = detailReady
     ? maxZoomFor({
         naturalWidth: detail.naturalWidth,
@@ -240,15 +206,17 @@ export default function ImageViewer({
       })
     : maxZoomFor({ naturalWidth: 0, displayedWidth: stage().width });
 
+  /** Continuous zoom (pinch). Settles to EXACTLY fitted, leaving no residue. */
   const setZoomTo = useCallback(
     (next: number) => {
-      const z = clampZoom(next, maxZoom);
+      const z = settleZoom(next, maxZoom);
       setZoom(z);
       setOffset((o) => {
+        if (z === MIN_ZOOM) return { x: 0, y: 0 };
         const rect = stage();
         return clampPan({
-          x: z <= MIN_ZOOM ? 0 : o.x,
-          y: z <= MIN_ZOOM ? 0 : o.y,
+          x: o.x,
+          y: o.y,
           zoom: z,
           frameWidth: rect.width,
           frameHeight: rect.height,
@@ -258,8 +226,49 @@ export default function ImageViewer({
     [maxZoom]
   );
 
+  /**
+   * The toggle, shared by double-click and double-tap.
+   *
+   * ONE PATH FOR BOTH, so the two gestures cannot drift into different states.
+   * `x`/`y` are stage coordinates and steer the zoom toward what was actually
+   * pointed at; going back to fitted ignores them and lands on dead centre.
+   */
+  const toggleZoomAt = useCallback(
+    (x: number, y: number) => {
+      const rect = stage();
+      const target = settleZoom(doubleTapZoom(zoom, maxZoom), maxZoom);
+      setZoom(target);
+      setOffset(
+        focalPan({
+          pointerX: x,
+          pointerY: y,
+          stageWidth: rect.width,
+          stageHeight: rect.height,
+          fromZoom: zoom,
+          toZoom: target,
+          offsetX: offset.x,
+          offsetY: offset.y,
+        })
+      );
+    },
+    [maxZoom, offset.x, offset.y, zoom]
+  );
+
+  /**
+   * Desktop. The browser's own dblclick rather than a hand-rolled timer: it
+   * already knows what a double-click is, including how far the mouse may
+   * wander between the two, and a single click deliberately does nothing.
+   */
+  const onDoubleClick = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (!finePointer) return;
+    const rect = stage();
+    toggleZoomAt(e.clientX - rect.left, e.clientY - rect.top);
+  };
+
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (finePointer && e.pointerType === "mouse") return;
+    // A mouse is tracked too, so a magnified photograph can be dragged. What a
+    // mouse never does is navigate the gallery or trigger the zoom toggle —
+    // those are the chevrons and dblclick respectively (see finish()).
     (e.target as Element).setPointerCapture?.(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -337,13 +346,31 @@ export default function ImageViewer({
       cancelled,
     });
 
-    if (decision.kind === "navigate") { go(decision.nextIndex - index); return; }
-    if (decision.kind !== "tap" || cancelled) return;
+    // Swiping between photographs is a touch gesture. A mouse has the chevrons
+    // and the arrow keys, and a stray drag across the picture should not move
+    // the gallery under it.
+    if (decision.kind === "navigate") {
+      if (e.pointerType !== "mouse") go(decision.nextIndex - index);
+      return;
+    }
+    if (decision.kind !== "tap") return;
+    // Desktop taps are handled by the browser's dblclick; running the timer
+    // here as well would toggle twice for one double-click.
+    if (e.pointerType === "mouse") return;
 
     const now = Date.now();
-    if (now - lastTap.current < 300) {
+    // 400ms, not the conventional 300. Two taps are separated by whatever the
+    // main thread is doing between them, and the main thread here may be
+    // decoding a 1.1MB inspection photograph — enough jank to stretch a
+    // deliberate double-tap past 300ms and drop it. Observed exactly once, on a
+    // cold cache. A single tap does nothing else in this viewer, so a slightly
+    // generous window costs nothing and a missed one costs the gesture.
+    if (now - lastTap.current < DOUBLE_TAP_MS) {
       lastTap.current = 0;
-      setZoomTo(doubleTapZoom(zoom, maxZoom));
+      // Zoom toward the tapped point — and this is now REACHABLE while zoomed,
+      // which is what the old ordering made impossible.
+      const rect = stage();
+      toggleZoomAt(e.clientX - rect.left, e.clientY - rect.top);
     } else {
       lastTap.current = now;
     }
@@ -397,17 +424,20 @@ export default function ImageViewer({
           // customer by taking it — the page beneath is scroll-locked while the
           // popup is open, and this applies to the stage alone.
           !finePointer && "touch-none",
-          finePointer && "cursor-none"
+          // The only visual hint that zoom exists. No icon, no overlay, no
+          // instructional text — the cursor is enough, and it is free.
+          finePointer && (zoomed ? (dragging ? "cursor-grabbing" : "cursor-grab") : "cursor-zoom-in")
         )}
         style={{
           marginTop: "env(safe-area-inset-top)",
           marginBottom: "env(safe-area-inset-bottom)",
         }}
         onPointerDown={onPointerDown}
-        onPointerMove={(e) => { onStagePointerHover(e); onPointerMove(e); }}
+        onDoubleClick={onDoubleClick}
+        onPointerMove={onPointerMove}
         onPointerUp={(e) => finish(e)}
         onPointerCancel={(e) => finish(e, true)}
-        onPointerLeave={(e) => { setLens(null); finish(e, true); }}
+        onPointerLeave={(e) => finish(e, true)}
       >
         <div
           className={cn(
@@ -453,38 +483,14 @@ export default function ImageViewer({
               reduced ? "transition-none" : "transition-opacity duration-300"
             )}
             onLoad={(e) => {
+              // naturalWidth is a TRUE pixel count here only because this
+              // layer's `sizes` is a fixed px value (see lib/imageZoom); the
+              // zoom ceiling is a ratio against it.
               const img = e.currentTarget;
-              setDetail({
-                src,
-                url: img.currentSrc || img.src,
-                naturalWidth: img.naturalWidth,
-                naturalHeight: img.naturalHeight,
-              });
+              setDetail({ src, naturalWidth: img.naturalWidth });
             }}
           />
         </div>
-
-        {/*
-          THE LENS. A circle of the same photograph, drawn larger. The base does
-          not move — that is the whole point of this instrument over dragging a
-          magnified picture around. Hairline ring, no shadow, no chrome.
-        */}
-        {lensView && detailReady && (
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute rounded-full ring-1 ring-white/40"
-            style={{
-              width: lensView.diameter,
-              height: lensView.diameter,
-              left: lensView.centerX - lensView.diameter / 2,
-              top: lensView.centerY - lensView.diameter / 2,
-              backgroundImage: `url("${detail.url}")`,
-              backgroundSize: `${lensView.backgroundWidth}px ${lensView.backgroundHeight}px`,
-              backgroundPosition: `${lensView.backgroundX}px ${lensView.backgroundY}px`,
-              backgroundRepeat: "no-repeat",
-            }}
-          />
-        )}
 
         {hasMany && (
           <>
@@ -528,9 +534,9 @@ export default function ImageViewer({
       </div>
 
       {/*
-        Position for anyone who cannot see the counter. The lens deliberately
-        announces nothing — it moves with every pixel of pointer travel, and
-        reporting that would be a stream of noise.
+        Position for anyone who cannot see the counter. Zoom deliberately
+        announces nothing: it changes with every pinch frame, and narrating a
+        scale factor is noise rather than information.
       */}
       <p className="sr-only" role="status" aria-live="polite">
         Image {index + 1} of {images.length}

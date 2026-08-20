@@ -11,26 +11,21 @@
 import { readFileSync } from "node:fs";
 import {
   DOUBLE_TAP_ZOOM,
+  FINE_POINTER_QUERY,
   MIN_ZOOM,
   ZOOM_CEILING,
   ZOOM_FLOOR,
-  FINE_POINTER_QUERY,
-  LENS_MAX_DIAMETER,
-  LENS_MAX_MAGNIFICATION,
-  LENS_MIN_DIAMETER,
-  LENS_MIN_MAGNIFICATION,
   ZOOM_REQUEST_WIDTH,
   clampPan,
   clampZoom,
   decideViewerGesture,
   doubleTapZoom,
-  lensDiameterFor,
-  lensGeometry,
-  lensMagnificationFor,
+  focalPan,
   maxZoomFor,
   panBounds,
   pinchZoom,
   pointDistance,
+  settleZoom,
   viewerSizes,
 } from "../lib/imageZoom";
 
@@ -56,6 +51,7 @@ function codeOf(source: string): string {
 
 const viewer = readFileSync("components/product/ImageViewer.tsx", "utf8");
 const viewerCode = codeOf(viewer);
+const zoomLib = readFileSync("lib/imageZoom.ts", "utf8");
 const gallery = readFileSync("components/product/ImageGallery.tsx", "utf8");
 const css = readFileSync("app/globals.css", "utf8");
 
@@ -269,83 +265,138 @@ check("it is decorative to a screen reader", viewer.includes('alt=""') && viewer
 check("readiness is tied to the CURRENT image", viewer.includes("const detailReady = detail?.src === src;"));
 check("only the current image is rendered at all", !viewer.includes("images.map("));
 
-console.log("\n=== the desktop lens ===");
-check("capability is asked of the pointer, not the viewport", FINE_POINTER_QUERY === "(hover: hover) and (pointer: fine)");
-check("and it is watched for change", viewer.includes('pointer?.addEventListener?.("change"'));
-check("the listener is cleaned up", viewer.includes('pointer?.removeEventListener?.("change"'));
-check("the lens only exists for a fine pointer", viewer.includes("if (!finePointer || !lens) return null;"));
-check("and only tracks an actual mouse", viewer.includes('e.pointerType !== "mouse"'));
-check("leaving the photograph removes it", viewer.includes("setLens(null); finish(e, true);"));
-check("a fine pointer never starts a drag", viewer.includes('if (finePointer && e.pointerType === "mouse") return;'));
-check("the base photograph never moves for a mouse", !viewer.includes("onWheel") && !viewer.includes("wheelZoom"));
-check("no lens chrome beyond a hairline", viewer.includes("ring-1 ring-white/40") && !viewer.includes("shadow-lift"));
-check("the lens says nothing to a screen reader", /lensView && detailReady && \(\s*<div\s*aria-hidden="true"/.test(viewer));
-
-console.log("\n=== lens diameter is responsive and bounded ===");
-check("a wide stage gets a considered circle", Math.abs(lensDiameterFor(600) - 204) < 0.001);
-check("it never exceeds the maximum", lensDiameterFor(2000) === LENS_MAX_DIAMETER);
-check("nor falls below the minimum", lensDiameterFor(200) === LENS_MIN_DIAMETER);
-check("and never exceeds the stage itself", lensDiameterFor(80) === 80);
-check("a zero stage is safe", lensDiameterFor(0) === LENS_MIN_DIAMETER);
-
-console.log("\n=== lens magnification follows real detail ===");
-check("a 1920 variant on a 600px stage at 1x earns real magnification",
-  Math.abs(lensMagnificationFor({ naturalWidth: 1920, stageWidth: 600, dpr: 1 }) - 3) < 0.001);
-check("a retina stage gets less, honestly",
-  lensMagnificationFor({ naturalWidth: 1920, stageWidth: 600, dpr: 2 }) === LENS_MIN_MAGNIFICATION);
-check("a ~1100px source cannot pretend", lensMagnificationFor({ naturalWidth: 1086, stageWidth: 600, dpr: 2 }) === LENS_MIN_MAGNIFICATION);
-check("nothing exceeds the lens ceiling", lensMagnificationFor({ naturalWidth: 9999, stageWidth: 100, dpr: 1 }) === LENS_MAX_MAGNIFICATION);
-check("the lens ceiling is not absurd", LENS_MAX_MAGNIFICATION <= 3);
-
-console.log("\n=== magnified coordinates correspond to the pointer ===");
-const STAGE = { stageWidth: 600, stageHeight: 800, naturalWidth: 1200, naturalHeight: 1600, magnification: 2, diameter: 200 };
-const mid = lensGeometry({ pointerX: 300, pointerY: 400, ...STAGE });
-check("the lens centres on the pointer", mid.centerX === 300 && mid.centerY === 400);
-// The stage is 600x800 and the source 1200x1600 — same 3:4 ratio, so cover
-// scales by 0.5 with no crop, and the magnified layer is 1200x1600 at 2x.
-check("the background is the covered image, magnified", mid.backgroundWidth === 1200 && mid.backgroundHeight === 1600);
-check("the point under the pointer lands at the lens centre",
-  mid.backgroundX === 100 - 300 * 2 && mid.backgroundY === 100 - 400 * 2,
-  `${mid.backgroundX},${mid.backgroundY}`);
-// Moving the pointer right by 50 must move the magnified content left by 50*M.
-const right = lensGeometry({ pointerX: 350, pointerY: 400, ...STAGE });
-check("moving the pointer moves the view by exactly magnification x",
-  mid.backgroundX - right.backgroundX === 100, String(mid.backgroundX - right.backgroundX));
-
-console.log("\n=== the lens stays inside the photograph ===");
-const inside = (g: { centerX: number; centerY: number; diameter: number }) =>
-  g.centerX - g.diameter / 2 >= -0.001 &&
-  g.centerY - g.diameter / 2 >= -0.001 &&
-  g.centerX + g.diameter / 2 <= 600.001 &&
-  g.centerY + g.diameter / 2 <= 800.001;
-for (const [px, py, label] of [[0, 0, "top-left"], [600, 0, "top-right"], [0, 800, "bottom-left"], [600, 800, "bottom-right"], [-50, -50, "outside"], [9999, 9999, "far outside"]] as [number, number, string][]) {
-  check(`${label} corner keeps the circle in bounds`, inside(lensGeometry({ pointerX: px, pointerY: py, ...STAGE })));
-}
-check("a lens wider than the stage is shrunk to fit",
-  lensGeometry({ pointerX: 10, pointerY: 10, ...STAGE, diameter: 5000 }).diameter === 600);
-
-console.log("\n=== the lens reproduces object-cover, so it cannot distort ===");
-// A 4:5 source in a 3:4 stage: cover binds on width, and the crop is vertical.
-const crop = lensGeometry({ pointerX: 300, pointerY: 400, stageWidth: 600, stageHeight: 800, naturalWidth: 1200, naturalHeight: 1500, magnification: 2, diameter: 200 });
-check("the magnified layer keeps the source's aspect ratio",
-  Math.abs(crop.backgroundWidth / crop.backgroundHeight - 1200 / 1500) < 0.0001);
-// 1200x1500 into 600x800: height is the binding axis (800/1500 > 600/1200), so
-// the covered image is 640x800 and the crop is taken from the SIDES.
-check("the covered width exceeds the stage, as object-cover does",
-  Math.abs(crop.backgroundWidth / 2 - 640) < 0.001, String(crop.backgroundWidth / 2));
-check("and the covered height matches it exactly",
-  Math.abs(crop.backgroundHeight / 2 - 800) < 0.001);
-check("the side crop is taken evenly, shifting the view by half of it",
-  Math.abs(crop.backgroundX - (100 - (300 + 20) * 2)) < 0.001, String(crop.backgroundX));
-check("and the unbound axis is not shifted at all",
-  Math.abs(crop.backgroundY - (100 - 400 * 2)) < 0.001, String(crop.backgroundY));
-check("a degenerate source does not divide by zero",
-  Number.isFinite(lensGeometry({ pointerX: 10, pointerY: 10, ...STAGE, naturalWidth: 0, naturalHeight: 0 }).backgroundX));
-
 console.log("\n=== reopening starts fitted ===");
-check("navigating resets zoom, pan and lens", viewer.includes("setZoom(MIN_ZOOM);") && viewer.includes("setOffset({ x: 0, y: 0 });") && viewer.includes("setLens(null);"));
+check("navigating resets to exactly fitted", viewer.includes("setZoom(MIN_ZOOM);") && viewer.includes("setOffset({ x: 0, y: 0 });"));
 check("zoom state is local to the mount, so a fresh open is fitted", viewer.includes("useState(MIN_ZOOM)"));
 check("the gallery unmounts it on close", gallery.includes("{viewerOpen && ("));
+
+console.log("\n=== THE BUG: a tap must be recognised while zoomed ===");
+// Root cause of "double-tap zooms in but never out": decideViewerGesture used
+// to answer "pan" for ANY release while magnified, so finish() returned before
+// it could ever count a second tap. Zoom out was unreachable by construction.
+const still = { startX: 200, startY: 300, endX: 202, endY: 301, index: 1, imageCount: 4 };
+check("a stationary release at 1x is a tap", decideViewerGesture({ zoom: 1, ...still }).kind === "tap");
+check("AND a stationary release while zoomed is still a tap",
+  decideViewerGesture({ zoom: 2, ...still }).kind === "tap",
+  decideViewerGesture({ zoom: 2, ...still }).kind);
+check("at the very top of the range too", decideViewerGesture({ zoom: 3, ...still }).kind === "tap");
+check("a single-image product can still be tapped",
+  decideViewerGesture({ zoom: 2, ...still, index: 0, imageCount: 1 }).kind === "tap");
+const travelled = { startX: 300, startY: 400, endX: 100, endY: 400, index: 1, imageCount: 4 };
+check("but a release that TRAVELLED while zoomed is a pan",
+  decideViewerGesture({ zoom: 2, ...travelled }).kind === "pan");
+check("and at 1x it navigates", decideViewerGesture({ zoom: 1, ...travelled }).kind === "navigate");
+check("a cancelled release is never a tap", decideViewerGesture({ zoom: 2, ...still, cancelled: true }).kind === "none");
+check("a two-finger release is never a tap", decideViewerGesture({ zoom: 2, ...still, multiTouch: true }).kind === "none");
+
+console.log("\n=== the toggle returns to EXACTLY fitted ===");
+check("fitted -> magnified", doubleTapZoom(MIN_ZOOM, 3) === DOUBLE_TAP_ZOOM);
+check("magnified -> fitted", doubleTapZoom(2, 3) === MIN_ZOOM);
+check("twice is where you started", doubleTapZoom(doubleTapZoom(1, 3), 3) === MIN_ZOOM);
+check("a drifted pinch settles to exactly 1", settleZoom(1.004, 3) === MIN_ZOOM);
+check("1.004 is not left as a live transform", settleZoom(1.004, 3) !== 1.004);
+check("a real zoom is untouched", settleZoom(2.4, 3) === 2.4);
+check("the ceiling still binds", settleZoom(99, 2.5) === 2.5);
+check("and the floor", settleZoom(-4, 3) === MIN_ZOOM);
+// repeated toggling must not accumulate anything
+let z = MIN_ZOOM;
+let off = { x: 0, y: 0 };
+const STAGE_T = { stageWidth: 600, stageHeight: 800 };
+for (let i = 0; i < 6; i += 1) {
+  const target = settleZoom(doubleTapZoom(z, 3), 3);
+  off = focalPan({ pointerX: 470, pointerY: 660, ...STAGE_T, fromZoom: z, toZoom: target, offsetX: off.x, offsetY: off.y });
+  z = target;
+}
+check("six toggles land back on fitted", z === MIN_ZOOM, String(z));
+check("with translation reset to exactly zero", off.x === 0 && off.y === 0, JSON.stringify(off));
+
+console.log("\n=== zoom moves toward what was pointed at ===");
+const focal = focalPan({ pointerX: 470, pointerY: 660, ...STAGE_T, fromZoom: 1, toZoom: 2, offsetX: 0, offsetY: 0 });
+// centre is (300,400); the point is right and below it, so the picture must
+// travel left and up to bring that point toward the middle.
+check("a lower-right point pulls the picture left", focal.x < 0, JSON.stringify(focal));
+check("and upward", focal.y < 0, JSON.stringify(focal));
+check("by exactly (point - centre) x (from - to), bounded",
+  focal.x === Math.max(-300, (470 - 300) * (1 - 2)) && focal.y === Math.max(-400, (660 - 400) * (1 - 2)),
+  JSON.stringify(focal));
+const upperLeft = focalPan({ pointerX: 130, pointerY: 140, ...STAGE_T, fromZoom: 1, toZoom: 2, offsetX: 0, offsetY: 0 });
+check("an upper-left point pushes it the other way", upperLeft.x > 0 && upperLeft.y > 0);
+check("the dead centre needs no travel at all",
+  JSON.stringify(focalPan({ pointerX: 300, pointerY: 400, ...STAGE_T, fromZoom: 1, toZoom: 2, offsetX: 0, offsetY: 0 })) === '{"x":0,"y":0}');
+check("focal zoom obeys the same bounds as a drag",
+  Math.abs(focalPan({ pointerX: 600, pointerY: 800, ...STAGE_T, fromZoom: 1, toZoom: 2, offsetX: 0, offsetY: 0 }).x) <= panBounds({ zoom: 2, frameWidth: 600, frameHeight: 800 }).maxX);
+check("returning to fitted ignores the point entirely",
+  JSON.stringify(focalPan({ pointerX: 590, pointerY: 790, ...STAGE_T, fromZoom: 2.5, toZoom: 1, offsetX: 120, offsetY: -90 })) === '{"x":0,"y":0}');
+check("a zero-size stage is safe",
+  JSON.stringify(focalPan({ pointerX: 10, pointerY: 10, stageWidth: 0, stageHeight: 0, fromZoom: 1, toZoom: 2, offsetX: 0, offsetY: 0 })) === '{"x":0,"y":0}');
+
+console.log("\n=== desktop: double-click, drag to pan, single click inert ===");
+check("the browser's own dblclick drives desktop zoom", viewer.includes("onDoubleClick={onDoubleClick}"));
+check("and only for a fine pointer", viewer.includes("if (!finePointer) return;"));
+check("there is no single-click zoom handler", !/onClick=\{[^}]*toggleZoom/.test(viewer));
+check("a mouse never runs the double-TAP timer", viewer.includes('if (e.pointerType === "mouse") return;'));
+check("a mouse never navigates the gallery", viewer.includes('if (e.pointerType !== "mouse") go(decision.nextIndex - index);'));
+check("a mouse IS tracked, so a magnified photo can be dragged",
+  !viewer.includes('if (finePointer && e.pointerType === "mouse") return;'));
+// Two call sites — double-click and double-tap — into one shared helper.
+check("both gestures call ONE toggle", (viewer.match(/ {2,}toggleZoomAt\(/g) ?? []).length === 2);
+check("which is defined exactly once", (viewer.match(/const toggleZoomAt = useCallback/g) ?? []).length === 1);
+check("the double-tap window tolerates decode jank", viewer.includes("const DOUBLE_TAP_MS = 400;"));
+check("and it is a named constant, not a literal in the handler", viewer.includes("now - lastTap.current < DOUBLE_TAP_MS"));
+check("panning only happens above 1x", viewer.includes("if (zoom <= MIN_ZOOM + 0.01) return;"));
+
+console.log("\n=== the circular magnifier is gone ===");
+check("no lens geometry in the maths", !/lensGeometry|lensDiameterFor|lensMagnificationFor/.test(zoomLib));
+check("no lens constants", !/LENS_/.test(zoomLib));
+check("no lens element in the viewer", !/lensView|backgroundImage/.test(viewerCode));
+check("no ring or circle chrome left behind", !viewer.includes("ring-1 ring-white/40"));
+check("no cursor hiding", !viewer.includes("cursor-none"));
+check("the cursor is the only affordance, and it is quiet",
+  viewer.includes("cursor-zoom-in") && viewer.includes("cursor-grab"));
+check("still no zoom buttons, icons, percentage or overlay text",
+  !/ZoomIn|ZoomOut|Minus|Plus|zoom-percentage|Double.?click to/i.test(viewerCode));
+
+console.log("\n=== pinch and the toggle drive the SAME state ===");
+check("one scale in the component", (viewer.match(/const \[zoom, setZoom\]/g) ?? []).length === 1);
+check("one offset in the component", (viewer.match(/const \[offset, setOffset\]/g) ?? []).length === 1);
+check("pinch settles through the same helper", viewer.includes("settleZoom(next, maxZoom)"));
+check("a pinch back to fitted zeroes the pan", viewer.includes('if (z === MIN_ZOOM) return { x: 0, y: 0 };'));
+check("pinch still magnifies", Math.abs(pinchZoom({ startDistance: 100, currentDistance: 200, startZoom: 1, max: 3 }) - 2) < 0.001);
+check("pinch still returns to the fit", pinchZoom({ startDistance: 200, currentDistance: 40, startZoom: 2, max: 3 }) === MIN_ZOOM);
+check("pinch respects the honest ceiling", pinchZoom({ startDistance: 100, currentDistance: 900, startZoom: 1, max: 2.2 }) === 2.2);
+check("distance is euclidean", pointDistance({ x: 0, y: 0 }, { x: 3, y: 4 }) === 5);
+
+console.log("\n=== zoom limits stay honest ===");
+check("the floor is 2x", ZOOM_FLOOR === 2);
+check("the ceiling is 3x", ZOOM_CEILING === 3);
+check("a large source on a 1x screen earns more than the floor",
+  Math.abs(maxZoomFor({ naturalWidth: 1920, displayedWidth: 700, dpr: 1 }) - 2.742) < 0.01);
+check("a retina stage gets the floor, honestly",
+  maxZoomFor({ naturalWidth: 1920, displayedWidth: 600, dpr: 2 }) === ZOOM_FLOOR);
+check("no meaningless 8x", clampZoom(8, ZOOM_CEILING) === 3);
+
+console.log("\n=== pan bounds unchanged ===");
+check("fitted has no slack", panBounds({ zoom: 1, frameWidth: 400, frameHeight: 800 }).maxX === 0);
+check("2x gives half the overflow", panBounds({ zoom: 2, frameWidth: 400, frameHeight: 800 }).maxX === 200);
+check("a fitted image cannot be dragged", clampPan({ x: 250, y: -400, zoom: 1, frameWidth: 400, frameHeight: 800 }).x === 0);
+check("a magnified one cannot be flung off", clampPan({ x: 9999, y: -9999, zoom: 2, frameWidth: 400, frameHeight: 800 }).y === -400);
+
+console.log("\n=== navigation boundaries unchanged ===");
+const nav = (dx: number, index: number, imageCount = 4) =>
+  decideViewerGesture({ zoom: 1, startX: 300, startY: 400, endX: 300 + dx, endY: 400, index, imageCount });
+check("swipe advances one", (nav(-90, 1) as { nextIndex: number }).nextIndex === 2);
+check("swipe back one", (nav(90, 1) as { nextIndex: number }).nextIndex === 0);
+check("no wrap forward", (nav(-90, 3) as { nextIndex: number }).nextIndex === 3);
+check("no wrap backward", (nav(90, 0) as { nextIndex: number }).nextIndex === 0);
+check("a jitter navigates nothing", nav(6, 1).kind === "tap");
+check("capability is asked of the pointer", FINE_POINTER_QUERY === "(hover: hover) and (pointer: fine)");
+
+console.log("\n=== zoom does not touch the network ===");
+check("zooming changes a transform, nothing else",
+  viewer.includes("transform: `translate3d(") && !/toggleZoomAt[\s\S]{0,400}setDetail/.test(viewer));
+check("the detail request is still keyed to the image, not the zoom",
+  viewer.includes("const detailReady = detail?.src === src;"));
+check("still exactly two image layers", (viewer.match(/<Image/g) ?? []).length === 2);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);
