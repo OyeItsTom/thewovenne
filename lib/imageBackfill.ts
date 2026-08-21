@@ -226,11 +226,20 @@ export function planRepoints(
  * verifier that only compared table/row/field would accept a row that had been
  * repointed to something else entirely.
  */
+/**
+ * NUL, because it cannot occur in a table name, a row id or a URL.
+ *
+ * Written as an escape rather than a literal byte: a literal NUL in the
+ * source makes the whole file binary to grep, diff and review tooling, which
+ * is exactly how this separator was first noticed.
+ */
+const IDENTITY_SEPARATOR = "\u0000";
+
 export function retainedIdentity(
   reference: { table: string; rowId: string; field: string },
   sourceUrl: string
 ): string {
-  return [reference.table, reference.rowId, reference.field, sourceUrl].join(" ");
+  return [reference.table, reference.rowId, reference.field, sourceUrl].join(IDENTITY_SEPARATOR);
 }
 
 /** The identity set for every retained reference, ordered so it compares stably. */
@@ -264,7 +273,7 @@ export function retainedIdentityDiff(
 
 /** Human-readable form of an identity, for errors and the ledger. */
 export function describeRetainedIdentity(identity: string): string {
-  const [table, rowId, field, url] = identity.split(" ");
+  const [table, rowId, field, url] = identity.split(IDENTITY_SEPARATOR);
   return `${table}/${rowId}.${field} -> ${url}`;
 }
 
