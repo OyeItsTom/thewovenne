@@ -142,7 +142,10 @@ export class ImageReferenceGraph {
       for (const row of rows) {
         for (const { bucket, key } of extractObjectKeys(row)) {
           const id = `${bucket}|${key}`;
-          const rowId = String(row.id ?? row.product_id ?? row.cart_id ?? "?");
+          // carts is keyed by user_id — it has no `id` at all. Without this the
+          // row identifies as "?", which is not an identity: it cannot be read
+          // back, and two different carts would look like the same reference.
+          const rowId = String(row.id ?? row.product_id ?? row.cart_id ?? row.user_id ?? "?");
           const list = this.hits.get(id) ?? [];
           list.push({ table, rowId, field: fieldHolding(row, key), live: countsAsLive });
           this.hits.set(id, list);
