@@ -150,6 +150,8 @@ interface Plan extends ManifestEntry {
   format: string | null;
   references: Record<string, number>;
   liveReferences: number;
+  /** Live references that will deliberately stay on the original (carts). */
+  retainedReferences: Array<{ table: string; rowId: string; reason: string }>;
   estimatedMasterBytes: number;
 }
 
@@ -178,13 +180,14 @@ async function buildPlan(limit: number): Promise<{ plans: Plan[]; graph: ImageRe
       graphIsComplete: graph.isComplete, now,
     });
     const references = graph.referencesFor(BUCKET, object.key);
-    const { repoints, blockers } = planRepoints(references, publicUrl(object.key));
+    const { repoints, retained, blockers } = planRepoints(references, publicUrl(object.key));
 
     const header = parseHeader((await readRange(publicUrl(object.key))) ?? Buffer.alloc(0));
     const display = displayDimensions(header);
     const refusal = migrationRefusal({
       classification, liveReferences: live, graphIsComplete: graph.isComplete,
       format: header.format, hasWarnings: !display, blockers: blockers.length,
+      migratableReferences: repoints.length,
     });
     if (refusal || !display) continue;
 
@@ -199,6 +202,7 @@ async function buildPlan(limit: number): Promise<{ plans: Plan[]; graph: ImageRe
       targetWidth: target.width, targetHeight: target.height,
       orientation: header.orientation, format: header.format,
       references: graph.breakdown(BUCKET, object.key), liveReferences: live,
+      retainedReferences: retained,
       estimatedMasterBytes: Math.round(((target.width * target.height) / 1e6) * 0.375 * 1e6),
     });
   }
@@ -293,6 +297,9 @@ async function migrateOne(batchId: string, entry: ManifestEntry, graph: ImageRef
     referencesBefore: entry.repoints.length, status: "pending",
   };
   const applied: Array<{ table: string; rowId: string; column: string; oldUrl: string; newUrl: string }> = [];
+  // How many references are meant to survive on the original, counted before
+  // anything is touched. Verification compares against this rather than zero.
+  const retainedBefore = planRepoints(graph.referencesFor(BUCKET, entry.sourcePath), sourceUrl).retained.length;
 
   try {
     console.log(`  ── ${entry.sourcePath}`);
@@ -368,11 +375,35 @@ async function migrateOne(batchId: string, entry: ManifestEntry, graph: ImageRef
     }
 
     // ── read back and verify ──
+    //
+    // The invariant is NOT "the original has no references left". It is
+    // "everything C2 intended to move has moved, and everything C2 intended to
+    // leave is still exactly where it was". A cart may legitimately still point
+    // at the retained original — see RETAINED_REFERENCE_TABLES — and demanding
+    // zero here would fail a migration that had in fact succeeded.
     const after = await fetchTables();
     const afterGraph = new ImageReferenceGraph(after.tables, after.unreadable);
+    const afterPlan = planRepoints(
+      afterGraph.referencesFor(BUCKET, entry.sourcePath),
+      publicUrl(entry.sourcePath)
+    );
     const stillOnSource = afterGraph.liveReferenceCount(BUCKET, entry.sourcePath);
     const onMaster = afterGraph.liveReferenceCount(BUCKET, key);
-    if (stillOnSource !== 0) throw new Error(`${stillOnSource} live reference(s) still point at the original`);
+
+    // Everything C2 meant to move must be gone from the original.
+    if (afterPlan.repoints.length !== 0) {
+      throw new Error(`${afterPlan.repoints.length} migratable reference(s) still point at the original`);
+    }
+    // Everything C2 meant to leave must still be there. Losing one would mean
+    // something rewrote a cart, which this tool must never do.
+    if (afterPlan.retained.length !== retainedBefore) {
+      throw new Error(
+        `retained references changed: expected ${retainedBefore}, found ${afterPlan.retained.length}`
+      );
+    }
+    if (afterPlan.blockers.length !== 0) {
+      throw new Error(`${afterPlan.blockers.length} disqualifying reference(s) appeared during migration`);
+    }
     if (onMaster < entry.repoints.length) {
       throw new Error(`master has ${onMaster} live reference(s), expected at least ${entry.repoints.length}`);
     }
@@ -380,11 +411,21 @@ async function migrateOne(batchId: string, entry: ManifestEntry, graph: ImageRef
     Object.assign(base, {
       rowsUpdatedByTable: countByTable(applied),
       referencesAfterOnSource: stillOnSource, referencesAfterOnMaster: onMaster,
+      migratableReferencesAfterOnSource: afterPlan.repoints.length,
+      retainedReferencesOnSource: afterPlan.retained,
+      // A source a cart still points at cannot be reclaimed by C3, and the
+      // ledger must not promise bytes that deletion will never be allowed to free.
+      c3DeletionBlockedBy: afterPlan.retained.map((r) => r.table),
       verification: "passed", rollbackData: rollbackFor(applied),
-      bytesAddedNow: master.byteLength, bytesReclaimableAfterC3: entry.sourceBytes,
+      bytesAddedNow: master.byteLength,
+      bytesReclaimableAfterC3: afterPlan.retained.length === 0 ? entry.sourceBytes : 0,
       status: "migrated",
     });
-    console.log(`     repointed ${applied.length} row(s); original retained; source now has ${stillOnSource} live refs`);
+    console.log(
+      `     repointed ${applied.length} row(s); original retained; ` +
+        `${afterPlan.repoints.length} migratable ref(s) left, ` +
+        `${afterPlan.retained.length} retained ref(s) untouched (${stillOnSource} live total)`
+    );
     return base;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

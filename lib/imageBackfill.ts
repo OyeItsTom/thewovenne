@@ -14,13 +14,23 @@
  */
 
 /**
- * Five. Not a default, not a maximum a flag can raise — the number.
+ * Ten. Not a default, not a maximum a flag can raise — the number.
  *
  * A migration that can be told to do 148 things is one keystroke away from
  * doing 148 things. Raising this is a code change, which is a review, which is
  * the point.
+ *
+ * It was five for the first three batches. Fifteen sources migrated with no
+ * rollback and no drift, so the ceiling moved once — and only once. Note what
+ * the evidence does and does not say: batch size has never affected per-source
+ * safety, because each source is repointed by compare-and-set and rolled back
+ * alone. What it affects is how far a SYSTEMATIC error travels before a person
+ * notices. Batch 1 put four wrong photographs live while the executor worked
+ * perfectly; review caught it, not the tool. Ten is the size at which a
+ * contact sheet is still looked at rather than skimmed. Twenty is deliberately
+ * not approved yet, and waits on two clean batches at ten.
  */
-export const MAX_EXECUTION_BATCH = 5;
+export const MAX_EXECUTION_BATCH = 10;
 
 /**
  * Columns a product-image migration may rewrite.
@@ -48,6 +58,37 @@ export const REPOINTABLE_COLUMNS: ReadonlyArray<{ table: string; column: string;
 
 /** Live reference sources this tool must never rewrite. */
 export const NON_REPOINTABLE_TABLES = ["carts", "site_content"] as const;
+
+/**
+ * Live references that are ALLOWED to stay on the original after a migration.
+ *
+ * A cart is a customer's basket. It stores an absolute URL and
+ * components/cart/CartItem.tsx renders that URL verbatim — nothing re-resolves
+ * it from the product. So a cart reference is a reason never to DELETE the
+ * original, which is a C3 concern. It is not a reason to refuse to move the
+ * PRODUCT rows to a normalised master, which is what C2 does.
+ *
+ * Conflating those two cost us the largest single candidate in the catalogue:
+ * a live published cover, 12.35 MiB, blocked from C2 for a property that only
+ * ever constrained C3. The rule now says what it means — the cart keeps
+ * pointing at the retained original, and the original stays forever, or at
+ * least until nothing points at it.
+ */
+export const RETAINED_REFERENCE_TABLES = ["carts"] as const;
+
+/**
+ * Live references that still disqualify a source from C2 entirely.
+ *
+ * site_content is the lookbook and campaign CMS. Unlike a cart it is content
+ * this project edits, so a reference there means the object is not really a
+ * product source and a product-image migration has no business reasoning about
+ * it. Left disqualifying, exactly as before.
+ */
+export const DISQUALIFYING_REFERENCE_TABLES = ["site_content"] as const;
+
+export function isRetainedReferenceTable(table: string): boolean {
+  return (RETAINED_REFERENCE_TABLES as readonly string[]).includes(table);
+}
 
 export function isRepointable(table: string): boolean {
   return REPOINTABLE_COLUMNS.some((c) => c.table === table);
@@ -117,24 +158,40 @@ export function manifestChecksum(
 /**
  * Which rows a source's references translate into.
  *
- * A reference in a table this tool may not rewrite is not skipped quietly — it
- * is returned as a blocker, and the caller refuses the source. Migrating three
- * of a photograph's four references and calling it done is how an image ends up
- * half-moved with nobody noticing.
+ * Three outcomes, and the difference between the last two is the whole point:
+ *
+ *   repoints — rows C2 will move to the master. These MUST all move.
+ *   retained — live references that stay on the original ON PURPOSE (carts).
+ *              Not skipped quietly, not an error; recorded, so that a later
+ *              verification can prove they are still exactly where they were.
+ *   blockers — anything else this tool cannot rewrite, which disqualifies the
+ *              whole source. Migrating three of a photograph's four references
+ *              and calling it done is how an image ends up half-moved with
+ *              nobody noticing.
  */
 export function planRepoints(
   references: Array<{ table: string; rowId: string; field: string; live: boolean }>,
   oldUrl: string
 ): {
   repoints: Array<{ table: string; rowId: string; column: string; oldUrl: string }>;
+  retained: Array<{ table: string; rowId: string; reason: string }>;
   blockers: Array<{ table: string; rowId: string; reason: string }>;
 } {
   const repoints: Array<{ table: string; rowId: string; column: string; oldUrl: string }> = [];
+  const retained: Array<{ table: string; rowId: string; reason: string }> = [];
   const blockers: Array<{ table: string; rowId: string; reason: string }> = [];
   for (const reference of references) {
     if (!reference.live) continue; // audit log: evidence, never rewritten
     const allowed = REPOINTABLE_COLUMNS.find((c) => c.table === reference.table);
     if (!allowed) {
+      if (isRetainedReferenceTable(reference.table)) {
+        retained.push({
+          table: reference.table,
+          rowId: reference.rowId,
+          reason: `${reference.table} keeps pointing at the retained original; it blocks C3 deletion, not C2`,
+        });
+        continue;
+      }
       blockers.push({
         table: reference.table,
         rowId: reference.rowId,
@@ -152,7 +209,38 @@ export function planRepoints(
     }
     repoints.push({ table: reference.table, rowId: reference.rowId, column: allowed.column, oldUrl });
   }
-  return { repoints, blockers };
+  return { repoints, retained, blockers };
+}
+
+/**
+ * Whether C3 may ever delete this original.
+ *
+ * THIS FUNCTION DELETES NOTHING. It is a predicate, living here so that the
+ * rule survives in one place while C2 relaxes around it: C2 is now allowed to
+ * migrate a source a cart still points at, and the only thing standing between
+ * that original and deletion is this answer. C3 is a separate PR; when it is
+ * written it must ask this, and it must ask it again immediately before the
+ * delete, against a freshly rebuilt graph.
+ */
+export function deletionBlockers(
+  references: Array<{ table: string; rowId: string; field: string; live: boolean }>
+): Array<{ table: string; rowId: string; reason: string }> {
+  return references
+    .filter((reference) => reference.live)
+    .map((reference) => ({
+      table: reference.table,
+      rowId: reference.rowId,
+      reason: `${reference.table}/${reference.rowId} still points at this original`,
+    }));
+}
+
+/** Convenience for the future C3: any live reference at all forbids deletion. */
+export function canDeleteOriginal(
+  references: Array<{ table: string; rowId: string; field: string; live: boolean }>,
+  graphIsComplete: boolean
+): boolean {
+  if (!graphIsComplete) return false;
+  return deletionBlockers(references).length === 0;
 }
 
 /** The reverse of an applied repoint, for undoing a source that failed late. */
@@ -177,6 +265,12 @@ export interface EligibilityInput {
   format: string | null;
   hasWarnings: boolean;
   blockers: number;
+  /**
+   * How many rows C2 would actually move. Distinct from liveReferences, which
+   * now counts permitted retained references too: a source three abandoned
+   * carts point at has live references and nothing to migrate.
+   */
+  migratableReferences: number;
 }
 
 /**
@@ -193,6 +287,12 @@ export function migrationRefusal(input: EligibilityInput): string | null {
   if (input.hasWarnings) return "the source could not be profiled confidently";
   if (input.blockers > 0) return "a live reference sits in a table this migration may not rewrite";
   if (input.liveReferences < 1) return "nothing references it — that is orphan work, not backfill";
+  // A source only a cart points at has nothing C2 can move. Its product was
+  // deleted; the basket is a snapshot of something that no longer exists.
+  // Normalising it would add a master nothing would ever read.
+  if (input.migratableReferences < 1) {
+    return "only permitted-retained references (e.g. carts) point here — nothing for C2 to move";
+  }
   if (
     input.classification !== "REFERENCED_PRODUCT_SOURCE" &&
     input.classification !== "REFERENCED_SHARED_SOURCE"
