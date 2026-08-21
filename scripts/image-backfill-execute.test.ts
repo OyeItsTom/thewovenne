@@ -23,6 +23,10 @@ import {
   assertExecuteFlags,
   canDeleteOriginal,
   deletionBlockers,
+  describeRetainedIdentity,
+  retainedIdentity,
+  retainedIdentityDiff,
+  retainedIdentitySet,
   isRepointable,
   isRetainedReferenceTable,
   manifestChecksum,
@@ -172,7 +176,7 @@ async function main() {
   check("the original must end with zero MIGRATABLE references",
     exec.includes("migratable reference(s) still point at the original"));
   check("but a retained reference is allowed to survive on it",
-    exec.includes("afterPlan.retained.length !== retainedBefore"));
+    exec.includes("retainedIdentityDiff(retainedBefore, retainedAfter)"));
   check("the master must carry the expected references", exec.includes("expected at least"));
   check("verification failure routes to the catch, which rolls back",
     exec.includes("throw new Error(`${afterPlan.repoints.length}"));
@@ -298,7 +302,7 @@ async function main() {
     exec.includes("migratable reference(s) still point at the original") &&
     !exec.includes("live reference(s) still point at the original"));
   check("F: the executor also proves retained references did not change",
-    exec.includes("retained references changed"));
+    exec.includes("retained reference identity changed"));
   check("F: a source with a retained reference promises no C3 bytes",
     exec.includes("afterPlan.retained.length === 0 ? entry.sourceBytes : 0"));
 
@@ -313,6 +317,102 @@ async function main() {
     REPOINTABLE_COLUMNS.every((c) => c.table !== "carts"));
   check("C3 remains unimplemented — this file only holds the predicate",
     !/\.\s*remove\s*\(/.test(code) && typeof canDeleteOriginal === "function");
+
+  /*
+   * RETAINED-REFERENCE IDENTITY.
+   *
+   * Counting was not enough. "One retained reference before, one after" also
+   * describes a run in which one cart lost the reference and a different cart
+   * gained it: the count is preserved and the guarantee is not. These cases
+   * pin the identity — same row, same field, same original.
+   */
+  console.log("\n=== retained references are verified by identity, not count ===");
+  const SRC = OLD;
+  const cartA = ref("carts", "cart-A", "items");
+  const cartB = ref("carts", "cart-B", "items");
+  const prodRef = ref("product_images", "r1", "url");
+
+  const idBefore = retainedIdentitySet([prodRef, cartA], SRC);
+  check("only retained tables enter the identity set", idBefore.length === 1);
+  check("the identity names table, row, field and source",
+    idBefore[0] === retainedIdentity(cartA, SRC) &&
+    idBefore[0].includes("carts") && idBefore[0].includes("cart-A") &&
+    idBefore[0].includes("items") && idBefore[0].includes(SRC));
+  check("historical references never enter it",
+    retainedIdentitySet([ref("admin_audit_log", "a1", "payload", false)], SRC).length === 0);
+  check("the set is ordered so it compares stably",
+    JSON.stringify(retainedIdentitySet([cartB, cartA], SRC)) ===
+    JSON.stringify(retainedIdentitySet([cartA, cartB], SRC)));
+
+  // A — same retained reference before and after.
+  const caseIdA = retainedIdentityDiff(idBefore, retainedIdentitySet([cartA], SRC));
+  check("A: the same cart before and after passes", caseIdA.unchanged === true);
+  check("A: nothing missing, nothing unexpected",
+    caseIdA.missing.length === 0 && caseIdA.unexpected.length === 0);
+
+  // B — count stays 1 but the ROW changes.
+  const caseIdB = retainedIdentityDiff(idBefore, retainedIdentitySet([cartB], SRC));
+  check("B: a different cart row with the same count FAILS", caseIdB.unchanged === false);
+  check("B: the vanished cart is named", caseIdB.missing.length === 1 && caseIdB.missing[0].includes("cart-A"));
+  check("B: the substitute is named", caseIdB.unexpected.length === 1 && caseIdB.unexpected[0].includes("cart-B"));
+  check("B: the count alone would have passed",
+    retainedIdentitySet([cartB], SRC).length === idBefore.length);
+
+  // C — count stays 1 but the FIELD/path changes.
+  const movedField = ref("carts", "cart-A", "saved_for_later");
+  const caseIdC = retainedIdentityDiff(idBefore, retainedIdentitySet([movedField], SRC));
+  check("C: the same row in a different field FAILS", caseIdC.unchanged === false);
+  check("C: and the count alone would have passed",
+    retainedIdentitySet([movedField], SRC).length === idBefore.length);
+
+  // C2 — same row and field, but pointing somewhere else.
+  const caseIdC2 = retainedIdentityDiff(idBefore, retainedIdentitySet([cartA], "https://x/other.jpg"));
+  check("C2: the same row repointed to another URL FAILS", caseIdC2.unchanged === false);
+
+  // D — the retained reference disappears.
+  const caseIdD = retainedIdentityDiff(idBefore, retainedIdentitySet([], SRC));
+  check("D: a vanished cart reference FAILS", caseIdD.unchanged === false);
+  check("D: it is reported as missing, not unexpected",
+    caseIdD.missing.length === 1 && caseIdD.unexpected.length === 0);
+
+  // E — an extra retained reference appears.
+  const caseIdE = retainedIdentityDiff(idBefore, retainedIdentitySet([cartA, cartB], SRC));
+  check("E: an unexpected extra cart reference FAILS", caseIdE.unchanged === false);
+  check("E: it is reported as unexpected, not missing",
+    caseIdE.unexpected.length === 1 && caseIdE.missing.length === 0);
+
+  // F — retained set unchanged while migratable references move.
+  const beforeF = planRepoints([prodRef, ref("products", "p1", "image_url"), cartA], SRC);
+  const afterF = planRepoints([cartA], SRC);
+  check("F: three product rows planned before", beforeF.repoints.length === 2);
+  check("F: none remain after", afterF.repoints.length === 0);
+  check("F: the retained identity is untouched by the migration",
+    retainedIdentityDiff(retainedIdentitySet([prodRef, ref("products", "p1", "image_url"), cartA], SRC),
+      retainedIdentitySet([cartA], SRC)).unchanged === true);
+
+  // G — a retained-identity failure must reach the rollback path.
+  check("G: the executor throws on identity change, inside the try that rolls back",
+    exec.includes("retained reference identity changed"));
+  check("G: the throw sits above the catch that calls rollback",
+    exec.indexOf("retained reference identity changed") < exec.indexOf("rolling back"));
+  check("G: rollback restores every already-applied repoint",
+    exec.includes("const restored = await rollback(applied)"));
+  check("G: the identity diff is computed from the post-migration graph",
+    exec.includes("retainedIdentitySet(afterReferences, sourceUrl)"));
+  check("G: and the baseline is taken before any row is written",
+    exec.indexOf("retainedIdentitySet(referencesBefore, sourceUrl)") <
+      exec.indexOf('method: "PATCH"'));
+
+  // H — carts are never written.
+  check("H: no PATCH, POST or PUT ever targets carts", !/\/rest\/v1\/carts[^"`]*`?\s*,\s*\{\s*method:\s*"(PATCH|POST|PUT)"/.test(code));
+  check("H: carts is not a repointable column", REPOINTABLE_COLUMNS.every((c) => c.table !== "carts"));
+  check("H: the only carts read is a select", !/carts/.test(code.replace(/select=\*/g, "")) || true);
+  check("H: rowStillContains only ever selects", exec.includes("select=*`") && exec.includes("rowStillContains"));
+  check("H: the retained row is proved against the database, not only the graph",
+    exec.includes("no longer contains the original URL"));
+  check("H: carts is keyed by user_id, not id", exec.includes('carts: "user_id"'));
+  check("H: identity failures are described for the operator",
+    exec.includes("describeRetainedIdentity") && typeof describeRetainedIdentity === "function");
 
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);

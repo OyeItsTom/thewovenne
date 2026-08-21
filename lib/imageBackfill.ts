@@ -213,6 +213,62 @@ export function planRepoints(
 }
 
 /**
+ * A canonical identity for one retained reference.
+ *
+ * Counting retained references was not enough. "One before, one after" also
+ * describes a run in which one cart lost the reference and a different cart
+ * gained it — the count is preserved and the guarantee is not. Identity is what
+ * the invariant actually needs: the SAME row, in the SAME field, still pointing
+ * at the SAME original.
+ *
+ * Built from ReferenceHit rather than a parallel shape, so the graph stays the
+ * one description of what points where. The source URL is included because a
+ * verifier that only compared table/row/field would accept a row that had been
+ * repointed to something else entirely.
+ */
+export function retainedIdentity(
+  reference: { table: string; rowId: string; field: string },
+  sourceUrl: string
+): string {
+  return [reference.table, reference.rowId, reference.field, sourceUrl].join(" ");
+}
+
+/** The identity set for every retained reference, ordered so it compares stably. */
+export function retainedIdentitySet(
+  references: Array<{ table: string; rowId: string; field: string; live: boolean }>,
+  sourceUrl: string
+): string[] {
+  return references
+    .filter((reference) => reference.live && isRetainedReferenceTable(reference.table))
+    .map((reference) => retainedIdentity(reference, sourceUrl))
+    .sort();
+}
+
+/**
+ * Compare two retained-reference identity sets.
+ *
+ * Returns what changed rather than a boolean, because the operator needs to
+ * know WHICH guarantee broke: a reference that vanished means something wrote
+ * to a cart, and a reference that appeared means something else did.
+ */
+export function retainedIdentityDiff(
+  before: string[],
+  after: string[]
+): { missing: string[]; unexpected: string[]; unchanged: boolean } {
+  const b = new Set(before);
+  const a = new Set(after);
+  const missing = before.filter((id) => !a.has(id));
+  const unexpected = after.filter((id) => !b.has(id));
+  return { missing, unexpected, unchanged: missing.length === 0 && unexpected.length === 0 };
+}
+
+/** Human-readable form of an identity, for errors and the ledger. */
+export function describeRetainedIdentity(identity: string): string {
+  const [table, rowId, field, url] = identity.split(" ");
+  return `${table}/${rowId}.${field} -> ${url}`;
+}
+
+/**
  * Whether C3 may ever delete this original.
  *
  * THIS FUNCTION DELETES NOTHING. It is a predicate, living here so that the

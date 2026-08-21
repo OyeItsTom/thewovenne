@@ -40,8 +40,11 @@ import {
   assertBatchSize,
   assertExecuteFlags,
   manifestChecksum,
+  describeRetainedIdentity,
   migrationRefusal,
   planRepoints,
+  retainedIdentityDiff,
+  retainedIdentitySet,
   rollbackFor,
   type Manifest,
   type ManifestEntry,
@@ -297,9 +300,12 @@ async function migrateOne(batchId: string, entry: ManifestEntry, graph: ImageRef
     referencesBefore: entry.repoints.length, status: "pending",
   };
   const applied: Array<{ table: string; rowId: string; column: string; oldUrl: string; newUrl: string }> = [];
-  // How many references are meant to survive on the original, counted before
-  // anything is touched. Verification compares against this rather than zero.
-  const retainedBefore = planRepoints(graph.referencesFor(BUCKET, entry.sourcePath), sourceUrl).retained.length;
+  // WHICH references are meant to survive on the original, identified before
+  // anything is touched. Verification compares identities, not a count: "one
+  // before, one after" also describes one cart losing the reference while a
+  // different cart gains it.
+  const referencesBefore = graph.referencesFor(BUCKET, entry.sourcePath);
+  const retainedBefore = retainedIdentitySet(referencesBefore, sourceUrl);
 
   try {
     console.log(`  ── ${entry.sourcePath}`);
@@ -383,10 +389,8 @@ async function migrateOne(batchId: string, entry: ManifestEntry, graph: ImageRef
     // zero here would fail a migration that had in fact succeeded.
     const after = await fetchTables();
     const afterGraph = new ImageReferenceGraph(after.tables, after.unreadable);
-    const afterPlan = planRepoints(
-      afterGraph.referencesFor(BUCKET, entry.sourcePath),
-      publicUrl(entry.sourcePath)
-    );
+    const afterReferences = afterGraph.referencesFor(BUCKET, entry.sourcePath);
+    const afterPlan = planRepoints(afterReferences, publicUrl(entry.sourcePath));
     const stillOnSource = afterGraph.liveReferenceCount(BUCKET, entry.sourcePath);
     const onMaster = afterGraph.liveReferenceCount(BUCKET, key);
 
@@ -394,12 +398,26 @@ async function migrateOne(batchId: string, entry: ManifestEntry, graph: ImageRef
     if (afterPlan.repoints.length !== 0) {
       throw new Error(`${afterPlan.repoints.length} migratable reference(s) still point at the original`);
     }
-    // Everything C2 meant to leave must still be there. Losing one would mean
-    // something rewrote a cart, which this tool must never do.
-    if (afterPlan.retained.length !== retainedBefore) {
+    // Everything C2 meant to leave must still be there — the SAME row, the same
+    // field, still pointing at the same original. Losing one would mean
+    // something rewrote a cart, which this tool must never do; gaining one
+    // would mean a substitution the count would have hidden.
+    const retainedAfter = retainedIdentitySet(afterReferences, sourceUrl);
+    const retainedDiff = retainedIdentityDiff(retainedBefore, retainedAfter);
+    if (!retainedDiff.unchanged) {
+      const missing = retainedDiff.missing.map(describeRetainedIdentity).join(", ") || "none";
+      const unexpected = retainedDiff.unexpected.map(describeRetainedIdentity).join(", ") || "none";
       throw new Error(
-        `retained references changed: expected ${retainedBefore}, found ${afterPlan.retained.length}`
+        `retained reference identity changed — missing: ${missing}; unexpected: ${unexpected}`
       );
+    }
+    // And prove it directly against the row, not only through the graph: the
+    // retained row must still literally contain the original URL.
+    for (const retained of afterPlan.retained) {
+      const still = await rowStillContains(retained.table, retained.rowId, sourceUrl);
+      if (!still) {
+        throw new Error(`${retained.table}/${retained.rowId} no longer contains the original URL`);
+      }
     }
     if (afterPlan.blockers.length !== 0) {
       throw new Error(`${afterPlan.blockers.length} disqualifying reference(s) appeared during migration`);
@@ -457,6 +475,32 @@ async function rollback(
     }
   }
   return restored;
+}
+
+/**
+ * The primary key column for a table C2 never writes to but must read back.
+ *
+ * carts is keyed by user_id, not id — a detail that cost a 400 the first time
+ * this graph was built by hand.
+ */
+const RETAINED_TABLE_KEYS: Record<string, string> = { carts: "user_id" };
+
+/**
+ * Read one retained row straight from PostgREST and prove it still contains the
+ * original URL.
+ *
+ * The graph already says so, but the graph is something this process built. For
+ * the one guarantee that protects a customer's basket, ask the database.
+ */
+async function rowStillContains(table: string, rowId: string, url: string): Promise<boolean> {
+  const idColumn = RETAINED_TABLE_KEYS[table] ?? "id";
+  const response = await rest(
+    `/rest/v1/${table}?${idColumn}=eq.${encodeURIComponent(rowId)}&select=*`
+  );
+  if (!response.ok) return false;
+  const rows = (await response.json()) as unknown[];
+  if (rows.length !== 1) return false;
+  return JSON.stringify(rows[0]).includes(url);
 }
 
 function countByTable(applied: Array<{ table: string }>): Record<string, number> {
