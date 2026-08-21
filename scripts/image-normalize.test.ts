@@ -179,12 +179,18 @@ async function main() {
   check("and an unreadable alpha check keeps the lossless path", route.includes("return true;"));
 
   console.log("\n=== image correctness, measured on real encoded bytes ===");
-  for (const orientation of [1, 6, 8] as const) {
+  // withMetadata({orientation}), NOT withExif({IFD0:{Orientation}}) — the latter
+  // writes nothing, so the fixture came back as orientation 1 and these
+  // assertions passed vacuously. Orientation 3 is here because the existing
+  // catalogue contains two photographs that use it.
+  for (const orientation of [1, 3, 6, 8] as const) {
     const wide = await sharp({ create: { width: 800, height: 600, channels: 3, background: "#8a2b2b" } })
-      .withExif({ IFD0: { Orientation: String(orientation) } })
+      .withMetadata({ orientation })
       .jpeg()
       .toBuffer();
     const meta = await sharp(wide).metadata();
+    check(`EXIF ${orientation}: the fixture really carries it`, meta.orientation === orientation,
+      `got ${meta.orientation}`);
     const rotated = (meta.orientation ?? 1) >= 5;
     const display = { width: rotated ? meta.height! : meta.width!, height: rotated ? meta.width! : meta.height! };
     const out = await sharp(wide).rotate().toColourspace("srgb").withIccProfile("srgb")
