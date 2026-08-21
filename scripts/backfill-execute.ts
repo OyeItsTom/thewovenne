@@ -47,6 +47,14 @@ import {
   type ManifestEntry,
 } from "../lib/imageBackfill";
 import { displayDimensions, parseHeader } from "./backfill-images";
+import {
+  resolveVisibility,
+  selectVisibleBatch,
+  visibilityFor,
+  type GalleryRow,
+  type VersionRow,
+  type Visibility,
+} from "../lib/imageVisibility";
 
 const BUCKET = "product-images";
 sharp.cache(false);
@@ -133,6 +141,7 @@ async function fetchTables(): Promise<{ tables: TableRows[]; unreadable: string[
 /* ───────────────────────────────── planning ─────────────────────────────── */
 
 interface Plan extends ManifestEntry {
+  visibility: Visibility;
   displayWidth: number;
   displayHeight: number;
   targetWidth: number;
@@ -144,10 +153,17 @@ interface Plan extends ManifestEntry {
   estimatedMasterBytes: number;
 }
 
-async function buildPlan(limit: number): Promise<{ plans: Plan[]; graph: ImageReferenceGraph; objects: Awaited<ReturnType<typeof listObjects>> }> {
+async function buildPlan(limit: number): Promise<{ plans: Plan[]; graph: ImageReferenceGraph; objects: Awaited<ReturnType<typeof listObjects>>; invisible: number }> {
   const objects = await listObjects();
   const { tables, unreadable } = await fetchTables();
   const graph = new ImageReferenceGraph(tables, unreadable);
+
+  // Visibility comes from the same shape the storefront reads: published,
+  // active product_versions, with their gallery joined on product_version_id.
+  const versions = (tables.find((t) => t.table === "product_versions")?.rows ?? []) as unknown as VersionRow[];
+  const gallery = (tables.find((t) => t.table === "product_images")?.rows ?? []) as unknown as GalleryRow[];
+  const visibility = resolveVisibility(versions, gallery);
+  let invisible = 0;
   const plans: Plan[] = [];
   const now = new Date();
 
@@ -174,7 +190,10 @@ async function buildPlan(limit: number): Promise<{ plans: Plan[]; graph: ImageRe
 
     const target = targetSize(display);
     if (target.width === display.width && target.height === display.height) continue; // nothing to gain
+    const seen = visibilityFor(object.key, visibility, gallery, versions);
+    if (!seen.publiclyVisible) invisible += 1;
     plans.push({
+      visibility: seen,
       sourcePath: object.key, sourceBytes: object.bytes, repoints,
       displayWidth: display.width, displayHeight: display.height,
       targetWidth: target.width, targetHeight: target.height,
@@ -183,7 +202,7 @@ async function buildPlan(limit: number): Promise<{ plans: Plan[]; graph: ImageRe
       estimatedMasterBytes: Math.round(((target.width * target.height) / 1e6) * 0.375 * 1e6),
     });
   }
-  return { plans, graph, objects };
+  return { plans, graph, objects, invisible };
 }
 
 async function readRange(url: string, bytes = 262143): Promise<Buffer | null> {
@@ -197,28 +216,17 @@ async function readRange(url: string, bytes = 262143): Promise<Buffer | null> {
 }
 
 /**
- * A batch chosen to exercise the risky paths, not the easy ones.
+ * The batch, chosen by what a person can actually look at.
  *
- * Orientation is the axis that matters: a photograph stored sideways is the one
- * a careless migration ruins, so the first five deliberately span 6, 1, 3 and 8
- * — 3 included because the catalogue contains exactly two of them and an
- * untested rotation is a bad thing to discover in batch nine.
+ * Batch 1 was chosen for orientation coverage and produced four photographs
+ * nobody could see, which made the visual review it existed for impossible.
+ * Selection now runs through lib/imageVisibility, where public visibility
+ * outranks everything and orientation variety is only a tie-break among
+ * candidates that are already visible.
  */
-function chooseBatch(plans: Plan[]): Plan[] {
-  const chosen: Plan[] = [];
-  const take = (predicate: (p: Plan) => boolean) => {
-    const found = plans.find((p) => predicate(p) && !chosen.includes(p));
-    if (found) chosen.push(found);
-  };
-  take((p) => p.orientation === 6);
-  take((p) => p.orientation === 1);
-  take((p) => p.orientation === 3);
-  take((p) => p.orientation === 8);
-  // The fifth is the largest remaining, which is the most detailed textile and
-  // the biggest single saving available.
-  const rest = plans.filter((p) => !chosen.includes(p)).sort((a, b) => b.sourceBytes - a.sourceBytes);
-  if (rest[0]) chosen.push(rest[0]);
-  return chosen.slice(0, MAX_EXECUTION_BATCH);
+function chooseBatch(plans: Plan[]): { batch: Plan[]; skippedInvisible: number } {
+  const visibility = new Map(plans.map((p) => [p.sourcePath, p.visibility]));
+  return selectVisibleBatch(plans, visibility, MAX_EXECUTION_BATCH);
 }
 
 /* ─────────────────────────────── execution ──────────────────────────────── */
@@ -427,12 +435,16 @@ async function main() {
   }
 
   console.log("\n  PLAN ONLY. Nothing is written without --execute and its manifest.\n");
-  const { plans, objects } = await buildPlan(Infinity);
-  const batch = chooseBatch(plans);
+  const { plans, objects, invisible } = await buildPlan(Infinity);
+  const { batch, skippedInvisible } = chooseBatch(plans);
+  if (batch.length < MAX_EXECUTION_BATCH) {
+    console.log(`  Only ${batch.length} publicly visible candidate(s) available — a batch is NOT padded`);
+    console.log(`  with rows a customer cannot see. Review before continuing.\n`);
+  }
   assertBatchSize(batch.length);
 
   const MiB = (n: number) => (n / 1048576).toFixed(2);
-  console.log(`  eligible sources: ${plans.length}   proposing the first ${batch.length}\n`);
+  console.log(`  eligible sources: ${plans.length}   publicly visible: ${plans.length - invisible}   proposing ${batch.length}\n`);
   let sourceTotal = 0;
   let masterTotal = 0;
   for (const p of batch) {
@@ -440,6 +452,9 @@ async function main() {
     masterTotal += p.estimatedMasterBytes;
     console.log(`  SOURCE      ${p.sourcePath}`);
     console.log(`  CURRENT     ${MiB(p.sourceBytes)} MiB  ${p.displayWidth}x${p.displayHeight}  ${p.format}  EXIF orientation ${p.orientation ?? "none"}`);
+    console.log(`  PUBLIC      ${p.visibility.publiclyVisible ? "YES" : "no"} — ${p.visibility.reason}`);
+    console.log(`  PRODUCT     ${p.visibility.productName ?? "?"}   slug ${p.visibility.productSlug ?? "?"}`);
+    console.log(`  USE         ${p.visibility.isCover ? "COVER" : "gallery"}  index ${p.visibility.galleryIndex ?? "-"}  on card: ${p.visibility.onProductCard ? "yes" : "no"}  version ${String(p.visibility.publicVersionId).slice(0, 8)}`);
     console.log(`  REFERENCES  ${Object.entries(p.references).map(([t, n]) => `${t}: ${n}`).join("  ")}  (live ${p.liveReferences})`);
     console.log(`  WOULD WRITE ${p.repoints.length} row(s): ${p.repoints.map((r) => `${r.table}/${r.rowId.slice(0, 8)}`).join(", ")}`);
     console.log(`  MASTER      ${p.targetWidth}x${p.targetHeight}, ~${MiB(p.estimatedMasterBytes)} MiB`);
