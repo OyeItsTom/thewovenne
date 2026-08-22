@@ -29,6 +29,10 @@ import {
 import {
   MANIFEST_KIND,
   MAX_DELETION_BATCH,
+  isDeletionLedgerName,
+  validateDeletionEvidence,
+  type RawLedgerRecord,
+  type ValidatedDeletion,
   classifyForDeletion,
   deletionManifestChecksum,
   isEligible,
@@ -151,6 +155,46 @@ function ledgerPairings(): Map<string, LedgerPairing> {
   return out;
 }
 
+/* ─────────────────────── deletion evidence, read defensively ───────────── */
+
+/**
+ * Load the append-only deletion ledgers, without trusting them.
+ *
+ * These files are historical evidence and are never modified here — only read,
+ * line by line, with every parse failure discarded rather than repaired. A
+ * record that cannot be parsed is not a record; a file whose name does not
+ * match the executor's own pattern is not a ledger. Nothing in the contents is
+ * ever used as a path, a command, or anything but data to compare.
+ */
+function deletionLedgerRecords(): Map<string, { records: RawLedgerRecord[]; file: string }> {
+  const out = new Map<string, { records: RawLedgerRecord[]; file: string }>();
+  for (const file of readdirSync(LEDGER_DIR)) {
+    if (!isDeletionLedgerName(file)) continue;
+    let text: string;
+    try {
+      text = readFileSync(`${LEDGER_DIR}/${file}`, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      let row: RawLedgerRecord;
+      try {
+        row = JSON.parse(line) as RawLedgerRecord;
+      } catch {
+        continue; // a malformed line proves nothing
+      }
+      if (typeof row !== "object" || row === null) continue;
+      const key = row.sourcePath;
+      if (typeof key !== "string" || key.length === 0) continue;
+      const bucketed = out.get(key) ?? { records: [], file };
+      bucketed.records.push(row);
+      out.set(key, bucketed);
+    }
+  }
+  return out;
+}
+
 /* ──────────────────────────────── entry point ───────────────────────────── */
 
 const MiB = (n: number) => (n / 1048576).toFixed(2);
@@ -174,6 +218,16 @@ async function main() {
   const graph = new ImageReferenceGraph(tables, unreadable);
   const objects = await listObjects();
   const pairings = ledgerPairings();
+  const deletionLedgers = deletionLedgerRecords();
+  // Evidence is validated against what C2 recorded, never accepted on its own.
+  const deletionProof = (p: LedgerPairing): ValidatedDeletion | null => {
+    const found = deletionLedgers.get(p.sourcePath);
+    if (!found) return null;
+    return validateDeletionEvidence(found.records, {
+      sourcePath: p.sourcePath, sourceBytes: p.sourceBytes, sourceChecksum: p.sourceChecksum,
+      masterPath: p.masterPath, normalizerVersion: p.normalizerVersion,
+    }, found.file);
+  };
 
   const bucketBytes = [...objects.values()].reduce((s, b) => s + b, 0);
   const masters = [...objects.keys()].filter((k) => /-v\d+\.(jpg|webp|png)$/i.test(k));
@@ -205,6 +259,7 @@ async function main() {
       expectedNormalizerVersion: NORMALIZER_VERSION,
       masterLiveReferences: graph.liveReferenceCount(BUCKET, pairing.masterPath),
       ledgerVerified: true,
+      deletionEvidence: deletionProof(pairing),
       graphIsComplete: graph.isComplete,
       liveReferencesOnSource: live.map((r) => ({ table: r.table, rowId: r.rowId, field: r.field })),
       historicalReferencesOnSource: historical.length,
@@ -224,7 +279,19 @@ async function main() {
     console.log(`  ${state.padEnd(32)} ${String(group.length).padStart(3)}   ${MiB(bytes).padStart(9)} MiB`);
   }
 
-  const blocked = verdicts.filter((v) => !isEligible(v.state));
+  // Already done is not the same as in the way. C3_DELETED is finished work and
+  // is reported as such, apart from the things still standing between an
+  // original and its deletion.
+  const done = verdicts.filter((v) => v.state === "C3_DELETED");
+  if (done.length) {
+    console.log("\n  ── already deleted by C3 (terminal, not reclaimable again) ──\n");
+    for (const v of done) {
+      console.log(`  ${v.pairing.sourcePath}  (${MiB(v.pairing.sourceBytes)} MiB reclaimed)`);
+      console.log(`     ${v.reason}`);
+    }
+  }
+
+  const blocked = verdicts.filter((v) => !isEligible(v.state) && v.state !== "C3_DELETED");
   if (blocked.length) {
     console.log("\n  ── blocked, with the reason ──\n");
     for (const v of blocked) {
@@ -236,7 +303,11 @@ async function main() {
 
   const eligible = verdicts.filter((v) => isEligible(v.state));
   const eligibleBytes = eligible.reduce((s, v) => s + v.pairing.sourceBytes, 0);
-  console.log(`\n  ELIGIBLE ${eligible.length} original(s), ${MiB(eligibleBytes)} MiB reclaimable in total.`);
+  const doneBytes = done.reduce((s, v) => s + v.pairing.sourceBytes, 0);
+  console.log(`\n  ELIGIBLE  ${eligible.length} original(s), ${MiB(eligibleBytes)} MiB still reclaimable.`);
+  if (done.length) {
+    console.log(`  DELETED   ${done.length} original(s), ${MiB(doneBytes)} MiB already reclaimed by C3.`);
+  }
 
   /* ── manifest: only the first MAX_DELETION_BATCH, largest first ── */
   const chosen = eligible.slice(0, MAX_DELETION_BATCH);

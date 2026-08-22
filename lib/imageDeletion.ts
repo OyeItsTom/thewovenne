@@ -26,6 +26,7 @@ import { MigrationRefused, assertValidBatchId, isRetainedReferenceTable } from "
 
 export const C3_STATES = [
   "C3_DELETE_ELIGIBLE",
+  "C3_DELETED",
   "C3_BLOCKED_CART",
   "C3_BLOCKED_LIVE_REFERENCE",
   "C3_BLOCKED_MASTER_MISSING",
@@ -85,6 +86,29 @@ export interface DeletionCandidate {
   historicalReferencesOnSource: number;
   /** References the graph could not classify. Any at all means stop. */
   unknownReferencesOnSource: number;
+
+  /**
+   * Proof that C3 itself deleted this original, if it did.
+   *
+   * Only ever set by validateDeletionEvidence(). Null means "no trustworthy
+   * evidence", which is the same as no evidence: an absent original with a
+   * null here is a surprise, not a completed job.
+   */
+  deletionEvidence?: ValidatedDeletion | null;
+}
+
+/** A deletion this tool can prove it performed, and where the proof lives. */
+export interface ValidatedDeletion {
+  sourcePath: string;
+  batchId: string;
+  manifestChecksum: string;
+  sourceBytes: number;
+  sourceChecksum: string;
+  masterPath: string;
+  normalizerVersion: number;
+  confirmedAt: string;
+  /** Basename of the append-only ledger that proves it. */
+  ledgerFile: string;
 }
 
 export interface C3Verdict {
@@ -139,8 +163,23 @@ export function classifyForDeletion(c: DeletionCandidate): C3Verdict {
     return no("C3_MANUAL_REVIEW", "HEIC/HEIF is out of scope for this tooling");
   }
   if (!c.sourceExists) {
+    // Absent is not one situation but two, and conflating them was a real
+    // reporting bug: after the first C3 batch the five originals this tool had
+    // just deleted on purpose were reported as having been removed by
+    // "something outside this tooling". An operator reading that would have
+    // been chasing an intruder that was us.
+    //
+    // The distinction is evidence, not intent. C3_DELETED requires a complete,
+    // internally consistent, append-only record that THIS original was deleted
+    // by an authorised run. Anything less is still a surprise.
+    if (c.deletionEvidence) {
+      return no("C3_DELETED",
+        `deleted by C3 batch "${c.deletionEvidence.batchId}" at ${c.deletionEvidence.confirmedAt} ` +
+        `(evidence: ${c.deletionEvidence.ledgerFile})`);
+    }
     return no("C3_MANUAL_REVIEW",
-      "the original is no longer in the bucket — something outside this tooling removed it");
+      "the original is absent and no valid C3 deletion evidence accounts for it — " +
+      "something outside this tooling removed it");
   }
 
   // ── the replacement must be real, readable and current ──
@@ -435,4 +474,145 @@ export interface PreDeleteEvidence {
   liveReferenceIdentitiesOnMaster: LiveReferenceIdentity[];
   liveReferencesOnMaster: number;
   historicalReferencesOnSource: number;
+}
+
+/* ─────────────────────── deletion-evidence validation ──────────────────── */
+
+/**
+ * What a C2 ledger says an original was, so evidence can be checked against it.
+ *
+ * The deletion ledger is not trusted on its own. It has to agree with the C2
+ * migration record — same bytes, same digest, same master — because a ledger
+ * that contradicts the migration it follows is describing a different object.
+ */
+export interface ExpectedDeletionSubject {
+  sourcePath: string;
+  sourceBytes: number;
+  sourceChecksum: string;
+  masterPath: string;
+  normalizerVersion: number;
+}
+
+/** One line of a deletion ledger, before anything has been proven about it. */
+export interface RawLedgerRecord {
+  status?: unknown;
+  sourcePath?: unknown;
+  batchId?: unknown;
+  manifestChecksum?: unknown;
+  timestamp?: unknown;
+  evidence?: unknown;
+  [k: string]: unknown;
+}
+
+const isNonEmptyString = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+const isSha256 = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
+
+/**
+ * Decide whether a set of ledger records proves this exact original was
+ * deliberately deleted by C3.
+ *
+ * Everything here is a reason to say no. The question being answered is not
+ * "does this path appear in a ledger" — a path appears in a ledger the moment
+ * a run *considers* it — but "did a complete, self-consistent, authorised run
+ * delete this specific object". The three statuses must all be present for the
+ * same source, in one batch, agreeing with each other and with what C2
+ * recorded about the object.
+ *
+ * The failure mode this guards against is a REFUSED or FAILED record, or a
+ * half-written sequence from an interrupted run, being read as completion. An
+ * original that is absent for any reason this cannot explain stays
+ * C3_MANUAL_REVIEW, because an unexplained missing photograph is exactly the
+ * thing somebody needs to look at.
+ *
+ * Returns null when the evidence does not hold. Never throws on bad input:
+ * malformed records are simply not proof.
+ */
+export function validateDeletionEvidence(
+  records: RawLedgerRecord[],
+  expected: ExpectedDeletionSubject,
+  ledgerFile: string
+): ValidatedDeletion | null {
+  if (!Array.isArray(records) || records.length === 0) return null;
+  if (!isNonEmptyString(ledgerFile)) return null;
+
+  // Discard anything that is not an object before looking at a field. A ledger
+  // line that parsed to null, a number or a string is not a record, and asking
+  // it for .sourcePath would throw — which for a function whose whole job is to
+  // fail closed would be the one unacceptable outcome.
+  const wellFormed = records.filter(
+    (r): r is RawLedgerRecord => typeof r === "object" && r !== null && !Array.isArray(r));
+
+  // Only records naming this exact path. No prefix matching, no normalising.
+  const mine = wellFormed.filter((r) => r.sourcePath === expected.sourcePath);
+  if (mine.length === 0) return null;
+
+  // A failure or refusal anywhere for this source disqualifies it outright,
+  // even if a confirmation also exists: that combination is contradictory and
+  // wants a person, not a classification.
+  if (mine.some((r) => r.status === "FAILED" || r.status === "REFUSED")) return null;
+
+  const confirmed = mine.filter((r) => r.status === "DELETE_CONFIRMED");
+  const requested = mine.filter((r) => r.status === "DELETE_REQUESTED");
+  const verified = mine.filter((r) => r.status === "PREDELETE_VERIFIED");
+
+  // The full sequence, exactly once each. A second confirmation for the same
+  // source in one ledger is not reassurance, it is an inconsistency.
+  if (confirmed.length !== 1 || requested.length !== 1 || verified.length !== 1) return null;
+
+  const [v] = verified;
+  const [rq] = requested;
+  const [cf] = confirmed;
+
+  // One batch, one manifest, across all three.
+  const batchId = v.batchId;
+  const manifestChecksum = v.manifestChecksum;
+  if (!isNonEmptyString(batchId) || !isNonEmptyString(manifestChecksum)) return null;
+  if (rq.batchId !== batchId || cf.batchId !== batchId) return null;
+  if (rq.manifestChecksum !== manifestChecksum || cf.manifestChecksum !== manifestChecksum) return null;
+
+  // The evidence block, which only PREDELETE_VERIFIED carries.
+  const e = v.evidence;
+  if (typeof e !== "object" || e === null) return null;
+  const ev = e as Record<string, unknown>;
+  if (ev.sourcePath !== expected.sourcePath) return null;
+  if (ev.batchId !== batchId || ev.manifestChecksum !== manifestChecksum) return null;
+
+  // It must agree with what C2 recorded about this photograph.
+  if (ev.sourceBytes !== expected.sourceBytes) return null;
+  if (!isSha256(ev.sourceChecksum) || ev.sourceChecksum !== expected.sourceChecksum) return null;
+  if (ev.masterPath !== expected.masterPath) return null;
+  if (ev.normalizerVersion !== expected.normalizerVersion) return null;
+  // The whole justification for deleting an original is that nothing pointed
+  // at it. Evidence saying otherwise is not evidence of a safe deletion.
+  if (ev.liveReferencesOnSource !== 0) return null;
+
+  const confirmedAt = cf.timestamp;
+  if (!isNonEmptyString(confirmedAt)) return null;
+
+  return {
+    sourcePath: expected.sourcePath,
+    batchId,
+    manifestChecksum,
+    sourceBytes: expected.sourceBytes,
+    sourceChecksum: expected.sourceChecksum,
+    masterPath: expected.masterPath,
+    normalizerVersion: expected.normalizerVersion,
+    confirmedAt,
+    ledgerFile,
+  };
+}
+
+/**
+ * The filename shape a deletion ledger must have to be read at all.
+ *
+ * Written by the executor as `deleted-<batchId>-<timestamp>.ndjson`. Anything
+ * else in the report directory is not deletion evidence, whatever it contains,
+ * and a name that could traverse out of that directory is not read.
+ */
+export const DELETION_LEDGER_PATTERN = /^deleted-[A-Za-z0-9._-]+\.ndjson$/;
+
+export function isDeletionLedgerName(name: string): boolean {
+  if (typeof name !== "string") return false;
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  return DELETION_LEDGER_PATTERN.test(name);
 }
