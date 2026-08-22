@@ -20,7 +20,7 @@
  * deleting a file somebody still renders costs a photograph that does not
  * exist anywhere else. Those are not comparable mistakes.
  */
-import { MigrationRefused, isRetainedReferenceTable } from "./imageBackfill";
+import { MigrationRefused, assertValidBatchId, isRetainedReferenceTable } from "./imageBackfill";
 
 /* ─────────────────────────────── classification ─────────────────────────── */
 
@@ -216,6 +216,16 @@ export const HISTORICAL_REFERENCES_DECISION = "recorded, not blocking" as const;
 export interface DeletionManifestEntry {
   sourcePath: string;
   sourceBytes: number;
+  /**
+   * SHA-256 of the original's bytes, as recorded by C2 at migration time.
+   *
+   * This is what makes deletion provably about the right photograph. Path and
+   * byte length can coincide; the digest cannot. The executor re-downloads the
+   * object and recomputes this immediately before deleting, so a source that
+   * was replaced in place since the plan cannot be mistaken for the one that
+   * was migrated and reviewed.
+   */
+  sourceChecksum: string;
   masterPath: string;
   /**
    * The reference state this plan was made against, so that a later execution
@@ -226,7 +236,17 @@ export interface DeletionManifestEntry {
   historicalReferencesOnSource: number;
 }
 
+/**
+ * Tags the fingerprint so a C3 manifest can never be mistaken for a C2 one.
+ *
+ * The two have different entry shapes and wildly different consequences; a
+ * checksum collision across the kinds would be a bad way to find that out.
+ */
+export const MANIFEST_KIND = "c3-delete" as const;
+export const MANIFEST_VERSION = 2;
+
 export interface DeletionManifest {
+  kind: typeof MANIFEST_KIND;
   batchId: string;
   createdAt: string;
   normalizerVersion: number;
@@ -261,13 +281,14 @@ export function deletionManifestChecksum(
     .map((e) => ({
       sourcePath: e.sourcePath,
       sourceBytes: e.sourceBytes,
+      sourceChecksum: e.sourceChecksum,
       masterPath: e.masterPath,
       expectedLiveReferencesOnSource: e.expectedLiveReferencesOnSource,
       expectedLiveReferencesOnMaster: e.expectedLiveReferencesOnMaster,
       historicalReferencesOnSource: e.historicalReferencesOnSource,
     }))
     .sort((a, b) => a.sourcePath.localeCompare(b.sourcePath));
-  return hash(JSON.stringify({ version: 1, kind: "c3-delete", batchId: subject.batchId,
+  return hash(JSON.stringify({ version: MANIFEST_VERSION, kind: MANIFEST_KIND, batchId: subject.batchId,
     normalizerVersion: subject.normalizerVersion, entries }));
 }
 
@@ -290,4 +311,128 @@ export function assertDeletionBatchSize(count: number): void {
       "batch_too_large"
     );
   }
+}
+
+/* ────────────────────────── executor-side guards ────────────────────────── */
+
+/**
+ * The flags a C3 run must carry. Absent any one of them, nothing happens.
+ *
+ * The acknowledgement is deliberately NOT C2's. C2's says originals are
+ * retained, which is the opposite of what this does; reusing it would let a
+ * command line that means "keep the photograph" delete it. Muscle memory from
+ * five C2 batches is a real hazard, so the two strings share no prefix beyond
+ * the flag convention itself.
+ */
+export const DELETE_FLAGS = {
+  execute: "--execute",
+  batchId: "--batch-id",
+  manifest: "--source-manifest",
+  acknowledgement: "--yes-i-understand-original-deletion-is-permanent",
+} as const;
+
+export function assertDeleteFlags(argv: string[]): { batchId: string; manifestPath: string } {
+  const has = (flag: string) => argv.includes(flag);
+  const valueOf = (flag: string) => {
+    const index = argv.indexOf(flag);
+    return index >= 0 ? argv[index + 1] : undefined;
+  };
+  if (!has(DELETE_FLAGS.execute)) {
+    throw new MigrationRefused("Not an execution run.", "not_execute");
+  }
+  if (!has(DELETE_FLAGS.acknowledgement)) {
+    throw new MigrationRefused(
+      `Deletion also needs ${DELETE_FLAGS.acknowledgement}.`,
+      "missing_acknowledgement"
+    );
+  }
+  // C2's acknowledgement must not work here, even alongside the right one:
+  // its presence means somebody is running a half-remembered C2 command.
+  if (has("--yes-i-understand-originals-are-retained")) {
+    throw new MigrationRefused(
+      "That is the C2 acknowledgement, and C2 retains originals. C3 deletes them.",
+      "wrong_acknowledgement"
+    );
+  }
+  const batchId = valueOf(DELETE_FLAGS.batchId);
+  const manifestPath = valueOf(DELETE_FLAGS.manifest);
+  if (!batchId) throw new MigrationRefused(`${DELETE_FLAGS.batchId} is required.`, "missing_batch_id");
+  if (!manifestPath) {
+    throw new MigrationRefused(`${DELETE_FLAGS.manifest} is required.`, "missing_manifest");
+  }
+  return { batchId: assertValidBatchId(batchId), manifestPath };
+}
+
+/**
+ * The last thing standing between a path and `.remove()`.
+ *
+ * Called immediately before the delete with the exact string that will be
+ * sent. Everything it rejects is something that should already have been
+ * caught upstream — which is the point: this is the check that does not depend
+ * on any earlier check having run.
+ */
+export function assertSafeToDeletePath(sourcePath: string, masterPath: string): void {
+  if (typeof sourcePath !== "string" || sourcePath.length === 0) {
+    throw new MigrationRefused("A deletion needs an exact source path.", "unsafe_delete_path");
+  }
+  if (looksLikeMaster(sourcePath)) {
+    throw new MigrationRefused(
+      `${sourcePath} is a normalised master. C3 deletes originals, never masters.`,
+      "unsafe_delete_path"
+    );
+  }
+  if (sourcePath === masterPath) {
+    throw new MigrationRefused(
+      "the source and its master are the same object — deleting it would delete the replacement",
+      "unsafe_delete_path"
+    );
+  }
+  // No prefix, no folder, no wildcard, no traversal. One object, named in full.
+  if (sourcePath.endsWith("/") || sourcePath.includes("*") || sourcePath.includes("..")) {
+    throw new MigrationRefused(
+      `${sourcePath} is not an exact single object path.`, "unsafe_delete_path"
+    );
+  }
+  if (!sourcePath.startsWith("products/")) {
+    throw new MigrationRefused(
+      `${sourcePath} is outside the products/ prefix C2 migrated from.`, "unsafe_delete_path"
+    );
+  }
+  if (/\.(heic|heif)$/i.test(sourcePath)) {
+    throw new MigrationRefused(`${sourcePath} is HEIC/HEIF, which is out of scope.`, "unsafe_delete_path");
+  }
+}
+
+/** Where an object is in its deletion, recorded before and after every step. */
+export type DeletionStatus =
+  | "PREDELETE_VERIFIED"
+  | "DELETE_REQUESTED"
+  | "DELETE_CONFIRMED"
+  | "ALREADY_ABSENT"
+  | "REFUSED"
+  | "FAILED";
+
+/**
+ * What was true immediately before the delete request was sent.
+ *
+ * Persisted BEFORE the request, never after. If this cannot be written, the
+ * deletion does not happen — an irreversible act with no record of what it
+ * removed is worse than a full bucket.
+ */
+export interface PreDeleteEvidence {
+  timestamp: string;
+  batchId: string;
+  manifestChecksum: string;
+  sourcePath: string;
+  sourceBytes: number;
+  sourceChecksum: string;
+  sourceDimensions: string | null;
+  masterPath: string;
+  masterBytes: number | null;
+  masterDimensions: string | null;
+  normalizerVersion: number;
+  liveReferencesOnSource: 0;
+  liveReferenceIdentitiesOnMaster: LiveReferenceIdentity[];
+  liveReferencesOnMaster: number;
+  historicalReferencesOnSource: number;
 }

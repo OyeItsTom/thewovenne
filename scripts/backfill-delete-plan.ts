@@ -27,6 +27,7 @@ import {
   MigrationRefused,
 } from "../lib/imageBackfill";
 import {
+  MANIFEST_KIND,
   MAX_DELETION_BATCH,
   classifyForDeletion,
   deletionManifestChecksum,
@@ -109,8 +110,12 @@ async function readable(url: string): Promise<boolean> {
 interface LedgerPairing {
   sourcePath: string;
   sourceBytes: number;
+  sourceChecksum: string;
+  sourceDimensions: string | null;
   sourceFormat: string | null;
   masterPath: string;
+  masterBytes: number | null;
+  masterDimensions: string | null;
   normalizerVersion: number;
 }
 
@@ -129,12 +134,16 @@ function ledgerPairings(): Map<string, LedgerPairing> {
       if (!line) continue;
       const row = JSON.parse(line);
       if (row.status !== "migrated" || row.verification !== "passed") continue;
-      if (!row.masterPath) continue;
+      if (!row.masterPath || !row.sourceChecksum) continue;
       out.set(row.sourcePath, {
         sourcePath: row.sourcePath,
         sourceBytes: row.sourceBytes,
+        sourceChecksum: row.sourceChecksum,
+        sourceDimensions: row.sourceDimensions ?? null,
         sourceFormat: row.sourceFormat ?? null,
         masterPath: row.masterPath,
+        masterBytes: row.masterBytes ?? null,
+        masterDimensions: row.masterDimensions ?? null,
         normalizerVersion: row.normalizerVersion,
       });
     }
@@ -234,6 +243,7 @@ async function main() {
   const entries: DeletionManifestEntry[] = chosen.map((v) => ({
     sourcePath: v.pairing.sourcePath,
     sourceBytes: v.pairing.sourceBytes,
+    sourceChecksum: v.pairing.sourceChecksum,
     masterPath: v.pairing.masterPath,
     expectedLiveReferencesOnSource: v.candidate.liveReferencesOnSource.length,
     expectedLiveReferencesOnMaster: v.candidate.masterLiveReferences,
@@ -246,6 +256,7 @@ async function main() {
   }
 
   const manifest: DeletionManifest = {
+    kind: MANIFEST_KIND,
     batchId, createdAt: new Date().toISOString(), normalizerVersion: NORMALIZER_VERSION,
     executable: false,
     entries,
