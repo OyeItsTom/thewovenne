@@ -114,6 +114,73 @@ export function assertBatchSize(count: number): void {
   }
 }
 
+/* ────────────────────────────── batch identity ──────────────────────────── */
+
+/**
+ * The longest batch id we will accept.
+ *
+ * Long enough for a descriptive name ("c2-batch-5-orientation-sweep"), short
+ * enough that it cannot be used to build a pathological filename.
+ */
+export const MAX_BATCH_ID_LENGTH = 64;
+
+/**
+ * Characters a batch id may contain. A strict allowlist, not a denylist.
+ *
+ * This is the whole defence. Path separators, "..", control characters, NUL,
+ * whitespace and every shell metacharacter are excluded by not being on the
+ * list, so the id can be interpolated into a filename without escaping. The
+ * explicit checks below exist for better error messages and to keep the
+ * intent legible if this pattern is ever loosened.
+ */
+export const BATCH_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * A batch id is metadata that must also be safe as a filename component.
+ *
+ * It identifies which approved batch a manifest is for, and since PR #137 it
+ * is part of the manifest checksum — so an id that is silently mangled or
+ * that escapes the report directory is a correctness problem, not only a
+ * tidiness one. Everything here is a refusal.
+ */
+export function assertValidBatchId(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new MigrationRefused("A batch id is required and must be a string.", "invalid_batch_id");
+  }
+  if (value.length === 0) {
+    throw new MigrationRefused("A batch id must not be empty.", "invalid_batch_id");
+  }
+  if (value.trim().length === 0) {
+    throw new MigrationRefused("A batch id must not be only whitespace.", "invalid_batch_id");
+  }
+  if (value.length > MAX_BATCH_ID_LENGTH) {
+    throw new MigrationRefused(
+      `A batch id may be at most ${MAX_BATCH_ID_LENGTH} characters; got ${value.length}.`,
+      "invalid_batch_id"
+    );
+  }
+  if (!BATCH_ID_PATTERN.test(value)) {
+    throw new MigrationRefused(
+      `A batch id may contain only letters, digits, dot, underscore and hyphen; got ${JSON.stringify(value)}.`,
+      "invalid_batch_id"
+    );
+  }
+  // Unreachable through BATCH_ID_PATTERN, which admits no separators. Kept so
+  // that a future widening of the pattern cannot quietly reintroduce traversal.
+  if (value.includes("..")) {
+    throw new MigrationRefused('A batch id must not contain "..".', "invalid_batch_id");
+  }
+  if (value.startsWith(".")) {
+    throw new MigrationRefused("A batch id must not start with a dot.", "invalid_batch_id");
+  }
+  return value;
+}
+
+/** The manifest path for a batch id. Validates before building the path. */
+export function manifestPathFor(batchId: string, directory = "reports/image-backfill"): string {
+  return `${directory}/manifest-${assertValidBatchId(batchId)}.json`;
+}
+
 /* ─────────────────────────────── the manifest ───────────────────────────── */
 
 export interface ManifestEntry {
@@ -132,18 +199,71 @@ export interface Manifest {
 }
 
 /**
- * A stable fingerprint of what the plan expected to find.
+ * Write a manifest, refusing to replace one that is already there.
+ *
+ * A manifest is the object an operator reviews and then names on an execution
+ * command line. Regenerating over the top of one would swap the plan out from
+ * under that approval — the reviewed file and the executed file would differ
+ * while keeping the same name. Batch ids are therefore single-use.
+ *
+ * The writer is injected so this is testable without reaching for the real
+ * report directory; the caller supplies an exclusive ("wx") write.
+ */
+export function writeManifestExclusive(
+  path: string,
+  manifest: Manifest,
+  write: (path: string, data: string) => void
+): void {
+  try {
+    write(path, JSON.stringify(manifest, null, 1));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new MigrationRefused(
+        `${path} already exists. Batch ids are single-use: choose a new one, or move the ` +
+          "existing manifest aside deliberately if that batch was abandoned.",
+        "manifest_exists"
+      );
+    }
+    throw error;
+  }
+}
+
+/** Exactly the manifest fields the checksum is required to make immutable. */
+export interface ChecksumSubject {
+  batchId: string;
+  normalizerVersion: number;
+  entries: ManifestEntry[];
+}
+
+/**
+ * A stable fingerprint of what the plan expected to find, and who it was for.
  *
  * Recomputed against live data immediately before execution: if a photograph
  * was replaced, a gallery reordered or a draft edited in the meantime, the
  * checksum stops matching and the run aborts rather than writing a plan that
  * describes a catalogue that no longer exists.
+ *
+ * BATCH IDENTITY IS PART OF THE FINGERPRINT. It did not used to be, and that
+ * was a real hole: the checksum covered only the entries, so a generated
+ * manifest could be renamed to another batch id — by hand, or by a careless
+ * copy — and still verify. Batch identity is what an operator approves, so it
+ * has to be what the checksum protects. normalizerVersion is included for the
+ * same reason: a manifest planned under one normalizer must not be executed
+ * under another.
+ *
+ * `createdAt` is deliberately NOT covered. It is a record of when the plan ran,
+ * not an input to what the run does, and hashing it would make the fingerprint
+ * unreproducible for the same plan.
+ *
+ * The entry material below is byte-for-byte what it always was, only nested
+ * under a key. The envelope is versioned so that a checksum computed by an
+ * older build cannot be mistaken for one computed by this one.
  */
 export function manifestChecksum(
-  entries: ManifestEntry[],
+  subject: ChecksumSubject,
   hash: (input: string) => string
 ): string {
-  const canonical = entries
+  const entries = subject.entries
     .map((e) => ({
       sourcePath: e.sourcePath,
       sourceBytes: e.sourceBytes,
@@ -152,6 +272,12 @@ export function manifestChecksum(
         .sort(),
     }))
     .sort((a, b) => a.sourcePath.localeCompare(b.sourcePath));
+  const canonical = {
+    version: 2,
+    batchId: subject.batchId,
+    normalizerVersion: subject.normalizerVersion,
+    entries,
+  };
   return hash(JSON.stringify(canonical));
 }
 
@@ -396,5 +522,10 @@ export function assertExecuteFlags(argv: string[]): { batchId: string; manifestP
   if (!manifestPath) {
     throw new MigrationRefused(`${EXECUTE_FLAGS.manifest} is required.`, "missing_manifest");
   }
-  return { batchId, manifestPath };
+  // The id the operator names on the command line is held to the same rule as
+  // the id the planner wrote. There is no flag that relaxes this and no flag
+  // that lets execution proceed against a manifest built for another batch:
+  // the id is checked here, again against the manifest, and again through the
+  // checksum, which now covers it.
+  return { batchId: assertValidBatchId(batchId), manifestPath };
 }

@@ -9,7 +9,7 @@
  * rows back, not by restoring something that no longer exists. Deleting
  * originals is C3, after somebody has looked at the pictures.
  *
- *   npx tsx scripts/backfill-execute.ts                     # plan, writes a manifest
+ *   npx tsx scripts/backfill-execute.ts --batch-id c2-batch-5   # plan, writes a manifest
  *   npx tsx scripts/backfill-execute.ts --execute \
  *     --batch-id batch-1 --source-manifest <path> \
  *     --yes-i-understand-originals-are-retained
@@ -39,6 +39,9 @@ import {
   MigrationRefused,
   assertBatchSize,
   assertExecuteFlags,
+  assertValidBatchId,
+  manifestPathFor,
+  writeManifestExclusive,
   manifestChecksum,
   describeRetainedIdentity,
   migrationRefusal,
@@ -58,6 +61,9 @@ import {
   type VersionRow,
   type Visibility,
 } from "../lib/imageVisibility";
+
+/** The planner's required batch-id flag; the executor's lives in EXECUTE_FLAGS. */
+const BATCH_ID_FLAG = "--batch-id";
 
 const BUCKET = "product-images";
 sharp.cache(false);
@@ -246,16 +252,35 @@ interface LedgerRecord extends Record<string, unknown> {
 }
 
 async function execute(batchId: string, manifestPath: string) {
+  // Every one of these is a refusal, and none of them can be waived: there is
+  // no --force, no --skip-verify, no environment variable. A run that cannot
+  // prove it is the approved run does not happen.
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest;
   assertBatchSize(manifest.entries.length);
+
+  // The id on the command line is the authority. The manifest must agree with
+  // it, and the manifest must agree with itself.
+  assertValidBatchId(batchId);
+  assertValidBatchId(manifest.batchId);
   if (manifest.batchId !== batchId) {
     throw new MigrationRefused(
       `manifest is for batch "${manifest.batchId}", not "${batchId}"`, "batch_id_mismatch");
   }
+  // Checked against THIS build's constant, not against whatever the file says
+  // about itself.
   if (manifest.normalizerVersion !== NORMALIZER_VERSION) {
     throw new MigrationRefused("manifest was built by a different normalizer version", "version_mismatch");
   }
-  if (manifestChecksum(manifest.entries, sha256) !== manifest.checksum) {
+
+  // The stored checksum is never trusted as an assertion of integrity; it is
+  // only ever compared against one this process computes itself, over the
+  // fields it just validated. Editing batchId, normalizerVersion or any entry
+  // after generation lands here.
+  const selfChecksum = manifestChecksum(
+    { batchId: manifest.batchId, normalizerVersion: manifest.normalizerVersion, entries: manifest.entries },
+    sha256
+  );
+  if (selfChecksum !== manifest.checksum) {
     throw new MigrationRefused("manifest checksum does not match its own contents", "manifest_tampered");
   }
 
@@ -270,7 +295,13 @@ async function execute(batchId: string, manifestPath: string) {
     const { repoints } = planRepoints(references, publicUrl(entry.sourcePath));
     return { sourcePath: entry.sourcePath, sourceBytes: entry.sourceBytes, repoints };
   });
-  if (manifestChecksum(liveEntries, sha256) !== manifest.checksum) {
+  // Recomputed from live rows, under the command-line batch id and this
+  // build's normalizer version, and compared to the same stored checksum.
+  const liveChecksum = manifestChecksum(
+    { batchId, normalizerVersion: NORMALIZER_VERSION, entries: liveEntries },
+    sha256
+  );
+  if (liveChecksum !== manifest.checksum) {
     throw new MigrationRefused(
       "live data no longer matches the manifest — replan and review before executing", "data_moved");
   }
@@ -519,6 +550,21 @@ async function main() {
     return;
   }
 
+  // A manifest is an object an operator approves and later executes by name,
+  // so the name is required input, not something this script invents. It used
+  // to derive "batch-<date>-1" on its own, which produced ids nobody had
+  // approved and tempted the obvious fix of renaming the file afterwards.
+  const explicitBatchId = argv[argv.indexOf(BATCH_ID_FLAG) + 1];
+  if (!argv.includes(BATCH_ID_FLAG) || !explicitBatchId) {
+    throw new MigrationRefused(
+      `${BATCH_ID_FLAG} <id> is required, e.g. ${BATCH_ID_FLAG} c2-batch-5. ` +
+        "The batch id is fixed when the manifest is generated and is covered by its checksum; " +
+        "renaming a manifest afterwards is not a supported operation.",
+      "missing_batch_id"
+    );
+  }
+  const batchId = assertValidBatchId(explicitBatchId);
+
   console.log("\n  PLAN ONLY. Nothing is written without --execute and its manifest.\n");
   const { plans, objects, invisible } = await buildPlan(Infinity);
   const { batch, skippedInvisible } = chooseBatch(plans);
@@ -549,14 +595,17 @@ async function main() {
   const entries: ManifestEntry[] = batch.map((p) => ({
     sourcePath: p.sourcePath, sourceBytes: p.sourceBytes, repoints: p.repoints,
   }));
-  const batchId = `batch-${new Date().toISOString().slice(0, 10)}-1`;
   const manifest: Manifest = {
     batchId, createdAt: new Date().toISOString(), normalizerVersion: NORMALIZER_VERSION,
-    entries, checksum: manifestChecksum(entries, sha256),
+    entries,
+    checksum: manifestChecksum(
+      { batchId, normalizerVersion: NORMALIZER_VERSION, entries }, sha256),
   };
   mkdirSync("reports/image-backfill", { recursive: true });
-  const path = `reports/image-backfill/manifest-${batchId}.json`;
-  writeFileSync(path, JSON.stringify(manifest, null, 1));
+  const path = manifestPathFor(batchId);
+  // "wx" — never clobber; see writeManifestExclusive.
+  writeManifestExclusive(path, manifest, (p, data) =>
+    writeFileSync(p, data, { flag: "wx" }));
 
   const bucketBytes = objects.reduce((s, o) => s + o.bytes, 0);
   console.log(`  bucket now              ${objects.length} objects  ${(bucketBytes / 1073741824).toFixed(4)} GiB`);

@@ -8,7 +8,9 @@
  * the first tool in this series that writes, so what is worth asserting is
  * where it stops.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 import sharp from "sharp";
 import {
@@ -19,8 +21,12 @@ import {
   NON_REPOINTABLE_TABLES,
   REPOINTABLE_COLUMNS,
   RETAINED_REFERENCE_TABLES,
+  MAX_BATCH_ID_LENGTH,
   assertBatchSize,
   assertExecuteFlags,
+  assertValidBatchId,
+  manifestPathFor,
+  writeManifestExclusive,
   canDeleteOriginal,
   deletionBlockers,
   describeRetainedIdentity,
@@ -96,22 +102,163 @@ async function main() {
   const entries: ManifestEntry[] = [
     { sourcePath: "products/a.jpg", sourceBytes: 100, repoints: [{ table: "product_images", rowId: "r1", column: "url", oldUrl: OLD }] },
   ];
-  const sum = manifestChecksum(entries, sha);
-  check("the checksum is stable", manifestChecksum(entries, sha) === sum);
+  const subject = { batchId: "c2-batch-5", normalizerVersion: 1, entries };
+  const sum = manifestChecksum(subject, sha);
+  check("the checksum is stable", manifestChecksum(subject, sha) === sum);
   check("row order does not change it",
-    manifestChecksum([{ ...entries[0], repoints: [...entries[0].repoints].reverse() }], sha) === sum);
+    manifestChecksum({ ...subject, entries: [{ ...entries[0], repoints: [...entries[0].repoints].reverse() }] }, sha) === sum);
   check("a changed URL changes it",
-    manifestChecksum([{ ...entries[0], repoints: [{ ...entries[0].repoints[0], oldUrl: OLD + "x" }] }], sha) !== sum);
+    manifestChecksum({ ...subject, entries: [{ ...entries[0], repoints: [{ ...entries[0].repoints[0], oldUrl: OLD + "x" }] }] }, sha) !== sum);
   check("a changed byte count changes it",
-    manifestChecksum([{ ...entries[0], sourceBytes: 101 }], sha) !== sum);
+    manifestChecksum({ ...subject, entries: [{ ...entries[0], sourceBytes: 101 }] }, sha) !== sum);
   check("an extra reference changes it",
-    manifestChecksum([{ ...entries[0], repoints: [...entries[0].repoints, { table: "products", rowId: "p1", column: "image_url", oldUrl: OLD }] }], sha) !== sum);
+    manifestChecksum({ ...subject, entries: [{ ...entries[0], repoints: [...entries[0].repoints, { table: "products", rowId: "p1", column: "image_url", oldUrl: OLD }] }] }, sha) !== sum);
   check("the executor recomputes it against LIVE data before writing",
-    exec.includes("manifestChecksum(liveEntries, sha256) !== manifest.checksum"));
+    exec.includes("entries: liveEntries }") && exec.includes("liveChecksum !== manifest.checksum"));
   check("and aborts when the world moved", exec.includes('"data_moved"'));
   check("a mismatched batch id aborts", exec.includes('"batch_id_mismatch"'));
   check("a different normalizer version aborts", exec.includes('"version_mismatch"'));
   check("an incomplete graph aborts", exec.includes('"graph_incomplete"'));
+
+  console.log("\n=== batch identity is part of the fingerprint (PR #137) ===");
+  //
+  // The hole this closes: manifestChecksum used to cover only `entries`, so a
+  // generated manifest could be renamed to any other batch id and still
+  // verify. Batch identity is what an operator approves, so it must be what
+  // the checksum protects.
+  const idA = { batchId: "c2-batch-5", normalizerVersion: 1, entries };
+  const sumA = manifestChecksum(idA, sha);
+
+  // A. same manifest, same batch id → identical
+  check("A: same entries and same batch id give the same checksum",
+    manifestChecksum({ batchId: "c2-batch-5", normalizerVersion: 1, entries }, sha) === sumA);
+  check("A: and it is stable across repeated computation",
+    manifestChecksum(idA, sha) === manifestChecksum(idA, sha));
+
+  // B. batch id alone → changes
+  check("B: changing ONLY the batch id changes the checksum",
+    manifestChecksum({ ...idA, batchId: "c2-batch-6" }, sha) !== sumA);
+  check("B: even a one-character difference changes it",
+    manifestChecksum({ ...idA, batchId: "c2-batch-51" }, sha) !== sumA);
+  check("B: the old date-style id is not equivalent to the explicit one",
+    manifestChecksum({ ...idA, batchId: "batch-2026-08-22-1" }, sha) !== sumA);
+
+  // C. normalizer version → changes
+  check("C: changing ONLY the normalizer version changes the checksum",
+    manifestChecksum({ ...idA, normalizerVersion: 2 }, sha) !== sumA);
+
+  // D. entry material → changes (the existing hashing is not weakened)
+  check("D: changing a source path changes the checksum",
+    manifestChecksum({ ...idA, entries: [{ ...entries[0], sourcePath: "products/b.jpg" }] }, sha) !== sumA);
+  check("D: changing a repoint row id changes the checksum",
+    manifestChecksum({ ...idA, entries: [{ ...entries[0], repoints: [{ ...entries[0].repoints[0], rowId: "r2" }] }] }, sha) !== sumA);
+  check("D: changing a repoint column changes the checksum",
+    manifestChecksum({ ...idA, entries: [{ ...entries[0], repoints: [{ ...entries[0].repoints[0], column: "image_url" }] }] }, sha) !== sumA);
+  check("D: dropping an entry changes the checksum",
+    manifestChecksum({ ...idA, entries: [] }, sha) !== sumA);
+
+  // E. the rename attack: edit batchId in a generated manifest, keep its checksum
+  const generated = {
+    batchId: "c2-batch-5", createdAt: new Date().toISOString(), normalizerVersion: 1,
+    entries, checksum: sumA,
+  };
+  const renamed = { ...generated, batchId: "c2-batch-9" };
+  check("E: a hand-edited batch id no longer matches its own checksum",
+    manifestChecksum(
+      { batchId: renamed.batchId, normalizerVersion: renamed.normalizerVersion, entries: renamed.entries }, sha
+    ) !== renamed.checksum);
+  check("E: the untouched manifest still verifies",
+    manifestChecksum(
+      { batchId: generated.batchId, normalizerVersion: generated.normalizerVersion, entries: generated.entries }, sha
+    ) === generated.checksum);
+  check("E: the executor compares a checksum it computed itself, not the stored one",
+    exec.includes("const selfChecksum = manifestChecksum(") && exec.includes("selfChecksum !== manifest.checksum"));
+  check("E: and it rejects that as tampering", exec.includes('"manifest_tampered"'));
+
+  // F. invalid batch ids
+  check("F: a normal id is accepted", assertValidBatchId("c2-batch-5") === "c2-batch-5");
+  check("F: dots, underscores and hyphens are allowed", assertValidBatchId("c2_batch.5-final") === "c2_batch.5-final");
+  refuses("F: traversal is refused", () => assertValidBatchId("../x"), "invalid_batch_id");
+  refuses("F: a bare .. is refused", () => assertValidBatchId(".."), "invalid_batch_id");
+  refuses("F: a path separator is refused", () => assertValidBatchId("a/b"), "invalid_batch_id");
+  refuses("F: a backslash is refused", () => assertValidBatchId("a\\b"), "invalid_batch_id");
+  refuses("F: an absolute path is refused", () => assertValidBatchId("/etc/passwd"), "invalid_batch_id");
+  refuses("F: an empty id is refused", () => assertValidBatchId(""), "invalid_batch_id");
+  refuses("F: whitespace-only is refused", () => assertValidBatchId("   "), "invalid_batch_id");
+  refuses("F: an embedded space is refused", () => assertValidBatchId("c2 batch 5"), "invalid_batch_id");
+  refuses("F: a newline is refused", () => assertValidBatchId("c2-batch-5\n"), "invalid_batch_id");
+  refuses("F: a NUL byte is refused", () => assertValidBatchId("c2-batch-5\u0000"), "invalid_batch_id");
+  refuses("F: a control character is refused", () => assertValidBatchId("c2\u0007batch"), "invalid_batch_id");
+  refuses("F: an overly long id is refused", () => assertValidBatchId("x".repeat(MAX_BATCH_ID_LENGTH + 1)), "invalid_batch_id");
+  check("F: exactly at the limit is allowed",
+    assertValidBatchId("x".repeat(MAX_BATCH_ID_LENGTH)).length === MAX_BATCH_ID_LENGTH);
+  refuses("F: a leading dot is refused", () => assertValidBatchId(".hidden"), "invalid_batch_id");
+  refuses("F: a non-string is refused", () => assertValidBatchId(undefined), "invalid_batch_id");
+  refuses("F: a shell metacharacter is refused", () => assertValidBatchId("c2;rm -rf /"), "invalid_batch_id");
+  check("F: the manifest path stays inside the report directory",
+    manifestPathFor("c2-batch-5") === "reports/image-backfill/manifest-c2-batch-5.json");
+  refuses("F: and an escaping id never becomes a path", () => manifestPathFor("../../etc/x"), "invalid_batch_id");
+
+  // G. no silent overwrite — exercised against a real directory
+  const tmp = mkdtempSync(join(tmpdir(), "wovenne-manifest-"));
+  const tmpPath = join(tmp, "manifest-c2-batch-5.json");
+  const exclusively = (p: string, data: string) => writeFileSync(p, data, { flag: "wx" });
+  writeManifestExclusive(tmpPath, generated, exclusively);
+  check("G: the first write lands", existsSync(tmpPath));
+  const firstBytes = readFileSync(tmpPath, "utf8");
+  refuses("G: a second write to the same batch id is refused",
+    () => writeManifestExclusive(tmpPath, { ...generated, entries: [] }, exclusively), "manifest_exists");
+  check("G: and the original file is left byte-for-byte intact",
+    readFileSync(tmpPath, "utf8") === firstBytes);
+  check("G: a different batch id writes fine",
+    (() => { writeManifestExclusive(join(tmp, "manifest-c2-batch-6.json"), generated, exclusively); return true; })());
+  check("G: an error that is not EEXIST is not swallowed as manifest_exists",
+    (() => {
+      try {
+        writeManifestExclusive(tmpPath, generated, () => { throw Object.assign(new Error("nope"), { code: "EACCES" }); });
+        return false;
+      } catch (e) { return !(e instanceof MigrationRefused); }
+    })());
+  rmSync(tmp, { recursive: true, force: true });
+  check("G: the planner uses the exclusive writer", exec.includes("writeManifestExclusive("));
+
+  // H. no way to bypass batch identity from the CLI
+  refuses("H: the executor refuses without --batch-id",
+    () => assertExecuteFlags(["--execute", EXECUTE_FLAGS.acknowledgement, "--source-manifest", "m.json"]),
+    "missing_batch_id");
+  refuses("H: an invalid id on the command line is refused too",
+    () => assertExecuteFlags(["--execute", EXECUTE_FLAGS.acknowledgement, "--batch-id", "../x", "--source-manifest", "m.json"]),
+    "invalid_batch_id");
+  check("H: the planner requires the flag before planning", exec.includes("BATCH_ID_FLAG") && exec.includes('"missing_batch_id"'));
+  check("H: no override flag exists anywhere in the tooling",
+    !/--force|--skip-verify|--no-verify|--ignore-checksum|--allow-mismatch/.test(strip(exec) + strip(rules)));
+  check("H: the planner no longer invents a batch id",
+    !/batch-\$\{new Date\(\)/.test(strip(exec)));
+  check("H: the executor validates both ids before comparing them",
+    exec.includes("assertValidBatchId(batchId)") && exec.includes("assertValidBatchId(manifest.batchId)"));
+
+  // I + J. the fix must not have moved anything else
+  console.log("\n=== the identity fix changed nothing else (regression guard) ===");
+  check("I: MAX_EXECUTION_BATCH is still 10", MAX_EXECUTION_BATCH === 10);
+  check("I: ten still passes, eleven still refuses",
+    (() => { assertBatchSize(10); return true; })() &&
+    (() => { try { assertBatchSize(11); return false; } catch { return true; } })());
+  check("J: compare-and-set is still how a row moves",
+    exec.includes("${repoint.column}=eq.${encodeURIComponent(repoint.oldUrl)}") &&
+    exec.includes('Prefer: "return=representation"'));
+  check("J: exactly one row must come back from a CAS", exec.includes("updated.length !== 1"));
+  check("J: a failure still rolls back every row already moved", exec.includes("rollback"));
+  check("J: retained-cart identity is still verified, not counted",
+    exec.includes("retainedIdentitySet(") && exec.includes("retainedIdentityDiff("));
+  check("J: and proved directly against the row", exec.includes("rowStillContains("));
+  check("J: carts are still retained, not rewritten",
+    RETAINED_REFERENCE_TABLES.includes("carts") && !isRepointable("carts"));
+  check("J: site_content is still disqualifying",
+    DISQUALIFYING_REFERENCE_TABLES.includes("site_content"));
+  check("J: the writable whitelist is still exactly three columns",
+    REPOINTABLE_COLUMNS.length === 3);
+  check("J: still no way to delete an original",
+    !/\.remove\(|\.delete\(|method:\s*["']DELETE["']/.test(strip(exec)));
 
   console.log("\n=== only whitelisted columns may be rewritten ===");
   check("product_images.url is repointable", isRepointable("product_images"));
