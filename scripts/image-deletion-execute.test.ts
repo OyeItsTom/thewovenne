@@ -17,6 +17,7 @@ import {
   MAX_DELETION_BATCH,
   assertDeleteFlags,
   assertDeletionBatchSize,
+  assertNoLegacyExecutableField,
   assertSafeToDeletePath,
   classifyForDeletion,
   deletionManifestChecksum,
@@ -149,6 +150,66 @@ function main() {
   check("duplicate source paths are refused", bare.includes('"duplicate_entries"'));
   check("batch id mismatch refused", bare.includes('"batch_id_mismatch"'));
   check("normalizer mismatch refused", bare.includes('"version_mismatch"'));
+
+  console.log("\n=== the retired executable flag can neither forbid nor authorise ===");
+  //
+  // THE BUG THIS LOCKS OUT. The planner wrote `executable: false` into every
+  // manifest; the executor never read it. So manifest-c3-delete-2.json declared
+  // itself non-executable while the executor stood ready to delete all five
+  // originals it named. The field said one thing, the tool did another, and
+  // nothing in the suite noticed because the only assertion about it checked
+  // that the planner still WROTE the misleading value.
+  //
+  // The resolution is fail-closed on provenance rather than a corrected
+  // boolean: a manifest carrying the key at all was written by tooling whose
+  // semantics this executor cannot vouch for, so it is refused. Refusing
+  // `true` as loudly as `false` is the point — it stops the field being
+  // reintroduced later as a forgeable permission slip.
+  const legacy = (v: unknown) => () => assertNoLegacyExecutableField({
+    kind: MANIFEST_KIND, batchId: "c3-delete-2", createdAt: "x",
+    normalizerVersion: 1, executable: v, entries: [ENTRY], checksum: "z",
+  });
+  refuses("executable:false is refused, not silently accepted", legacy(false), "legacy_executable_field");
+  refuses("executable:true is refused just as hard", legacy(true), "legacy_executable_field");
+  refuses("the string \"true\" does not slip through", legacy("true"), "legacy_executable_field");
+  refuses("nor 1", legacy(1), "legacy_executable_field");
+  refuses("nor null", legacy(null), "legacy_executable_field");
+  refuses("nor undefined-as-an-own-key", legacy(undefined), "legacy_executable_field");
+  check("a manifest without the key passes the guard", (() => {
+    assertNoLegacyExecutableField({
+      kind: MANIFEST_KIND, batchId: "c3-delete-2", createdAt: "x",
+      normalizerVersion: 1, entries: [ENTRY], checksum: "z",
+    });
+    return true;
+  })());
+  check("a non-object is left to the checks that name it better", (() => {
+    assertNoLegacyExecutableField(null);
+    assertNoLegacyExecutableField("not a manifest");
+    return true;
+  })());
+  check("an inherited 'executable' is not treated as the file's own", (() => {
+    assertNoLegacyExecutableField(Object.create({ executable: false }));
+    return true;
+  })());
+
+  check("the executor actually calls the guard", bare.includes("assertNoLegacyExecutableField("));
+  check("and calls it before it trusts the parsed shape",
+    bare.indexOf("assertNoLegacyExecutableField(") < bare.indexOf("manifest.kind !== MANIFEST_KIND"));
+  check("the manifest type no longer declares the field",
+    !/executable\s*:/.test(strip(rules).split("export interface DeletionManifest")[1]?.split("}")[0] ?? ""));
+  check("the planner no longer writes it",
+    !/executable\s*:/.test(strip(readFileSync("scripts/backfill-delete-plan.ts", "utf8"))));
+  check("no flag can wave the guard away",
+    !/--force|--skip-verif|--ignore-checksum|--allow-legacy|--ignore-executable/.test(bare));
+  //
+  // The guard is deliberately outside the checksum: the checksum fingerprints
+  // what a person reviewed, and this key is not that. Asserting it here keeps
+  // anyone from "fixing" the drift later by folding the field into the digest,
+  // which would silently invalidate every manifest already on disk.
+  check("the checksum still ignores the field entirely",
+    deletionManifestChecksum({ ...subject, ...( { executable: false } as object) }, sha) === sum);
+  check("the checksum subject is still batch id, normalizer version and entries",
+    !/executable/.test(strip(rules).split("export function deletionManifestChecksum")[1]?.split("\n}")[0] ?? ""));
 
   console.log("\n=== every eligibility condition still blocks at execution time ===");
   check("a product_images reference blocks",

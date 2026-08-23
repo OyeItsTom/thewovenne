@@ -17,6 +17,12 @@
  * eligible ones into a checksummed manifest for review.
  *
  * Eligibility lives in lib/imageDeletion.ts, not here.
+ *
+ * The manifest carries no `executable` flag. It used to, always false, meaning
+ * "this PR cannot delete" — a claim about the build rather than the batch, and
+ * one that stopped being true when the executor shipped. Execution authority is
+ * the executor's command line plus the checks it re-runs against live data; see
+ * the note above DeletionManifest in lib/imageDeletion.ts.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -329,7 +335,6 @@ async function main() {
   const manifest: DeletionManifest = {
     kind: MANIFEST_KIND,
     batchId, createdAt: new Date().toISOString(), normalizerVersion: NORMALIZER_VERSION,
-    executable: false,
     entries,
     checksum: deletionManifestChecksum({ batchId, normalizerVersion: NORMALIZER_VERSION, entries }, sha256),
   };
@@ -342,7 +347,11 @@ async function main() {
   for (const e of entries) console.log(`    ${e.sourcePath}  ${MiB(e.sourceBytes)} MiB  ->  ${e.masterPath}`);
   console.log(`\n  manifest: ${path}`);
   console.log(`  checksum: ${manifest.checksum}`);
-  console.log("\n  NOT EXECUTABLE. There is no C3 deletion path in this PR.\n");
+  // This planner still cannot delete anything. The executor can, and lives in
+  // scripts/backfill-delete-execute.ts — so the banner says what is true of
+  // THIS tool rather than making a claim about the repository it ships in.
+  console.log("\n  This tool has deleted nothing. Executing the batch is a separate,");
+  console.log("  irreversible step: scripts/backfill-delete-execute.ts\n");
 }
 
 if (require.main === module) {

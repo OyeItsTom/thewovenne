@@ -45,6 +45,7 @@ import {
   MANIFEST_KIND,
   assertDeleteFlags,
   assertDeletionBatchSize,
+  assertNoLegacyExecutableField,
   assertSafeToDeletePath,
   classifyForDeletion,
   deletionManifestChecksum,
@@ -186,7 +187,12 @@ async function main() {
   const { batchId, manifestPath } = assertDeleteFlags(argv);
 
   /* ── manifest integrity, before anything else ── */
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as DeletionManifest;
+  const parsed: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+  // Provenance before content. A manifest still carrying the retired
+  // `executable` flag came from the plan-only tooling; it is refused whatever
+  // the flag says, so the field can never be read as permission to delete.
+  assertNoLegacyExecutableField(parsed);
+  const manifest = parsed as DeletionManifest;
   if (manifest.kind !== MANIFEST_KIND) {
     throw new MigrationRefused(
       `manifest kind is "${manifest.kind}", not "${MANIFEST_KIND}" — this is not a C3 deletion manifest`,

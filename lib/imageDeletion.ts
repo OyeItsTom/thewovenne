@@ -284,15 +284,66 @@ export interface DeletionManifestEntry {
 export const MANIFEST_KIND = "c3-delete" as const;
 export const MANIFEST_VERSION = 2;
 
+/**
+ * WHY THERE IS NO `executable` FIELD.
+ *
+ * There used to be one, always written `false`, meaning "the PR that produced
+ * this manifest has no deletion path". That was a statement about the build
+ * that wrote the file, not about the batch — and once the executor shipped it
+ * became simply untrue, while nothing read it. A manifest asserting
+ * `executable: false` sat next to an executor that would happily delete every
+ * entry in it.
+ *
+ * The fix is not to write `true` instead. Execution authority in C3 comes from
+ * three places, none of which is a field in this file:
+ *
+ *   1. the operator's command line — four flags, including an acknowledgement
+ *      that C2's cannot satisfy (DELETE_FLAGS);
+ *   2. this manifest's integrity — kind, batch id, normalizer version and a
+ *      checksum the executor recomputes rather than reads;
+ *   3. a per-object re-proof against live data, immediately before each delete.
+ *
+ * A self-declared boolean adds nothing to those. It would be written `true` by
+ * every run, excluded from the checksum, and editable by anyone with the file —
+ * a gate that never closes and that forges in one keystroke. That is worse than
+ * no gate, because it reads like a safety control.
+ *
+ * So the field is gone, and its reappearance is an error rather than something
+ * to ignore: see assertNoLegacyExecutableField.
+ */
 export interface DeletionManifest {
   kind: typeof MANIFEST_KIND;
   batchId: string;
   createdAt: string;
   normalizerVersion: number;
-  /** Present and always false in this PR. There is no execution path. */
-  executable: false;
   entries: DeletionManifestEntry[];
   checksum: string;
+}
+
+/**
+ * Refuse a manifest carrying the retired `executable` field, whatever it says.
+ *
+ * Fail-closed on provenance. A file with this key was written by the plan-only
+ * tooling, whose semantics this executor cannot vouch for, so it is refused
+ * rather than silently accepted — including when it says `true`, so the field
+ * can never be reintroduced as a forgeable authorisation. The remedy is to
+ * regenerate the manifest with the current planner, which re-derives every
+ * entry from live data.
+ *
+ * Deliberately not part of deletionManifestChecksum: the checksum fingerprints
+ * what was reviewed, and this key is not that. Adding it would change every
+ * existing checksum to express something the file should not contain at all.
+ */
+export function assertNoLegacyExecutableField(manifest: unknown): void {
+  if (typeof manifest !== "object" || manifest === null) return;
+  if (!Object.prototype.hasOwnProperty.call(manifest, "executable")) return;
+  const value = (manifest as { executable?: unknown }).executable;
+  throw new MigrationRefused(
+    `this manifest carries the retired "executable" field (${JSON.stringify(value)}). ` +
+      "It was written by the plan-only tooling and cannot be executed. " +
+      "Regenerate it with scripts/backfill-delete-plan.ts.",
+    "legacy_executable_field"
+  );
 }
 
 export interface DeletionChecksumSubject {
