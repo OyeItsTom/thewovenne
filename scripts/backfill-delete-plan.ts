@@ -50,6 +50,7 @@ import {
 } from "../lib/imageDeletion";
 import { NORMALIZER_VERSION } from "../lib/imageNormalize";
 import { ImageReferenceGraph, type TableRows } from "../lib/imageReferences";
+import { enumerateAllObjects, type StorageEntry } from "../lib/storagePrefixes";
 
 const BATCH_ID_FLAG = "--batch-id";
 const BUCKET = "product-images";
@@ -87,22 +88,32 @@ async function fetchTables(): Promise<{ tables: TableRows[]; unreadable: string[
   return { tables, unreadable };
 }
 
+/**
+ * Every object in the bucket, found by asking rather than assuming.
+ *
+ * This used to walk a hard-coded prefix list — `products/`, `styles/`,
+ * `lookbook/`, `staging/`, `tmp/`. Three of those folders do not exist, and
+ * the one it never named, `campaigns/`, holds six real objects, so every
+ * bucket total this planner printed was short by 6,595,428 bytes.
+ *
+ * Candidate scope is unaffected and deliberately so: candidates come from
+ * ledgerPairings() — objects a C2 ledger proved it migrated — never from this
+ * listing. The listing answers "does this object still exist" and "how big is
+ * the bucket", and seeing more of the bucket makes both answers truer without
+ * making anything new deletable.
+ */
 async function listObjects(): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  for (const prefix of ["products/", "styles/", "lookbook/", "staging/", "tmp/"]) {
-    for (let offset = 0; ; offset += 100) {
-      const response = await fetch(
-        `${env("NEXT_PUBLIC_SUPABASE_URL")}/storage/v1/object/list/${BUCKET}`,
-        { method: "POST", headers: { ...headers(), "Content-Type": "application/json" },
-          body: JSON.stringify({ prefix, limit: 100, offset, sortBy: { column: "name", order: "asc" } }) }
-      );
-      const page = await response.json();
-      if (!Array.isArray(page) || page.length === 0) break;
-      for (const o of page) if (o.id) out.set(`${prefix}${o.name}`, o.metadata?.size ?? 0);
-      if (page.length < 100) break;
-    }
-  }
-  return out;
+  const listPage = async (prefix: string, offset: number): Promise<StorageEntry[]> => {
+    const response = await fetch(
+      `${env("NEXT_PUBLIC_SUPABASE_URL")}/storage/v1/object/list/${BUCKET}`,
+      { method: "POST", headers: { ...headers(), "Content-Type": "application/json" },
+        body: JSON.stringify({ prefix, limit: 100, offset, sortBy: { column: "name", order: "asc" } }) }
+    );
+    const page = await response.json();
+    return Array.isArray(page) ? page : [];
+  };
+  const objects = await enumerateAllObjects(listPage);
+  return new Map(objects.map((o) => [o.key, o.bytes]));
 }
 
 /** HEAD only. Reading a master back is proof it is servable; it downloads nothing. */

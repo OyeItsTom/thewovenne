@@ -42,6 +42,7 @@ import {
   type StorageObject,
   type TableRows,
 } from "../lib/imageReferences";
+import { enumerateAllObjects, type StorageEntry } from "../lib/storagePrefixes";
 
 const BUCKET = "product-images";
 const PRODUCT_PREFIX = "products/";
@@ -107,59 +108,35 @@ async function readJson(path: string, accept?: string): Promise<unknown> {
   return response.json();
 }
 
-/** Storage listing uses POST, but it is a query: it returns rows and changes nothing. */
-async function listObjects(prefix: string): Promise<StorageObject[]> {
+/**
+ * Every object in the bucket, via the shared walk in lib/storagePrefixes.ts.
+ *
+ * Storage listing uses POST, but it is a query: it returns rows and changes
+ * nothing. This file previously carried two near-identical listers — one that
+ * paged a named prefix and one that read the root — and descended exactly one
+ * level. The recursion now lives in one place, so a nested folder or a prefix
+ * spanning several pages cannot be missed here while being found elsewhere.
+ *
+ * Candidate scope is unchanged: classification below still decides what is a
+ * backfill source, and it still refuses anything outside `products/`.
+ */
+async function listAllObjects(): Promise<StorageObject[]> {
   const url = env("NEXT_PUBLIC_SUPABASE_URL");
   const key = env("SUPABASE_SERVICE_ROLE_KEY");
-  const out: StorageObject[] = [];
-  let offset = 0;
-  for (;;) {
+  const listPage = async (prefix: string, offset: number): Promise<StorageEntry[]> => {
     const response = await fetch(`${url}/storage/v1/object/list/${BUCKET}`, {
       method: "POST",
       headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ prefix, limit: 1000, offset, sortBy: { column: "name", order: "asc" } }),
+      body: JSON.stringify({ prefix, limit: 100, offset, sortBy: { column: "name", order: "asc" } }),
     });
-    if (!response.ok) throw new Error(`list ${prefix} -> ${response.status}`);
-    const rows = (await response.json()) as Array<Record<string, unknown>>;
-    if (rows.length === 0) break;
-    for (const row of rows) {
-      if (!row.id) continue;
-      const meta = (row.metadata ?? {}) as Record<string, unknown>;
-      out.push({
-        bucket: BUCKET,
-        key: prefix ? `${prefix}/${row.name}` : String(row.name),
-        bytes: Number(meta.size ?? 0),
-        mime: (meta.mimetype as string) ?? null,
-        createdAt: (row.created_at as string) ?? null,
-      });
-    }
-    offset += rows.length;
-    if (rows.length < 1000) break;
-  }
-  return out;
-}
-
-async function listAllObjects(): Promise<StorageObject[]> {
-  const root = (await (async () => {
-    const url = env("NEXT_PUBLIC_SUPABASE_URL");
-    const key = env("SUPABASE_SERVICE_ROLE_KEY");
-    const r = await fetch(`${url}/storage/v1/object/list/${BUCKET}`, {
-      method: "POST",
-      headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ prefix: "", limit: 1000, sortBy: { column: "name", order: "asc" } }),
-    });
-    return (await r.json()) as Array<Record<string, unknown>>;
-  })()) as Array<Record<string, unknown>>;
-  const prefixes = root.filter((r) => !r.id).map((r) => String(r.name));
-  const objects: StorageObject[] = [];
-  for (const row of root) {
-    if (!row.id) continue;
-    const meta = (row.metadata ?? {}) as Record<string, unknown>;
-    objects.push({ bucket: BUCKET, key: String(row.name), bytes: Number(meta.size ?? 0),
-      mime: (meta.mimetype as string) ?? null, createdAt: (row.created_at as string) ?? null });
-  }
-  for (const prefix of prefixes) objects.push(...(await listObjects(prefix)));
-  return objects;
+    if (!response.ok) throw new Error(`list ${prefix || "(root)"} -> ${response.status}`);
+    const rows = await response.json();
+    return Array.isArray(rows) ? rows : [];
+  };
+  const objects = await enumerateAllObjects(listPage);
+  return objects.map((o) => ({
+    bucket: BUCKET, key: o.key, bytes: o.bytes, mime: o.mimetype, createdAt: o.createdAt,
+  }));
 }
 
 /** Every table PostgREST exposes, so a new one cannot be silently missed. */

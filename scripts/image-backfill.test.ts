@@ -56,8 +56,17 @@ async function main() {
       `found .${verb}( in the new files`);
   }
   check("no DELETE/PUT/PATCH/POST-to-rest HTTP verbs", !/method:\s*"(DELETE|PUT|PATCH)"/.test(code));
-  check("the only POST is the storage LIST query",
-    (code.match(/method:\s*"POST"/g) ?? []).length === 2 && code.includes("object/list/"));
+  // Every POST in this file must be a storage LIST, which is a query. The
+  // count used to be pinned at 2 because the file carried two near-identical
+  // listers; the recursion now lives in lib/storagePrefixes.ts, so there is
+  // one. Assert the property rather than the number, so consolidating or
+  // adding a listing cannot fail this for the wrong reason — and a POST to
+  // anything other than object/list still does.
+  const posts = code.split(/method:\s*"POST"/).slice(1);
+  check("every POST is a storage LIST query, and there is at least one",
+    posts.length >= 1 && posts.every((_, i) =>
+      /object\/list\//.test(code.split(/method:\s*"POST"/)[i])));
+  check("no POST targets a REST table", !/rest\/v1\/[^`"']*[\s\S]{0,200}?method:\s*"POST"/.test(code));
   check("no supabase-js client is constructed (it can write)", !/createClient\s*\(/.test(code));
   check("the only file written is the gitignored report", (code.match(/writeFileSync\(/g) ?? []).length === 1);
   check("and it goes to reports/", code.includes('"reports/image-backfill"'));

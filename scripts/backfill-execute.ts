@@ -53,6 +53,7 @@ import {
   type ManifestEntry,
 } from "../lib/imageBackfill";
 import { displayDimensions, parseHeader } from "./backfill-images";
+import { enumerateAllObjects, type StorageEntry } from "../lib/storagePrefixes";
 import {
   resolveVisibility,
   selectVisibleBatch,
@@ -101,31 +102,31 @@ const publicUrl = (key: string) =>
 
 /* ─────────────────────────────── inventory ──────────────────────────────── */
 
+/**
+ * Every object in the bucket, via the shared walk in lib/storagePrefixes.ts.
+ *
+ * This used to enumerate the root and then descend exactly one level, with
+ * neither listing paged. That was right for the shape this bucket happens to
+ * have and wrong in two ways it could not see: a folder inside a folder would
+ * have been invisible, and a prefix holding more than one page would have been
+ * silently truncated.
+ *
+ * Migration scope is unchanged. The planning loop below still refuses anything
+ * outside `products/`, so a wider inventory means better totals, not more
+ * candidates.
+ */
 async function listObjects(): Promise<Array<{ key: string; bytes: number; mime: string | null; createdAt: string | null }>> {
-  const list = async (prefix: string) => {
+  const listPage = async (prefix: string, offset: number): Promise<StorageEntry[]> => {
     const response = await fetch(`${env("NEXT_PUBLIC_SUPABASE_URL")}/storage/v1/object/list/${BUCKET}`, {
       method: "POST",
       headers: { ...restHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ prefix, limit: 1000, sortBy: { column: "name", order: "asc" } }),
+      body: JSON.stringify({ prefix, limit: 100, offset, sortBy: { column: "name", order: "asc" } }),
     });
-    return (await response.json()) as Array<Record<string, unknown>>;
+    const page = await response.json();
+    return Array.isArray(page) ? page : [];
   };
-  const root = await list("");
-  const out: Array<{ key: string; bytes: number; mime: string | null; createdAt: string | null }> = [];
-  const add = (prefix: string, row: Record<string, unknown>) => {
-    const meta = (row.metadata ?? {}) as Record<string, unknown>;
-    out.push({
-      key: prefix ? `${prefix}/${row.name}` : String(row.name),
-      bytes: Number(meta.size ?? 0),
-      mime: (meta.mimetype as string) ?? null,
-      createdAt: (row.created_at as string) ?? null,
-    });
-  };
-  for (const row of root) if (row.id) add("", row);
-  for (const folder of root.filter((r) => !r.id).map((r) => String(r.name))) {
-    for (const row of await list(folder)) if (row.id) add(folder, row);
-  }
-  return out;
+  const objects = await enumerateAllObjects(listPage);
+  return objects.map((o) => ({ key: o.key, bytes: o.bytes, mime: o.mimetype, createdAt: o.createdAt }));
 }
 
 async function fetchTables(): Promise<{ tables: TableRows[]; unreadable: string[] }> {
