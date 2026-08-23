@@ -227,6 +227,94 @@ async function main() {
   const taggedMeta = await sharp(tagged).metadata();
   check("the encoded master carries an sRGB profile", Boolean(taggedMeta.icc), "no icc on output");
 
+  // A WIDE-GAMUT source, because the checks above cannot fail without one.
+  //
+  // Every photograph in this catalogue is tagged "DCI-P3 D65 Gamut with sRGB
+  // Transfer". Converting P3 to sRGB is what keeps a saturated colour looking
+  // the same in a browser, and it changes the numbers to do it — a lime that
+  // is (157,249,78) in P3 is (124,252,9) in sRGB. Both describe one colour.
+  //
+  // The fixtures above are built without a profile, so a route that tagged its
+  // output sRGB WITHOUT converting would still satisfy them. That is the exact
+  // regression this section now rules out: keepIccProfile() leaves P3 numbers
+  // in place and attaches a profile, which looks correct until something
+  // downstream drops the tag and renders wide-gamut numbers as sRGB.
+  //
+  // Nothing here is compared across colour spaces. The reference is the fixture
+  // rendered THROUGH its own profile into sRGB — what a colour-managed viewer
+  // shows — and the route's output is measured against that, in sRGB.
+  const wideGamut = await sharp({
+    create: { width: 240, height: 240, channels: 3, background: "#7CFC00" },
+  })
+    .composite([
+      { input: { create: { width: 120, height: 120, channels: 3, background: "#FF00AA" } }, left: 0, top: 0 },
+      { input: { create: { width: 120, height: 120, channels: 3, background: "#00E5FF" } }, left: 120, top: 120 },
+    ])
+    .withIccProfile("p3")
+    .jpeg({ quality: 100 })
+    .toBuffer();
+
+  const channelMeans = async (buffer: Buffer) =>
+    (await sharp(buffer).stats()).channels.slice(0, 3).map((c) => c.mean);
+  const widestChannelGap = (a: number[], b: number[]) =>
+    Math.max(...a.map((v, i) => Math.abs(v - b[i])));
+
+  // .stats() reads stored numbers and does NOT apply the profile; the encode
+  // path does. That asymmetry is why the fixture has to be proven wide-gamut
+  // here, or every assertion below could pass on a source that never needed
+  // converting.
+  const storedNumbers = await channelMeans(wideGamut);
+  const managed = await sharp(wideGamut).toColourspace("srgb").withIccProfile("srgb")
+    .jpeg({ ...JPEG_MASTER }).toBuffer();
+  const managedNumbers = await channelMeans(managed);
+  check("the wide-gamut fixture really carries a profile",
+    Boolean((await sharp(wideGamut).metadata()).icc));
+  check("and its stored numbers really differ from its sRGB rendering",
+    widestChannelGap(storedNumbers, managedNumbers) > 10,
+    `gap ${widestChannelGap(storedNumbers, managedNumbers).toFixed(1)} — fixture is not wide-gamut, assertions below would be vacuous`);
+
+  const display = { width: 240, height: 240 };
+  const encode = (pipeline: ReturnType<typeof sharp>) =>
+    pipeline
+      .resize({ ...targetSize(display), fit: "inside", withoutEnlargement: true, kernel: "lanczos3" })
+      .jpeg({ ...JPEG_MASTER })
+      .toBuffer();
+
+  const converted = await encode(
+    sharp(wideGamut).rotate().toColourspace("srgb").withIccProfile("srgb"));
+  const bypassed = await encode(sharp(wideGamut).rotate().keepIccProfile());
+  const convertedNumbers = await channelMeans(converted);
+  const bypassedNumbers = await channelMeans(bypassed);
+
+  // The reference points are measurements this pipeline did not produce:
+  // `storedNumbers` are the fixture's own P3 values and `managedNumbers` its
+  // colour-managed sRGB rendering. Asserting against those, rather than against
+  // a second copy of the same call chain, is what makes these fail for a real
+  // reason rather than only when sharp is nondeterministic.
+  //
+  // Tolerance: resize and re-encode at the shared quality move a channel mean
+  // by well under a unit. Measured against production masters the widest gap
+  // from colour-managed truth was 0.27/255; 1.0 absorbs encoder drift while a
+  // missed conversion moves a channel by more than ten times that.
+  check("normalizing a wide-gamut source lands on its colour-managed sRGB values",
+    widestChannelGap(convertedNumbers, managedNumbers) <= 1.0,
+    `widest channel gap ${widestChannelGap(convertedNumbers, managedNumbers).toFixed(2)}/255`);
+  check("and moves them off the source's stored P3 values",
+    widestChannelGap(convertedNumbers, storedNumbers) > 10,
+    `only moved ${widestChannelGap(convertedNumbers, storedNumbers).toFixed(2)}/255 — the conversion did not happen`);
+  check("skipping the conversion ships the stored P3 values instead",
+    widestChannelGap(bypassedNumbers, storedNumbers) <= 1.0
+      && widestChannelGap(bypassedNumbers, managedNumbers) > 10,
+    "a bypassed pipeline is indistinguishable here, so the checks above have no teeth");
+
+  // Compared by bytes, not by length: sharp's built-in sRGB and P3 profiles are
+  // both 480 bytes, so a length check cannot tell them apart.
+  const p3Profile = (await sharp(wideGamut).metadata()).icc!;
+  const convertedProfile = (await sharp(converted).metadata()).icc;
+  check("the wide-gamut master is tagged sRGB, not left tagged P3",
+    Boolean(convertedProfile) && !convertedProfile!.equals(p3Profile),
+    "output still carries the source's P3 profile");
+
   console.log("\n=== transaction order (source contract) ===");
   const iVerifyOut = route.indexOf("VERIFY THE OUTPUT BEFORE ANYTHING IS WRITTEN");
   const iUpload = route.indexOf(".upload(masterPath");
