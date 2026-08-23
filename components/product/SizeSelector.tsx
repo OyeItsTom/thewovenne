@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { cPath } from "@/lib/country";
 import { cn } from "@/lib/utils";
 import type { ProductSize } from "@/lib/sizes";
 
@@ -24,9 +26,27 @@ export default function SizeSelector({
 
   return (
     <div>
-      <h3 className="font-heading text-sm uppercase tracking-wider text-ink/60">
-        Size
-      </h3>
+      {/* The size guide belongs HERE, beside the choice, not only in the footer
+          where it already lives. This is the one moment somebody wants it, and
+          leaving to hunt for it in the footer is how a considered purchase turns
+          into a closed tab.
+
+          A quiet text link rather than a button: it is a reference, not a step
+          in buying, and it should not compete with the sizes themselves.
+
+          Rendered only when there are sizes — the whole component returns null
+          otherwise, so a saree never offers a size chart it has no use for. */}
+      <div className="flex items-baseline justify-between gap-4">
+        <h3 className="font-heading text-sm uppercase tracking-wider text-ink/60">
+          Size
+        </h3>
+        <Link
+          href={cPath("/size-guide")}
+          className="text-xs uppercase tracking-wider text-ink/55 underline decoration-ink/20 underline-offset-4 transition-colors hover:text-terracotta"
+        >
+          Size guide
+        </Link>
+      </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {sizes.map((size) => {
           const soldOut = size.stock_quantity <= 0;
