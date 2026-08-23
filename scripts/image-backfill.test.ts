@@ -226,7 +226,32 @@ async function main() {
   check("an unreadable table makes the graph incomplete", partial.isComplete === false);
   check("a complete graph says so", graph.isComplete === true);
 
-  console.log(`\n${pass} passed, ${fail} failed\n`);
+  console.log("\n=== a cart row identifies by user_id, because it has no id ===");
+{
+  const url = "https://x.supabase.co/storage/v1/object/public/product-images/products/a.jpg";
+  const g = new ImageReferenceGraph([
+    { table: "carts", rows: [{ user_id: "cart-owner-1", items: [{ image_url: url }] }] },
+    { table: "product_images", rows: [{ id: "pi-1", url }] },
+  ]);
+  const hits = g.referencesFor("product-images", "products/a.jpg");
+  const cart = hits.find((h) => h.table === "carts");
+  check("the cart reference is found", Boolean(cart));
+  check("and identifies by its user_id, not \"?\"", cart?.rowId === "cart-owner-1");
+  check("a row with no usable identifier still degrades to ?",
+    new ImageReferenceGraph([{ table: "carts", rows: [{ items: [{ image_url: url }] }] }])
+      .referencesFor("product-images", "products/a.jpg")[0]?.rowId === "?");
+  check("two different carts are two different references",
+    new ImageReferenceGraph([{ table: "carts", rows: [
+      { user_id: "cart-A", items: [{ image_url: url }] },
+      { user_id: "cart-B", items: [{ image_url: url }] }] }])
+      .referencesFor("product-images", "products/a.jpg")
+      .map((h) => h.rowId).sort().join() === "cart-A,cart-B");
+  check("an id column still wins when present",
+    new ImageReferenceGraph([{ table: "carts", rows: [{ id: "real-id", user_id: "u", items: [{ image_url: url }] }] }])
+      .referencesFor("product-images", "products/a.jpg")[0]?.rowId === "real-id");
+}
+
+console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);
 }
 
