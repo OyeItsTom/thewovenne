@@ -103,7 +103,14 @@ function main() {
   check("no --execute flag", !/--execute/.test(strip(plan)));
   check("no bypass flag anywhere",
     !/--force|--skip-verif|--ignore-checksum|--allow-|--yes-i-understand/.test(strip(plan) + strip(rules)));
-  check("no C6 executor exists yet", !existsSync("scripts/c6-normalize-execute.ts"));
+  // The executor now exists (image-c6-execute.test.ts reviews it). What this
+  // suite guards is that the PLANNER never gains a write path and never calls
+  // it — the same stale-claim trap C3's "no deletion path in this PR" fell
+  // into, and C5's "no executor exists yet" after that.
+  check("the executor is a separate file the planner never invokes",
+    existsSync("scripts/c6-normalize-execute.ts") && !strip(plan).includes("c6-normalize-execute"));
+  check("the planner still has no write path of its own",
+    !/method:\s*["'`](DELETE|PATCH|PUT)["'`]/i.test(strip(plan)) && !strip(plan).includes("x-upsert"));
 
   console.log("\n=== the source must be worth migrating ===");
   check("an already-small image is refused",
