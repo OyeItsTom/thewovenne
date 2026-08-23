@@ -245,8 +245,21 @@ function main() {
     strip(plan).includes('REPORT_DIR = "reports/c5-orphan-delete"'));
   check("and writes exactly one file, exclusively",
     (strip(plan).match(/writeFileSync\(/g) ?? []).length === 1 && strip(plan).includes('flag: "wx"'));
-  check("no C5 executor script exists yet",
-    !require("node:fs").existsSync("scripts/orphan-delete-execute.ts"));
+  // The executor now exists (it is reviewed by image-orphans-execute.test.ts).
+  // What this suite guards is that deletion never leaks back into the planner
+  // or the rules: those two files must stay incapable of removing anything.
+  check("the planner cannot delete even though an executor now exists",
+    !/method:\s*["\'`]DELETE["\'`]/i.test(strip(plan)) && !strip(plan).includes(".remove("));
+  check("the rules module cannot delete either",
+    !/method:\s*["\'`]DELETE["\'`]/i.test(strip(rules)));
+  check("the planner never invokes the executor",
+    !/require\(|import\(/.test(strip(plan).split("orphan-delete-execute")[0].slice(-80)));
+  // C3's planner claimed "there is no C3 deletion path in this PR" and kept
+  // claiming it after the executor shipped. The banner here must describe this
+  // tool, not the repository, so it cannot rot the same way.
+  check("the planner claims nothing about the repository's deletion path",
+    !/No C5 executor exists|no C5 deletion path/i.test(plan));
+  check("while still saying it deleted nothing itself", /deleted nothing/i.test(plan));
 
   console.log("\n=== C3 is untouched by C5 ===");
   const c3rules = readFileSync("lib/imageDeletion.ts", "utf8");

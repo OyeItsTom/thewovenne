@@ -19,7 +19,8 @@
  * — an object it did not approve can never become eligible, and an object it
  * did approve still has to earn it again here.
  *
- * Eligibility lives in lib/imageOrphans.ts, not here.
+ * Eligibility lives in lib/imageOrphans.ts, not here. Executing a plan is a
+ * separate, irreversible step in scripts/orphan-delete-execute.ts.
  */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -337,7 +338,12 @@ async function main() {
   }
   console.log(`\n  manifest: ${path}`);
   console.log(`  checksum: ${manifest.checksum}`);
-  console.log("\n  This tool has deleted nothing. No C5 executor exists yet.\n");
+  // Says what is true of THIS tool, not of the repository around it. The C3
+  // planner once claimed "there is no C3 deletion path in this PR" and kept
+  // saying it after the executor shipped; the same mistake is not worth
+  // repeating one phase later.
+  console.log("\n  This tool has deleted nothing. Executing the batch is a separate,");
+  console.log("  irreversible step: scripts/orphan-delete-execute.ts\n");
 }
 
 if (require.main === module) {

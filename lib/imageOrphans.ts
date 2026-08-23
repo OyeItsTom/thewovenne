@@ -99,6 +99,7 @@ export const C5_STATES = [
   "C5_BLOCKED_TWIN_ABSENT",
   "C5_BLOCKED_TWIN_UNREFERENCED",
   "C5_BLOCKED_TWIN_NOT_INDEPENDENT",
+  "C5_BLOCKED_TWIN_IS_MASTER",
   "C5_BLOCKED_CHECKSUM_MISMATCH",
   "C5_BLOCKED_BYTES_MISMATCH",
   "C5_MANUAL_REVIEW",
@@ -211,6 +212,26 @@ export function classifyOrphan(c: OrphanCandidate): C5Verdict {
   if (!twin.exists) {
     return no("C5_BLOCKED_TWIN_ABSENT",
       `the surviving twin ${twin.path} is no longer in the bucket — the photograph would be lost`);
+  }
+  // A NORMALISED MASTER IS NEVER A TWIN.
+  //
+  // The C4 audit put two objects in HIGH_CONFIDENCE_ORPHAN on the strength of
+  // a "duplicate of master" match. That match was an artefact of how masters
+  // are named: masterKey() embeds the first 32 hex of the SHA-256 of the
+  // SOURCE, so a candidate whose digest starts with those characters looks
+  // like a duplicate of the master while being nothing of the kind. A master
+  // is a lossy 2400px derivative — for those two the C2 source had already
+  // been deleted by C3, which made each candidate the last full-resolution
+  // copy of its photograph. Deleting them would have lost the original.
+  //
+  // Comparing live bytes instead of filenames already prevents the mistake,
+  // because a derivative cannot hash to its source. This is the second lock:
+  // it refuses on shape, so no future digest coincidence or renaming scheme
+  // can make a derivative stand in for the thing it was derived from.
+  if (looksLikeMaster(twin.path)) {
+    return no("C5_BLOCKED_TWIN_IS_MASTER",
+      `${twin.path} is a normalised master — a lossy derivative, not a byte-identical copy; ` +
+      "it cannot be the survivor for a full-resolution original");
   }
   if (twin.liveReferences.length < 1) {
     return no("C5_BLOCKED_TWIN_UNREFERENCED",
@@ -358,6 +379,10 @@ export function assertCoherentOrphanManifest(manifest: OrphanManifest): void {
   const candidates = new Set<string>();
   for (const e of manifest.entries) {
     assertC5InScope(e.candidatePath, e.twinPath);
+    // See the note in classifyOrphan: a master is a derivative, never a twin.
+    if (looksLikeMaster(e.twinPath)) {
+      refuse(`${e.twinPath} is a normalised master and cannot be a survivor`, "twin_is_master");
+    }
     if (e.candidateChecksum !== e.twinChecksum) {
       refuse(`${e.candidatePath} and its twin have different checksums in the manifest`, "checksum_mismatch");
     }
