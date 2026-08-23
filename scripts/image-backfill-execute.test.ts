@@ -257,8 +257,20 @@ async function main() {
     DISQUALIFYING_REFERENCE_TABLES.includes("site_content"));
   check("J: the writable whitelist is still exactly three columns",
     REPOINTABLE_COLUMNS.length === 3);
-  check("J: still no way to delete an original",
+  // The C2 guarantee, stated narrowly on purpose.
+  //
+  // This used to read as a claim about "the tooling". Since PR #138 a sibling
+  // C3 executor exists that legitimately deletes originals, so an unqualified
+  // claim would silently narrow to "…in whichever file this happens to read"
+  // while still passing. It now names what it covers: the C2 executor and the
+  // C2 rules cannot delete, whatever else the repository grows. C3's own suite
+  // asserts that deletion lives in exactly one file, and that file is not this
+  // one.
+  check("J: the C2 executor still has no way to delete an original",
     !/\.remove\(|\.delete\(|method:\s*["']DELETE["']/.test(strip(exec)));
+  check("J: nor do the C2 rules",
+    !/\.remove\(|\.delete\(|method:\s*["']DELETE["']/.test(strip(rules)));
+  check("J: C2 constructs no supabase-js client either", !strip(exec).includes("createClient"));
 
   console.log("\n=== only whitelisted columns may be rewritten ===");
   check("product_images.url is repointable", isRepointable("product_images"));

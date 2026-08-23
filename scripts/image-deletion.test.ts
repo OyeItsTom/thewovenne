@@ -151,7 +151,8 @@ function main() {
 
   console.log("\n=== the deletion manifest checksum ===");
   const entries: DeletionManifestEntry[] = [
-    { sourcePath: "products/a.jpg", sourceBytes: 100, masterPath: "products/aa-v1.jpg",
+    { sourcePath: "products/a.jpg", sourceBytes: 100, sourceChecksum: "a".repeat(64),
+      masterPath: "products/aa-v1.jpg",
       expectedLiveReferencesOnSource: 0, expectedLiveReferencesOnMaster: 2, historicalReferencesOnSource: 0 },
   ];
   const subject = { batchId: "c3-delete-1", normalizerVersion: 1, entries };
@@ -166,6 +167,8 @@ function main() {
     deletionManifestChecksum({ ...subject, entries: [{ ...entries[0], sourcePath: "products/b.jpg" }] }, sha) !== sum);
   check("changing the master changes it",
     deletionManifestChecksum({ ...subject, entries: [{ ...entries[0], masterPath: "products/bb-v1.jpg" }] }, sha) !== sum);
+  check("changing the source checksum changes it",
+    deletionManifestChecksum({ ...subject, entries: [{ ...entries[0], sourceChecksum: "b".repeat(64) }] }, sha) !== sum);
   check("changing the byte size changes it",
     deletionManifestChecksum({ ...subject, entries: [{ ...entries[0], sourceBytes: 101 }] }, sha) !== sum);
   check("changing the expected source reference state changes it",
@@ -192,7 +195,7 @@ function main() {
   const tmp = mkdtempSync(join(tmpdir(), "wovenne-c3-"));
   const p = join(tmp, "manifest-c3-delete-1.json");
   const w = (path: string, data: string) => writeFileSync(path, data, { flag: "wx" });
-  const doc = { batchId: "c3-delete-1", createdAt: "x", normalizerVersion: 1, executable: false, entries, checksum: sum };
+  const doc = { batchId: "c3-delete-1", createdAt: "x", normalizerVersion: 1, entries, checksum: sum };
   writeManifestExclusive(p, doc as never, w);
   check("the first write lands", existsSync(p));
   refuses("a second write to the same id is refused",
@@ -220,7 +223,19 @@ function main() {
     !/--force|--skip-verif|--ignore-checksum|--allow-|--yes-i-understand-delete/.test(strip(src)));
   check("the only HTTP methods are read methods",
     (strip(src).match(/method:\s*["'`](\w+)["'`]/gi) ?? []).every((m) => /POST|HEAD|GET/i.test(m)));
-  check("the manifest records that it is not executable", strip(src).includes("executable: false"));
+  // The planner used to write `executable: false` into every manifest, and this
+  // suite used to assert it. The claim was about the PR, not the batch, and it
+  // outlived the PR: the executor shipped and never read the field, so a
+  // manifest saying "not executable" sat in front of a tool that would execute
+  // it. The field is gone; what replaces it is a refusal in the executor.
+  check("the planner writes no executable field",
+    !/executable\s*:/.test(strip(src)));
+  check("nor any other self-declared permission flag",
+    !/\b(authorized|authorised|approved|permitted|allowDelete|canDelete)\s*:/i.test(strip(src)));
+  check("and claims nothing about the repository's deletion path",
+    !/no C3 deletion path in this PR|NOT EXECUTABLE/.test(src));
+  check("while still saying it deleted nothing itself",
+    /deleted nothing/i.test(src));
   check("the only write is the manifest, through the exclusive writer",
     (strip(src).match(/writeFileSync\(/g) ?? []).length === 1 && strip(src).includes("writeManifestExclusive("));
   check("the planner writes only under reports/", strip(src).includes('LEDGER_DIR = "reports/image-backfill"'));
