@@ -5,6 +5,7 @@ import { effectivePrice } from "./pricing";
 import { CHAT_TOOLS, runChatTool, type ToolOutcome } from "./chatTools";
 import { classifyModelError, type TraceRecorder } from "./ai/observability";
 import type { BudgetStopReason, RequestBudget } from "./ai/budget";
+import { anthropicProvider, type ChatProvider } from "./ai/provider";
 import { orderRef } from "./orders";
 
 // Current Sonnet — strong English + Malayalam, Sonnet-tier latency/cost.
@@ -17,6 +18,14 @@ export interface ChatMessage {
 }
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+/**
+ * The provider every turn uses unless one is passed in.
+ *
+ * A module-level constant, exactly as the client above always was — production
+ * builds one and keeps it.
+ */
+const DEFAULT_PROVIDER: ChatProvider = anthropicProvider(anthropic);
 
 /**
  * Whether the concierge has a usable key.
@@ -426,10 +435,38 @@ export async function* streamChat(
      * route needs it to pick a trace outcome.
      */
     onBudgetStop?: (reason: BudgetStopReason, detail: string) => void;
+    /**
+     * Who answers a model call.
+     *
+     * OPTIONAL, AND PRODUCTION NEVER PASSES IT. Both real callers — the web
+     * route and the WhatsApp webhook — leave this undefined and get the module
+     * client, which is what they always had. It exists so an offline evaluation
+     * can drive THIS loop, rather than a copy of it that might drift.
+     */
+    provider?: ChatProvider;
+    /**
+     * Who runs a non-privileged tool.
+     *
+     * OPTIONAL IN THE SAME WAY, and for the same reason: an evaluation needs
+     * lookups that return a known answer. The privileged order tool is NOT
+     * routed through here — see the dispatch below. Substituting the thing that
+     * enforces an authorisation boundary would evaluate the substitute.
+     */
+    runTool?: (name: string, input: unknown) => Promise<ToolOutcome>;
+    /**
+     * The catalogue index, when the caller already has one.
+     *
+     * OPTIONAL, AND PRODUCTION NEVER PASSES IT — the shop reads its own
+     * catalogue. Supplying it lets an offline evaluation run with no database
+     * at all, which is what makes the suite CI-safe and deterministic: the
+     * system prompt is then a known string, so a grounding case can say
+     * "nothing here mentions a weaver" and mean it.
+     */
+    catalogue?: string;
   } = {}
 ): AsyncGenerator<string, void, void> {
   const [products, order] = await Promise.all([
-    getCatalogueIndex(),
+    opts.catalogue !== undefined ? Promise.resolve(opts.catalogue) : getCatalogueIndex(),
     lookupOrder(opts.orderId ?? null, opts.email ?? null),
   ]);
 
@@ -484,7 +521,7 @@ export async function* streamChat(
 
     let reply: Anthropic.Message;
     try {
-      const stream = anthropic.messages.stream({
+      const stream = (opts.provider ?? DEFAULT_PROVIDER).stream({
         model: CHAT_MODEL,
         max_tokens: 1024,
         thinking: { type: "adaptive" },
@@ -557,10 +594,15 @@ export async function* streamChat(
 
         let outcome: ToolOutcome;
         try {
+          // NOTE THE ASYMMETRY, IT IS THE POINT. Only the non-privileged branch
+          // is substitutable. The order tool keeps its real executor and its
+          // real email — the one taken from the verified session, never from
+          // `call.input` — because a boundary you can swap out in a test is a
+          // boundary the test is no longer checking.
           outcome =
             privileged && opts.email
               ? await runOrderTool(opts.email, call.input)
-              : await runChatTool(call.name, call.input);
+              : await (opts.runTool ?? runChatTool)(call.name, call.input);
         } catch (err) {
           // Neither executor is supposed to throw — both catch internally — so
           // this is the belt to their braces. It keeps one unexpected throw from
