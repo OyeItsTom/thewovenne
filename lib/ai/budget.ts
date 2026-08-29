@@ -26,6 +26,9 @@
 import { AI_LIMITS, type EvalLimits, type RequestLimits } from "./limits";
 import { addUsage, costUsd, isPriced, type TokenUsage, totalTokens, ZERO_USAGE } from "./cost";
 import { createSupabaseDailySpendStore } from "./dailySpend";
+// Pure arithmetic only — liveGuard constructs no client and knows nothing about
+// Anthropic, so importing it here adds no provider reachability.
+import { canAdmitCase } from "./eval/liveGuard";
 
 // ══ Verdicts ══════════════════════════════════
 
@@ -522,11 +525,27 @@ export class EvalBudget {
       return this.stop("eval_token_ceiling", `${tokens}/${this.limits.maxTokens} tokens`);
     }
 
+    // ══ RESERVE THE WORST CASE, DO NOT MERELY CHECK THE TOTAL ══
+    //
+    // This used to ask `spent >= maxCostUsd` — "have we crossed the ceiling
+    // yet?" — which admits a case at $1.99 of a $2.00 run that then spends
+    // $0.06. Measured on the real class: at $0.4700 spent against a $0.50 cap
+    // it returned ALLOWED, permitting the run to reach $0.5300.
+    //
+    // The right question is whether THIS case could cross it. The worst case is
+    // not a guess: RequestBudget enforces AI_LIMITS.request.maxCostUsd on every
+    // turn, so no case can cost more than that. Same shape as 0059's
+    // reserve-then-reconcile, one level up.
+    //
+    // Compared in whole micro-dollars, because the boundary is exact and
+    // IEEE-754 is not: `0.54 + 0.06` is 0.6000000000000001, so a float compare
+    // would refuse a case that a $0.60 cap plainly admits.
     const spent = costUsd(this.model, this.usage) ?? Number.POSITIVE_INFINITY;
-    if (spent >= this.limits.maxCostUsd) {
+    if (!canAdmitCase(spent, this.limits.maxCostUsd)) {
       return this.stop(
         "eval_cost_ceiling",
-        `$${spent.toFixed(4)}/$${this.limits.maxCostUsd}`
+        `$${spent.toFixed(4)} spent + $${AI_LIMITS.request.maxCostUsd} worst case ` +
+          `exceeds the $${this.limits.maxCostUsd} run cap`
       );
     }
 
