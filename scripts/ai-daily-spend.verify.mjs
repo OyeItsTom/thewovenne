@@ -147,8 +147,15 @@ async function main() {
     await a.connect(); await b.connect();
     await a.query(`delete from ai_spend_reservations where day = $1`, [PROBE_DAY]);
     await a.query(`delete from ai_daily_spend where day = $1`, [PROBE_DAY]);
+    // 4.94 IS LOAD-BEARING: it must leave room for exactly one $0.06
+    // reservation and not two.
+    //     4.94 + 0.06 = 5.00  <= 5.00   the first is allowed
+    //     4.94 + 0.12 = 5.06  >  5.00   the second is refused
+    // Seeded at 4.96 the FIRST update already matches no row, and an update
+    // that matches no row takes no lock — so b never blocks, and the test
+    // demonstrates nothing about serialisation while merely appearing to fail.
     await a.query(
-      `insert into ai_daily_spend (day, committed_usd) values ($1, 4.96)`, [PROBE_DAY]
+      `insert into ai_daily_spend (day, committed_usd) values ($1, 4.94)`, [PROBE_DAY]
     );
 
     // Both transactions target PROBE_DAY by pinning the clock is not possible,
