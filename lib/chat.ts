@@ -2,7 +2,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { supabase, createServiceClient } from "./supabase";
 import { getAllCategories, getVisibleCategoryIds } from "./categories";
 import { effectivePrice } from "./pricing";
-import { CHAT_TOOLS, runChatTool } from "./chatTools";
+import { CHAT_TOOLS, runChatTool, type ToolOutcome } from "./chatTools";
+import { classifyModelError, type TraceRecorder } from "./ai/observability";
+import type { BudgetStopReason, RequestBudget } from "./ai/budget";
 import { orderRef } from "./orders";
 
 // Current Sonnet — strong English + Malayalam, Sonnet-tier latency/cost.
@@ -206,7 +208,7 @@ export function chatToolsFor(email: string | null | undefined): Anthropic.Tool[]
 export async function runOrderTool(
   email: string,
   input: unknown
-): Promise<{ text: string; found: boolean }> {
+): Promise<ToolOutcome> {
   const raw = (input as { reference?: unknown } | null)?.reference;
   const reference = typeof raw === "string" ? raw.trim().toLowerCase() : "";
 
@@ -303,6 +305,7 @@ export async function runOrderTool(
     return {
       text: "That lookup failed just now. Say you cannot check the order at the moment and offer WhatsApp. Do not describe an order from memory.",
       found: false,
+      error: "tool_internal_error",
     };
   }
 }
@@ -397,6 +400,32 @@ export async function* streamChat(
      * arriving as a log line rather than as a customer complaint.
      */
     onTool?: (name: string, found: boolean) => void;
+    /**
+     * Collects timings, tokens and tool calls for this turn.
+     *
+     * OPTIONAL, AND THE LOOP DOES NOT DEPEND ON IT. The WhatsApp path calls
+     * streamChat with no options at all, and a turn with no recorder behaves
+     * exactly as it did before — every write below goes through a recorder
+     * whose own methods swallow their failures, so instrumentation can neither
+     * change the reply nor break it.
+     */
+    recorder?: TraceRecorder;
+    /**
+     * This turn's spend allowance.
+     *
+     * OPTIONAL, LIKE THE RECORDER. Absent — as on the WhatsApp path — the loop
+     * behaves exactly as it always has, bounded only by MAX_TOOL_ROUNDS. When
+     * present it is consulted BEFORE each model call, so a ceiling is honoured
+     * rather than merely observed being crossed.
+     */
+    budget?: RequestBudget;
+    /**
+     * Told when the budget stopped the turn, with the machine-readable reason.
+     *
+     * The reason never reaches the customer — see the fallback below — but the
+     * route needs it to pick a trace outcome.
+     */
+    onBudgetStop?: (reason: BudgetStopReason, detail: string) => void;
   } = {}
 ): AsyncGenerator<string, void, void> {
   const [products, order] = await Promise.all([
@@ -411,39 +440,109 @@ export async function* streamChat(
     content: m.content,
   }));
 
+  // Whether the customer has seen anything yet. Decides, on a budget stop,
+  // between letting a partial answer stand and saying something rather than
+  // nothing.
+  let yieldedAnything = false;
+
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     // The last round is asked WITHOUT tools rather than simply cut off. A
     // customer who asked a question gets an answer built from whatever was
     // gathered, instead of silence because the budget ran out mid-lookup.
     const exhausted = round === MAX_TOOL_ROUNDS;
 
-    const stream = anthropic.messages.stream({
-      model: CHAT_MODEL,
-      max_tokens: 1024,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "low" },
-      system,
-      tools,
-      ...(exhausted ? { tool_choice: { type: "none" as const } } : {}),
-      messages: turns,
-    });
-
-    for await (const event of stream) {
-      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-        yield event.delta.text;
+    // ASKED BEFORE THE CALL IS MADE, not after it is paid for.
+    //
+    // A turn that stops here has usually already streamed something — the
+    // rounds before this one — so the customer keeps a partial answer rather
+    // than losing the lot. Only a turn stopped before its very first token gets
+    // the fallback line, because only that customer would otherwise see an
+    // empty bubble.
+    //
+    // The reason is reported to the caller and NOT to the customer: "I have
+    // reached my per-request cost ceiling" tells a stranger what our limits are
+    // and invites them to probe the edges of it.
+    if (opts.budget) {
+      const verdict = opts.budget.checkBeforeCall();
+      if (!verdict.allowed) {
+        console.warn(`concierge: budget stop (${verdict.reason}) — ${verdict.detail}`);
+        opts.onBudgetStop?.(verdict.reason, verdict.detail);
+        if (!yieldedAnything) {
+          yield "Sorry — I can't finish that thought just now. Please try again, or message us on WhatsApp and we'll help straight away.";
+        }
+        return;
       }
     }
 
-    const reply = await stream.finalMessage();
+    // Opened before the request so the measurement includes connection time,
+    // and closed once finalMessage resolves — which is the end of the call, not
+    // the first token. Note that because this is a generator, the clock also
+    // covers however long the consumer took to read the deltas; for the web
+    // route that is a browser reading a stream, which is the latency a customer
+    // actually experiences.
+    const closeCall = opts.recorder?.startModelCall(!exhausted);
+
+    let reply: Anthropic.Message;
+    try {
+      const stream = anthropic.messages.stream({
+        model: CHAT_MODEL,
+        max_tokens: 1024,
+        thinking: { type: "adaptive" },
+        output_config: { effort: "low" },
+        system,
+        tools,
+        ...(exhausted ? { tool_choice: { type: "none" as const } } : {}),
+        messages: turns,
+      });
+
+      for await (const event of stream) {
+        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          yieldedAnything = true;
+          yield event.delta.text;
+        }
+      }
+
+      reply = await stream.finalMessage();
+    } catch (err) {
+      // Recorded and rethrown, not handled. The route above owns what a
+      // customer sees when the model is unreachable, and it did that correctly
+      // before this line existed — telemetry does not get to change it.
+      closeCall?.({ error: classifyModelError(err) });
+      throw err;
+    }
+
+    const calls = reply.content.filter(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+    );
+
+    // A turn that says it wants a tool and then names none is the one shape of
+    // malformed reply this loop can actually detect: the code below would push
+    // an empty result set and confuse the next round. Recorded only — the
+    // existing control flow is untouched.
+    const malformed = reply.stop_reason === "tool_use" && calls.length === 0;
+
+    closeCall?.({
+      usage: reply.usage,
+      stopReason: reply.stop_reason ?? null,
+      error: malformed ? "malformed_model_response" : null,
+    });
+
+    // Charged against the allowance immediately, and BEFORE the loop can decide
+    // to go round again. A usage block that will not parse is charged a
+    // conservative estimate rather than zero — otherwise a provider returning
+    // junk usage would be a way to walk straight through the ceiling.
+    const charged = opts.budget?.recordCall(reply.usage);
+    if (charged?.assumed) {
+      console.warn(
+        `concierge: unreadable usage on a completed model call — charged the conservative estimate.`
+      );
+    }
+
     if (reply.stop_reason !== "tool_use" || exhausted) return;
 
     // The whole content array, not just the text: dropping the tool_use blocks
     // here would leave the next request with tool results answering nothing.
     turns.push({ role: "assistant", content: reply.content });
-
-    const calls = reply.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
-    );
 
     // Run them together, and return every result in ONE user message. Splitting
     // results across messages teaches the model to stop asking for tools in
@@ -453,10 +552,39 @@ export async function* streamChat(
         // The one tool the anonymous dispatcher must never be able to run. It is
         // only in the list at all when opts.email came from a verified session,
         // and the email is taken from there rather than from the call.
-        const outcome =
-          call.name === MY_ORDER_TOOL.name && opts.email
-            ? await runOrderTool(opts.email, call.input)
-            : await runChatTool(call.name, call.input);
+        const privileged = call.name === MY_ORDER_TOOL.name && Boolean(opts.email);
+        const startedAt = Date.now();
+
+        let outcome: ToolOutcome;
+        try {
+          outcome =
+            privileged && opts.email
+              ? await runOrderTool(opts.email, call.input)
+              : await runChatTool(call.name, call.input);
+        } catch (err) {
+          // Neither executor is supposed to throw — both catch internally — so
+          // this is the belt to their braces. It keeps one unexpected throw from
+          // killing every other lookup in the same Promise.all, which would take
+          // the whole reply down with it.
+          console.error(`chat tool ${call.name} threw past its own handler:`, err);
+          outcome = {
+            text: "That lookup failed just now. Tell the customer you can't check right now and offer WhatsApp. Do not answer from memory.",
+            found: false,
+            error: "tool_internal_error",
+          };
+        }
+
+        // Name, duration and verdict. NOT call.input — the argument is the one
+        // thing on this path that can carry an order reference, and it is never
+        // passed to the recorder. See lib/ai/observability.ts.
+        opts.recorder?.recordToolCall({
+          tool: call.name,
+          latencyMs: Date.now() - startedAt,
+          found: outcome.found,
+          privileged,
+          error: outcome.error ?? null,
+        });
+
         opts.onTool?.(call.name, outcome.found);
         return {
           type: "tool_result" as const,

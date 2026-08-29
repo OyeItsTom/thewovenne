@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type { ToolErrorCategory } from "./ai/observability";
 import { ANON_CTX } from "./readCtx";
 import { getBrandKnowledge, hasBrandKnowledge } from "./products";
 import { getProductBySlug } from "./products";
@@ -44,6 +45,17 @@ export interface ToolOutcome {
   text: string;
   /** For logging: did this actually find anything? */
   found: boolean;
+  /**
+   * Why it failed, when it failed — for telemetry only.
+   *
+   * ADDITIVE AND INVISIBLE TO THE MODEL. `text` is unchanged in every case, so
+   * the customer-facing behaviour of a miss is exactly what it was; this field
+   * exists because "found nothing" and "threw" were previously the same signal
+   * (`found: false`) and a dashboard cannot tell a gap in the catalogue from a
+   * broken lookup. A legitimate no-match leaves this undefined: not finding a
+   * red saree is the shop working.
+   */
+  error?: ToolErrorCategory;
 }
 
 const NOT_FOUND = (what: string): ToolOutcome => ({
@@ -331,6 +343,7 @@ export async function runChatTool(
         return {
           text: `There is no tool called "${name}". Answer from what you already have, or offer WhatsApp.`,
           found: false,
+          error: "invalid_tool_call",
         };
     }
   } catch (e) {
@@ -340,6 +353,7 @@ export async function runChatTool(
     return {
       text: "That lookup failed just now. Tell the customer you can't check right now and offer WhatsApp. Do not answer from memory.",
       found: false,
+      error: "tool_internal_error",
     };
   }
 }

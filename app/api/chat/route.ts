@@ -1,11 +1,23 @@
 import { NextRequest } from "next/server";
-import { streamChat, chatConfigured, type ChatMessage } from "@/lib/chat";
+import { streamChat, chatConfigured, CHAT_MODEL, type ChatMessage } from "@/lib/chat";
 import {
   anonymousCaller,
   consumeChatQuota,
   quotaMessage,
   signedInCaller,
 } from "@/lib/chatQuota";
+import {
+  beginTrace,
+  classifyModelError,
+  emitBudgetEvent,
+  outcomeForBudgetStop,
+} from "@/lib/ai/observability";
+import {
+  finalizeDailyBudget,
+  RequestBudget,
+  reserveDailyBudget,
+  type DailyReservation,
+} from "@/lib/ai/budget";
 import { createRSCClient } from "@/lib/supabaseRSC";
 import { getStoreSettings } from "@/lib/storeSettings";
 
@@ -18,12 +30,24 @@ export const dynamic = "force-dynamic";
  * exact orderId + email match (handled in lib/chat).
  */
 export async function POST(req: NextRequest) {
+  // Opened first so that every way this request can end — including the ones
+  // that never reach the model — leaves exactly one trace behind. A refusal
+  // that logs nothing is indistinguishable from a request that never arrived,
+  // and "how often are we turning people away?" is a question worth being able
+  // to answer.
+  //
+  // The id stays server-side. It is not returned in a header or a body: it
+  // correlates our own logs, and handing it to a caller would only invite it to
+  // be quoted back at us as if it meant something.
+  const trace = beginTrace({ model: CHAT_MODEL });
+
   // Checked before anything streams: once the response has started the status
   // code is already sent, and a key problem can only be reported in-band.
   if (!chatConfigured()) {
     console.error(
       "chat: ANTHROPIC_API_KEY is missing or not a real key — the concierge is disabled."
     );
+    trace.finish("not_configured");
     return new Response(
       "Ask Wovenne isn't set up yet. Please message us on WhatsApp and we'll help straight away.",
       { status: 503 }
@@ -38,6 +62,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
+    trace.finish("bad_request");
     return new Response("Invalid request body.", { status: 400 });
   }
 
@@ -45,6 +70,7 @@ export async function POST(req: NextRequest) {
     (m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
   );
   if (messages.length === 0) {
+    trace.finish("bad_request");
     return new Response("No messages provided.", { status: 400 });
   }
 
@@ -52,7 +78,9 @@ export async function POST(req: NextRequest) {
   // this endpoint is public, and a hidden widget still leaves it answering
   // anyone who calls it directly.
   const settings = await getStoreSettings();
+  trace.setFeatureEnabled(Boolean(settings.ask_wovenne_enabled));
   if (!settings.ask_wovenne_enabled) {
+    trace.finish("feature_disabled");
     return new Response(
       "Ask Wovenne is unavailable at the moment. Please message us on WhatsApp and we'll help straight away.",
       { status: 503 }
@@ -94,13 +122,93 @@ export async function POST(req: NextRequest) {
     console.error("chat: session read failed, treating as anonymous:", err);
   }
 
+  // A classification, not an identity. The quota's own key is a stable hash of
+  // the customer id and is deliberately NOT recorded — see lib/ai/observability.
+  trace.setCaller(caller.signedIn ? "customer" : "guest");
+
   const quota = await consumeChatQuota(caller);
   if (!quota.allowed) {
+    trace.finish("rate_limited");
     return new Response(quotaMessage(quota.resetAt), {
       status: 429,
       headers: { "Retry-After": "600" },
     });
   }
+
+  // THE DAY'S ALLOWANCE — RESERVED, NOT CHECKED, BEFORE ANYTHING IS SPENT.
+  //
+  // Reading the total and then deciding would be a check-then-act: two requests
+  // arriving together would both see room and both spend. This holds the
+  // request's MAXIMUM possible cost in one atomic database statement, and gives
+  // the difference back at settlement.
+  //
+  // Fails CLOSED on an unreachable store — "we could not check, so we assumed
+  // it was fine" is how an outage becomes an invoice.
+  //
+  // The customer is told exactly what they are told for every other kind of
+  // unavailability. What our ceiling is, and how close to it we are, is not
+  // something a public endpoint should narrate.
+  const daily = await reserveDailyBudget();
+  if (!daily.allowed) {
+    console.error(`chat: refusing to spend — ${daily.reason}: ${daily.detail}`);
+    emitBudgetEvent(
+      daily.reason === "daily_ceiling" ? "daily_budget_denied" : "daily_budget_unavailable",
+      { traceId: trace.traceId, detail: daily.detail }
+    );
+    trace.finish(outcomeForBudgetStop(daily.reason));
+    return new Response(
+      "Ask Wovenne is unavailable at the moment. Please message us on WhatsApp and we'll help straight away.",
+      { status: 503 }
+    );
+  }
+  const reservation: DailyReservation | null = daily.reservation;
+  if (reservation) {
+    emitBudgetEvent("daily_budget_reserved", {
+      traceId: trace.traceId,
+      reservationId: reservation.id,
+      amountUsd: reservation.amountUsd,
+    });
+  }
+
+  // One allowance per turn, from the central config — no magic numbers here.
+  const budget = new RequestBudget(CHAT_MODEL);
+  let budgetStop: string | null = null;
+
+  /**
+   * Give back the difference between what was reserved and what was spent.
+   *
+   * Runs whichever way the turn ends, including a provider failure — a request
+   * that errored after two model calls still cost what those two calls cost.
+   * Never awaited on the customer's path and never allowed to throw: they
+   * already have their answer, and reconciliation is our bookkeeping, not their
+   * problem. A settlement that does not land is swept in full after its TTL,
+   * which errs toward overcharging rather than losing track.
+   */
+  let settled = false;
+  const settle = async () => {
+    if (settled || !reservation) return;
+    settled = true;
+    const actual = budget.settlementCostUsd;
+    const ok = await finalizeDailyBudget(reservation, actual, budget.usageForSettlement);
+    if (ok) {
+      emitBudgetEvent("daily_budget_reconciled", {
+        traceId: trace.traceId,
+        reservationId: reservation.id,
+        amountUsd: reservation.amountUsd,
+        actualUsd: actual,
+      });
+    } else {
+      console.error(
+        `chat: daily budget not reconciled for reservation ${reservation.id} — ` +
+          "it will be swept at its full reserved amount."
+      );
+      emitBudgetEvent("reconciliation_failed", {
+        traceId: trace.traceId,
+        reservationId: reservation.id,
+        amountUsd: reservation.amountUsd,
+      });
+    }
+  };
 
   try {
     const replyStream = streamChat(messages, {
@@ -117,6 +225,15 @@ export async function POST(req: NextRequest) {
       onTool: (name, found) => {
         if (!found) console.warn(`concierge: ${name} found nothing`);
       },
+      // Timings, tokens and tool names for this turn. The loop writes into it;
+      // the stream below closes it exactly once, whichever way the turn ends.
+      recorder: trace,
+      // This turn's spend allowance, consulted before every model call.
+      budget,
+      onBudgetStop: (reason, detail) => {
+        budgetStop = reason;
+        console.warn(`chat: turn stopped on budget (${reason}) — ${detail}`);
+      },
     });
 
     const encoder = new TextEncoder();
@@ -131,12 +248,30 @@ export async function POST(req: NextRequest) {
             sentAnything = true;
             controller.enqueue(encoder.encode(delta));
           }
+          // A tool that erred still produced an answer, so the turn succeeded —
+          // but the outcome says which kind of success it was, and a tool error
+          // is recorded in preference to "it worked" so a degraded reply is not
+          // counted as a clean one.
+          // A budget stop outranks both — the turn ended because we stopped it,
+          // and recording that as an ordinary success would hide the one event
+          // a spend dashboard most needs to see.
+          trace.finish(
+            budgetStop
+              ? outcomeForBudgetStop(budgetStop)
+              : trace.firstToolError() ??
+                  (trace.toolCallCount > 0 ? "successful_with_tools" : "successful_no_tool")
+          );
+          void settle();
           controller.close();
         } catch (err) {
           // The status line has already gone out, so erroring the stream just
           // drops the connection and the widget shows nothing. Say something
           // useful instead and close cleanly; the log is what raises the alarm.
           console.error("chat stream error:", err);
+          trace.finish(classifyModelError(err));
+          // Settled on the failure path too: the calls that completed before
+          // the error were still billed by the provider.
+          void settle();
           if (!sentAnything) {
             controller.enqueue(
               encoder.encode(
@@ -157,6 +292,10 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error("chat route error:", err);
+    trace.finish(classifyModelError(err));
+    // The stream never started, so nothing was spent — but the reservation is
+    // outstanding and must be released rather than left for the sweep.
+    void settle();
     return new Response("Sorry — Ask Wovenne is unavailable right now.", {
       status: 500,
     });

@@ -114,9 +114,31 @@ export interface QuotaResult {
 /**
  * Spend one message from this caller's allowance.
  *
- * Fails OPEN on a database error: a concierge that stops answering because the
- * counter is unreachable is a worse outcome than a few uncounted messages, and
- * the error is logged for Sentry either way.
+ * ══ IT NOW FAILS CLOSED, AND THAT IS A REVERSAL ══
+ *
+ * This used to return `{allowed: true}` on any database error, on the reasoning
+ * that a concierge which stops answering is worse than a few uncounted
+ * messages. That reasoning was sound when the counter was the only thing at
+ * stake. It is not sound now, for two reasons the Phase 1 baseline made
+ * concrete:
+ *
+ *   1. This is the ONLY rate limit on a public, unauthenticated endpoint that
+ *      spends real money — roughly $0.03 on a worst-case turn. "Fail open" on
+ *      a rate limiter guarding a paid API means a database outage removes the
+ *      spend ceiling entirely, at precisely the moment nobody is watching.
+ *   2. The failure it was protecting against is the *cheap* one. A visitor who
+ *      cannot use the concierge during a Supabase outage is offered WhatsApp,
+ *      which is the same escalation every other failure path offers. A bill
+ *      run up during that outage cannot be handed back.
+ *
+ * The blast radius of the reversal is deliberately small: `consumeChatQuota`
+ * has exactly one caller, `app/api/chat/route.ts`, so this changes Ask Wovenne
+ * and nothing else in the shop. It is not a shared limiter.
+ *
+ * `allowed: false` with `resetAt: null` is the shape a caller already handles —
+ * `quotaMessage(null)` returns the generic "reached the limit for now" line
+ * plus the WhatsApp offer. The customer is not told a database is down, because
+ * that is not their problem and not their business.
  */
 export async function consumeChatQuota(caller: ChatCaller): Promise<QuotaResult> {
   const limit = caller.limit;
@@ -133,8 +155,8 @@ export async function consumeChatQuota(caller: ChatCaller): Promise<QuotaResult>
     });
 
     if (error) {
-      console.error("consumeChatQuota:", error.message);
-      return { allowed: true, remaining: limit, resetAt: null };
+      console.error("consumeChatQuota (failing closed):", error.message);
+      return { allowed: false, remaining: 0, resetAt: null };
     }
 
     const row = data as { allowed: boolean; remaining: number; reset_at: string };
@@ -144,8 +166,10 @@ export async function consumeChatQuota(caller: ChatCaller): Promise<QuotaResult>
       resetAt: row.reset_at ?? null,
     };
   } catch (e) {
-    console.error("consumeChatQuota threw:", e);
-    return { allowed: true, remaining: limit, resetAt: null };
+    // Same verdict as an error result: a counter we cannot reach is a counter
+    // that is not protecting anything.
+    console.error("consumeChatQuota threw (failing closed):", e);
+    return { allowed: false, remaining: 0, resetAt: null };
   }
 }
 
