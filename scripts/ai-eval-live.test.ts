@@ -337,8 +337,17 @@ console.log("\n=== GATE 15: protected areas untouched ===");
   const route = fs.readFileSync("app/api/chat/route.ts", "utf8");
   t("the chat route is unchanged by 2.5A", !/liveGuard|ai-eval-live/.test(route));
 
-  // 2.5B-F must NOT have been implemented.
-  t("no grounding attribution implemented (2.5B)", !fs.existsSync("lib/ai/eval/attribution.ts"));
+  // The forward-phase boundary. 2.5B (grounding attribution) has since landed
+  // under its own approval, so the guard moved rather than being deleted — what
+  // it protects is everything that can still reach a provider or spend money.
+  //
+  // It caught 2.5B's arrival exactly as designed: this assertion failed the
+  // moment attribution.ts appeared, which is the guard working, not breaking.
+  t("grounding attribution (2.5B) is pure and provider-free",
+    !fs.existsSync("lib/ai/eval/attribution.ts") ||
+      !/@anthropic-ai\/sdk|new Anthropic\(|fetch\(|supabase/.test(
+        fs.readFileSync("lib/ai/eval/attribution.ts", "utf8").replace(/^\s*\*.*$/gm, "")
+      ));
   t("no canary cases implemented (2.5C)", !fs.existsSync("lib/ai/eval/liveCases.ts"));
   t("no live provider path implemented (2.5F)",
     !fs.readFileSync("scripts/ai-eval-live.ts", "utf8").includes("anthropicProvider"));
