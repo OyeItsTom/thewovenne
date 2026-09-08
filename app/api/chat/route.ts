@@ -26,8 +26,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * "Ask Wovenne" web chat endpoint. Streams the assistant's reply back as plain
- * text tokens so the widget can render it live. Order tracking is gated on an
- * exact orderId + email match (handled in lib/chat).
+ * text tokens so the widget can render it live. Order access requires a verified
+ * server-side session; request content may select an order, never its owner.
  */
 export async function POST(req: NextRequest) {
   // Opened first so that every way this request can end — including the ones
@@ -57,7 +57,6 @@ export async function POST(req: NextRequest) {
   let body: {
     messages?: ChatMessage[];
     orderId?: string | null;
-    email?: string | null;
   };
   try {
     body = await req.json();
@@ -113,10 +112,11 @@ export async function POST(req: NextRequest) {
   try {
     const {
       data: { user },
+      error,
     } = await createRSCClient().auth.getUser();
-    if (user) {
+    if (!error && user) {
       caller = signedInCaller(user.id);
-      verifiedEmail = user.email ?? null;
+      verifiedEmail = user.email?.trim().toLowerCase() || null;
     }
   } catch (err) {
     console.error("chat: session read failed, treating as anonymous:", err);
@@ -213,11 +213,10 @@ export async function POST(req: NextRequest) {
   try {
     const replyStream = streamChat(messages, {
       orderId: body.orderId,
-      // The session's address wins over anything the browser sent. The body form
-      // still works for a caller that supplies both an id and an email (the
-      // WhatsApp path, one day), but a signed-in customer never has to type
-      // theirs — and cannot be talked into typing somebody else's.
-      email: verifiedEmail ?? body.email,
+      // Both the legacy order preload and the order tool require this trusted
+      // identity. Missing/failed authentication leaves public chat available,
+      // but caller-controlled request fields must never grant order access.
+      email: verifiedEmail,
       // Only the misses are logged. A tool that found what it was asked for is
       // the system working; a tool that found nothing is either a gap in the
       // catalogue or a piece whose story nobody has written yet, and both are

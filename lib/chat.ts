@@ -401,6 +401,7 @@ export async function* streamChat(
   messages: ChatMessage[],
   opts: {
     orderId?: string | null;
+    /** Trusted server-authenticated identity only. Never pass a request-body email. */
     email?: string | null;
     /**
      * Told about every lookup, so a caller can log them. Worth having for the
