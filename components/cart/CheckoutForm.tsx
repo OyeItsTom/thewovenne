@@ -99,10 +99,14 @@ export default function CheckoutForm({
         // Already typed above — no reason to ask twice.
         prefill: data.prefill,
         handler: async (response: RazorpayPaymentResponse) => {
+          // Only Razorpay's identifiers go back. The basket was priced and
+          // stored when the order was created; sending it again here would
+          // be an invitation to restate it after paying, and the server
+          // would not read it anyway.
           const verifyRes = await fetch("/api/checkout/razorpay", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "verify", items, ...response }),
+            body: JSON.stringify({ action: "verify", ...response }),
           });
           const verifyData = await verifyRes.json();
           if (verifyData.verified) {
