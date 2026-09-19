@@ -6,7 +6,8 @@ import { validateOrderDetails } from "@/lib/orderDetails";
 import { getShippingConfig, quoteShipping } from "@/lib/shipping";
 import { planRedemption } from "@/lib/loyalty";
 import { applyCoupon } from "@/lib/coupons";
-import { settleVerifiedPayment, verifyPaymentSignature } from "@/lib/razorpayVerify";
+import { verifyPaymentSignature } from "@/lib/razorpayVerify";
+import { settleOrder } from "@/lib/settleOrder";
 import type { CartItem } from "@/lib/store";
 
 interface CreatePayload {
@@ -260,10 +261,22 @@ async function handleVerify({
     return NextResponse.json({ verified: false });
   }
 
-  // Everything past the signature works from the stored order row — the
-  // request has told us which Razorpay order paid, and nothing else it says
-  // is trusted.
-  await settleVerifiedPayment(razorpay_order_id, razorpay_payment_id);
+  // Everything past the signature is shared with every other way of learning
+  // that a payment succeeded (lib/settleOrder) and works from the stored order
+  // row — the request has said which Razorpay order paid, and nothing else it
+  // says is trusted. Replaying this request is safe: every effect is guarded
+  // in the database.
+  const settled = await settleOrder({
+    razorpayOrderId: razorpay_order_id,
+    razorpayPaymentId: razorpay_payment_id,
+  });
 
-  return NextResponse.json({ verified: true });
+  return NextResponse.json({
+    verified: true,
+    // For the page and the logs, not for the customer's eyes: whether this
+    // call found an order to settle against. The signature was genuine
+    // either way, so `verified` stays true — a failure to RECORD a payment
+    // is never reported to the payer as a failure to pay.
+    recorded: settled.ok,
+  });
 }

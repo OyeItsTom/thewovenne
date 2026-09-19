@@ -1,13 +1,21 @@
 /**
- * The trust boundary at payment verification, exercised headlessly.
+ * Payment verification and settlement, exercised headlessly.
  *
- * The payment-response signature binds Razorpay's order and payment ids and
- * nothing else. So after it verifies, the only description of what was bought
- * that can be trusted is the one the server stored when it created the order.
- * These tests hold a fake database and a fake gateway up to
- * lib/razorpayVerify and check that nothing the browser could say — a
- * different product, a bigger quantity, another size, or nothing at all —
- * changes what is settled. Run:
+ * Two things are under test. lib/razorpayVerify decides whether the browser's
+ * payment response is genuine. lib/settleOrder is everything that happens
+ * afterwards — and it must give the same answer however many times it is
+ * asked, because a replayed callback, a webhook, and a webhook retry all
+ * arrive with the same two identifiers.
+ *
+ * THE FAKE DATABASE MODELS THE GUARDS 0058 INSTALLED: one sale movement per
+ * (order, product, size), one loyalty redemption per order, one award per
+ * order, a confirmation email claimed by a conditional UPDATE. The code under
+ * test is real; the guards are simulated. That means these tests prove the
+ * APPLICATION reads the guards correctly — a replay is recognised, a claim
+ * that fails is respected, a refusal is flagged — and that nothing here
+ * depends on browser input. Whether the guards themselves hold under two
+ * concurrent connections rests on Postgres (scripts/migration-0058 for the
+ * SQL, the unique indexes for the concurrency), not on this file. Run:
  *
  *   npx tsx scripts/razorpay-verify.test.ts
  *
@@ -15,12 +23,8 @@
  */
 import crypto from "crypto";
 import { NextRequest } from "next/server";
-import {
-  settleVerifiedPayment,
-  verifyPaymentSignature,
-  type StoredLine,
-  type VerifiedSettlementDeps,
-} from "../lib/razorpayVerify";
+import { verifyPaymentSignature } from "../lib/razorpayVerify";
+import { settleOrder, type SettlementDeps, type StoredLine } from "../lib/settleOrder";
 import { POST } from "../app/api/checkout/razorpay/route";
 
 let pass = 0;
@@ -38,115 +42,239 @@ function check(name: string, actual: unknown, expected: unknown, note?: string) 
 
 // ── A fake database that remembers what was asked of it ──
 //
-// Only the calls lib/razorpayVerify makes are modelled. Anything else would be
-// a fake architecture, and a fake that answers questions the code never asks
-// proves nothing.
+// Just enough of the PostgREST client for settleOrder and settleLoyalty:
+// from().select/insert/update with eq/is/ilike filters, maybeSingle, and the
+// five RPCs. Each RPC enforces the same rule the real function or index does.
 
 type Row = Record<string, unknown>;
 
+interface OrderRow extends Row {
+  id: string;
+  razorpay_order_id: string | null;
+  items: StoredLine[] | null;
+  payment_status: string;
+  needs_review: boolean;
+  confirmation_sent_at: string | null;
+  invoice_number: string | null;
+  customer_email: string | null;
+  coupon_code: string | null;
+  coupon_discount_inr: number | null;
+  loyalty_points_spent: number | null;
+  total_inr: number | null;
+}
+
 interface World {
-  supabase: VerifiedSettlementDeps["supabase"];
-  rpcs: { name: string; args: Row }[];
-  updates: Row[];
-  inserts: Row[];
+  orders: Map<string, OrderRow>;
+  profiles: { id: string; email: string; is_admin: boolean }[];
+  /** (id|size) → units on the shelf. */
+  stock: Map<string, number>;
+  /** Claimed sale movements: order|id|size. The 0058 index. */
+  claims: Set<string>;
+  reserveCalls: { p_items: Row[]; p_order_id: string }[];
+  redemptions: Set<string>;
+  awards: Set<string>;
+  couponUses: string[];
+  invoiceCalls: number;
   emails: string[];
-  loyalty: string[];
+  updates: { patch: Row; filters: string }[];
+  inserts: Row[];
+  gatewayDown: boolean;
 }
 
 function makeWorld(opts: {
-  pending: { id: string; items: StoredLine[] | null } | null;
-  stockError?: string;
+  order?: Partial<OrderRow> | null;
+  stock?: Record<string, number>;
   gatewayDown?: boolean;
-}): { world: World; deps: Partial<VerifiedSettlementDeps> } {
-  const rpcs: World["rpcs"] = [];
-  const updates: Row[] = [];
-  const inserts: Row[] = [];
-  const emails: string[] = [];
-  const loyalty: string[] = [];
+  profile?: boolean;
+}): { world: World; deps: Partial<SettlementDeps> } {
+  const world: World = {
+    orders: new Map(),
+    profiles: opts.profile ? [{ id: "user-1", email: "a@b.c", is_admin: false }] : [],
+    stock: new Map(Object.entries(opts.stock ?? { "prod-A|M": 5 })),
+    claims: new Set(),
+    reserveCalls: [],
+    redemptions: new Set(),
+    awards: new Set(),
+    couponUses: [],
+    invoiceCalls: 0,
+    emails: [],
+    updates: [],
+    inserts: [],
+    gatewayDown: Boolean(opts.gatewayDown),
+  };
+  if (opts.order !== null) {
+    world.orders.set("ord-1", {
+      id: "ord-1",
+      razorpay_order_id: "order_1",
+      items: [{ id: "prod-A", size: "M", quantity: 1, price_inr: 2950 }],
+      payment_status: "pending",
+      needs_review: false,
+      confirmation_sent_at: null,
+      invoice_number: null,
+      customer_email: "a@b.c",
+      coupon_code: null,
+      coupon_discount_inr: null,
+      loyalty_points_spent: null,
+      total_inr: 2950,
+      ...(opts.order ?? {}),
+    });
+  }
 
-  const orders = {
-    select: (cols: string) => ({
-      eq: (_col: string, _val: unknown) => ({
+  type Filter = { col: string; op: "eq" | "is" | "ilike"; val: unknown };
+  const matches = (row: Row, filters: Filter[]) =>
+    filters.every((f) => {
+      const v = row[f.col];
+      if (f.op === "is") return v === f.val;
+      if (f.op === "ilike") return String(v).toLowerCase() === String(f.val).toLowerCase();
+      return v === f.val;
+    });
+
+  const table = (name: string) => {
+    const rows = (): Row[] =>
+      name === "orders" ? [...world.orders.values()] : name === "profiles" ? world.profiles : [];
+    const build = (op: "select" | "insert" | "update", payload?: Row) => {
+      const filters: Filter[] = [];
+      let returning = op === "select";
+      const run = () => {
+        if (op === "select") return { data: rows().filter((r) => matches(r, filters)), error: null };
+        if (op === "insert") {
+          const row = payload as Row;
+          world.inserts.push(row);
+          if (name !== "orders") return { data: [row], error: null };
+          const dup = [...world.orders.values()].some(
+            (o) => o.razorpay_order_id === row.razorpay_order_id
+          );
+          if (dup) return { data: [], error: { code: "23505", message: "orders_razorpay_order_id_key" } };
+          const full = { id: `thin-${world.orders.size + 1}`, confirmation_sent_at: null, ...row } as OrderRow;
+          world.orders.set(full.id, full);
+          return { data: returning ? [{ id: full.id }] : [], error: null };
+        }
+        const hit = rows().filter((r) => matches(r, filters));
+        world.updates.push({ patch: payload as Row, filters: filters.map((f) => `${f.col} ${f.op} ${f.val}`).join(", ") });
+        for (const r of hit) Object.assign(r, payload);
+        return { data: returning ? hit.map((r) => ({ id: r.id })) : [], error: null };
+      };
+      const q: Record<string, unknown> = {
+        eq: (col: string, val: unknown) => (filters.push({ col, op: "eq", val }), q),
+        is: (col: string, val: unknown) => (filters.push({ col, op: "is", val }), q),
+        ilike: (col: string, val: unknown) => (filters.push({ col, op: "ilike", val }), q),
+        select: () => ((returning = true), q),
         maybeSingle: async () => {
-          if (cols.startsWith("id, items")) {
-            return { data: opts.pending, error: null };
-          }
-          // The coupon/contact read after the row is marked paid.
-          return { data: { coupon_code: null, customer_email: "a@b.c" }, error: null };
+          const r = run();
+          return { data: (r.data as Row[])[0] ?? null, error: r.error };
         },
-      }),
-    }),
-    update: (patch: Row) => {
-      updates.push(patch);
-      return {
-        eq: (_col: string, _val: unknown) => ({
-          select: async () => ({
-            data: opts.pending ? [{ id: opts.pending.id }] : [],
-            error: null,
-          }),
-        }),
+        then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
+          Promise.resolve(run()).then(res, rej),
       };
-    },
-    insert: (row: Row) => {
-      inserts.push(row);
-      return {
-        select: () => ({
-          maybeSingle: async () => ({ data: { id: "thin-row" }, error: null }),
-        }),
-      };
-    },
+      return q;
+    };
+    return {
+      select: () => build("select"),
+      insert: (row: Row) => build("insert", row),
+      update: (patch: Row) => build("update", patch),
+    };
   };
 
-  const supabase = {
-    from: (table: string) => {
-      if (table !== "orders") throw new Error(`unexpected table ${table}`);
-      return orders;
-    },
-    rpc: async (name: string, args: Row) => {
-      rpcs.push({ name, args });
-      if (name === "reserve_stock" && opts.stockError) {
-        return { data: null, error: { message: opts.stockError } };
+  const rpc = async (fn: string, args: Row) => {
+    switch (fn) {
+      case "reserve_stock": {
+        const orderId = args.p_order_id as string;
+        const items = args.p_items as { id: string; size: string; quantity: number }[];
+        world.reserveCalls.push({ p_items: items, p_order_id: orderId });
+        // One transaction: a short line rolls back the whole call, claims included.
+        const made: string[] = [];
+        const taken = new Map<string, number>();
+        let reserved = 0;
+        let already = 0;
+        for (const i of items) {
+          const key = `${orderId}|${i.id}|${i.size}`;
+          if (world.claims.has(key)) {
+            already += i.quantity;
+            continue;
+          }
+          const shelf = `${i.id}|${i.size}`;
+          const have = (world.stock.get(shelf) ?? 0) - (taken.get(shelf) ?? 0);
+          if (have < i.quantity) {
+            for (const k of made) world.claims.delete(k);
+            return { data: null, error: { code: "P0001", message: `SOLD_OUT:${i.id}:${i.size}` } };
+          }
+          world.claims.add(key);
+          made.push(key);
+          taken.set(shelf, (taken.get(shelf) ?? 0) + i.quantity);
+          reserved += i.quantity;
+        }
+        for (const [shelf, n] of taken) world.stock.set(shelf, (world.stock.get(shelf) ?? 0) - n);
+        return { data: { reserved, already_reserved: already }, error: null };
       }
-      return { data: true, error: null };
-    },
-  } as unknown as VerifiedSettlementDeps["supabase"];
+      case "redeem_loyalty_points": {
+        const orderId = args.p_order_id as string;
+        if (world.redemptions.has(orderId)) {
+          return { data: null, error: { code: "23505", message: "loyalty_ledger_one_redemption_per_order" } };
+        }
+        world.redemptions.add(orderId);
+        return { data: { ok: true, points: args.p_points }, error: null };
+      }
+      case "award_loyalty_points": {
+        const orderId = args.p_order_id as string;
+        const order = world.orders.get(orderId);
+        // Awards go to accounts, for paid orders, once (0029's unique index).
+        if (!order || order.payment_status !== "paid" || !world.profiles.length || world.awards.has(orderId)) {
+          return { data: 0, error: null };
+        }
+        world.awards.add(orderId);
+        return { data: 10, error: null };
+      }
+      case "redeem_coupon": {
+        const orderId = args.p_order_id as string;
+        if (!world.couponUses.includes(orderId)) world.couponUses.push(orderId);
+        return { data: true, error: null };
+      }
+      case "assign_invoice_number": {
+        world.invoiceCalls++;
+        const order = world.orders.get(args.p_order_id as string);
+        if (order && !order.invoice_number) order.invoice_number = `WOV-2026-000${world.invoiceCalls}`;
+        return { data: order?.invoice_number ?? null, error: null };
+      }
+      default:
+        throw new Error(`unexpected rpc ${fn}`);
+    }
+  };
+
+  const supabase = { from: table, rpc } as unknown as SettlementDeps["supabase"];
 
   const gateway = {
     orders: {
       fetch: async () => {
-        if (opts.gatewayDown) throw new Error("gateway unreachable");
+        if (world.gatewayDown) throw new Error("gateway unreachable");
         return { amount: 295000 };
       },
     },
     payments: {
       fetch: async () => {
-        if (opts.gatewayDown) throw new Error("gateway unreachable");
+        if (world.gatewayDown) throw new Error("gateway unreachable");
         return { fee: 5900, tax: 900 };
       },
     },
-  } as unknown as VerifiedSettlementDeps["gateway"];
+  } as unknown as SettlementDeps["gateway"];
 
-  const deps: Partial<VerifiedSettlementDeps> = {
+  const deps: Partial<SettlementDeps> = {
     supabase,
     gateway,
-    settlePoints: (async (id: string) => {
-      loyalty.push(id);
-    }) as VerifiedSettlementDeps["settlePoints"],
+    // settlePoints is deliberately NOT injected: the real settleLoyalty runs
+    // against this fake, so its reading of the redemption guard is under test.
     sendConfirmation: (async (id: string) => {
-      emails.push(id);
-      return { ok: true };
-    }) as unknown as VerifiedSettlementDeps["sendConfirmation"],
+      world.emails.push(id);
+    }) as unknown as SettlementDeps["sendConfirmation"],
   };
 
-  return { world: { supabase, rpcs, updates, inserts, emails, loyalty }, deps };
+  return { world, deps };
 }
 
-const reserved = (world: World) => world.rpcs.filter((r) => r.name === "reserve_stock");
-
-const STORED_A: StoredLine[] = [{ id: "prod-A", size: "M", quantity: 1, price_inr: 2950 }];
+const settle = (deps: Partial<SettlementDeps>, order = "order_1", payment = "pay_1") =>
+  settleOrder({ razorpayOrderId: order, razorpayPaymentId: payment }, deps);
+const paidPatches = (world: World) => world.updates.filter((u) => "payment_status" in u.patch);
 
 async function main() {
-  // ── The signature ────────────────────────────
   console.log("\n=== the payment-response signature ===");
   {
     const secret = "test-key-secret";
@@ -163,146 +291,160 @@ async function main() {
     check("no secret configured means nothing verifies", verifyPaymentSignature("order_1", "pay_1", sign("order_1", "pay_1"), undefined), false);
   }
 
-  // ── 1. Stored items win ──────────────────────
-  // There is no way to hand settleVerifiedPayment a basket: its signature does
-  // not take one. The tests below are what "the browser sent Product B ×3"
-  // reduces to once the request has been through the route — the stored row is
-  // the only input, and the assertions check nothing else leaks in.
-  console.log("\n=== stored items win over anything the browser might claim ===");
+  console.log("\n=== 1. first settlement ===");
   {
-    const { world, deps } = makeWorld({ pending: { id: "ord-1", items: STORED_A } });
-    const r = await settleVerifiedPayment("order_1", "pay_1", deps);
-
-    check("settled against the stored row", r.orderId, "ord-1");
-    check("stock reserved once", reserved(world).length, 1);
-    check(
-      "stock reserved for Product A ×1, size M — the stored line",
-      reserved(world)[0].args.p_items,
-      [{ id: "prod-A", size: "M", quantity: 1 }]
-    );
-    check("the movement is attached to the stored order id", reserved(world)[0].args.p_order_id, "ord-1");
-    check("no thin row was inserted", world.inserts.length, 0);
+    const { world, deps } = makeWorld({ profile: true });
+    const r = await settle(deps);
+    check("ok, against the stored row", [r.ok, r.orderId, r.orphan], [true, "ord-1", false]);
+    check("stock reserved now", r.stock, "reserved");
+    check("reserve_stock called once, with the STORED line", world.reserveCalls[0].p_items, [{ id: "prod-A", size: "M", quantity: 1 }]);
+    check("movement attached to the stored order id", world.reserveCalls[0].p_order_id, "ord-1");
+    check("shelf 5 → 4", world.stock.get("prod-A|M"), 4);
+    check("marked paid, total from the gateway, fees in rupees", [world.orders.get("ord-1")!.payment_status, world.orders.get("ord-1")!.total_inr, paidPatches(world)[0].patch.gateway_fee_inr], ["paid", 2950, 59]);
+    check("4. email claimed and one send attempted", [r.emailClaimed, world.emails], [true, ["order_1"]]);
+    check("   confirmation_sent_at is set on the row", typeof world.orders.get("ord-1")!.confirmation_sent_at, "string");
+    check("12. loyalty awarded", [...world.awards], ["ord-1"]);
+    check("15. invoice number assigned", world.orders.get("ord-1")!.invoice_number, "WOV-2026-0001");
+    check("not flagged", [r.flaggedForReview, world.orders.get("ord-1")!.needs_review], [false, false]);
   }
 
-  // ── 2 & 3. Quantity and size come from the row ──
-  console.log("\n=== quantity and size are the stored ones ===");
+  console.log("\n=== 2, 3, 5, 6. the same settlement replayed ===");
   {
-    const stored: StoredLine[] = [{ id: "prod-A", size: "M", quantity: 2, price_inr: 1000 }];
-    const { world, deps } = makeWorld({ pending: { id: "ord-2", items: stored } });
-    await settleVerifiedPayment("order_2", "pay_2", deps);
-
-    const line = (reserved(world)[0].args.p_items as Row[])[0];
-    check("quantity is the stored 2, not anything larger", line.quantity, 2);
-    check("size is the stored M", line.size, "M");
-    check("product is the stored one", line.id, "prod-A");
+    const { world, deps } = makeWorld({ profile: true, order: { loyalty_points_spent: 50, coupon_code: "LAUNCH", coupon_discount_inr: 100 } });
+    const first = await settle(deps);
+    const second = await settle(deps);
+    check("second call still reports ok", second.ok, true);
+    check("3. second call is already_reserved — a replay, not a failure", second.stock, "already_reserved");
+    check("2. reserve_stock was CALLED twice — the guard is in the database, not a caller-side skip", world.reserveCalls.length, 2);
+    check("   but the shelf moved once: 5 → 4", world.stock.get("prod-A|M"), 4);
+    check("   one claim exists", [...world.claims], ["ord-1|prod-A|M"]);
+    check("5. second attempt does not win the email", second.emailClaimed, false);
+    check("6. one send attempt in total — duplicate prevented", world.emails, ["order_1"]);
+    check("   confirmation_sent_at was set once, not overwritten", world.updates.filter((u) => "confirmation_sent_at" in u.patch).length, 2, "two conditional UPDATEs were issued; only the first matched");
+    check("12. one award", world.awards.size, 1);
+    check("13. one redemption — the second hit the index and was read as done", world.redemptions.size, 1);
+    check("    and did NOT flag the order", world.orders.get("ord-1")!.needs_review, false);
+    check("14. one coupon use", world.couponUses, ["ord-1"]);
+    check("15. invoice number unchanged across both", [first.ok, world.invoiceCalls, world.orders.get("ord-1")!.invoice_number], [true, 2, "WOV-2026-0001"]);
+    check("    the row is still paid", world.orders.get("ord-1")!.payment_status, "paid");
   }
 
-  // ── 4. Verify without items ──────────────────
-  console.log("\n=== a verify that sends no basket still settles ===");
+  console.log("\n=== 7. a webhook-shaped second settlement ===");
   {
-    const { world, deps } = makeWorld({ pending: { id: "ord-3", items: STORED_A } });
-    const r = await settleVerifiedPayment("order_3", "pay_3", deps);
-
-    check("reports the order", r.orderId, "ord-3");
-    check("not an orphan", r.orphan, false);
-    check("marked paid", world.updates[0].payment_status, "paid");
-    check("total is what Razorpay captured", world.updates[0].total_inr, 2950);
-    check("gateway fee recorded in rupees", world.updates[0].gateway_fee_inr, 59);
-    check("gateway tax recorded in rupees", world.updates[0].gateway_tax_inr, 9);
-    check("loyalty settled", world.loyalty, ["order_3"]);
-    check("invoice number assigned", world.rpcs.some((r) => r.name === "assign_invoice_number"), true);
-    check("confirmation email sent", world.emails, ["order_3"]);
+    // Same identifiers, different caller — the shape a webhook will use.
+    const { world, deps } = makeWorld({ profile: true });
+    await settle(deps);
+    const viaWebhook = await settleOrder({ razorpayOrderId: "order_1", razorpayPaymentId: "pay_1" }, deps);
+    check("settles without error", viaWebhook.ok, true);
+    check("recognised as a replay", viaWebhook.stock, "already_reserved");
+    check("no second email", [viaWebhook.emailClaimed, world.emails.length], [false, 1]);
+    check("no second decrement", world.stock.get("prod-A|M"), 4);
+    // And the reverse order: the webhook lands first, the browser second.
+    const w2 = makeWorld({ profile: true });
+    const a = await settleOrder({ razorpayOrderId: "order_1", razorpayPaymentId: "pay_1" }, w2.deps);
+    const b = await settle(w2.deps);
+    check("webhook first, browser second: one email, one decrement", [a.emailClaimed, b.emailClaimed, w2.world.emails.length, w2.world.stock.get("prod-A|M")], [true, false, 1, 4]);
+    const w3 = makeWorld({ profile: true });
+    await settle(w3.deps); await settle(w3.deps); await settle(w3.deps);
+    check("three deliveries, as Razorpay's retries would: still one of everything", [w3.world.emails.length, w3.world.stock.get("prod-A|M"), w3.world.awards.size], [1, 4, 1]);
   }
 
-  // ── 5. Stored items unchanged ────────────────
-  console.log("\n=== verification never rewrites the stored lines ===");
+  console.log("\n=== 8, 9. stock shortage and the review flag ===");
   {
-    const { world, deps } = makeWorld({ pending: { id: "ord-4", items: STORED_A } });
-    await settleVerifiedPayment("order_4", "pay_4", deps);
+    const { world, deps } = makeWorld({ profile: true, stock: { "prod-A|M": 0 } });
+    const r = await settle(deps);
+    check("8. stock failed", r.stock, "failed");
+    check("   still marked paid — the customer has paid", world.orders.get("ord-1")!.payment_status, "paid");
+    check("   needs_review = true", [r.flaggedForReview, world.orders.get("ord-1")!.needs_review], [true, true]);
+    check("   no claim was left behind", world.claims.size, 0);
+    check("   the obsolete tracking_status is never written", world.updates.some((u) => "tracking_status" in u.patch), false);
+    check("   still emailed — the order exists and is paid", world.emails.length, 1);
 
-    check("exactly one update", world.updates.length, 1);
-    check("the update carries no items", "items" in world.updates[0], false);
-    check(
-      "the update touches only payment fields",
-      Object.keys(world.updates[0]).sort(),
-      ["gateway_fee_inr", "gateway_tax_inr", "payment_status", "total_inr"]
-    );
+    // 9. A human has not looked yet; a later settlement that goes smoothly
+    // must not lift the flag. Restock, replay.
+    world.stock.set("prod-A|M", 5);
+    const again = await settle(deps);
+    check("9. after a restock the replay reserves (nothing was claimed before)", again.stock, "reserved");
+    check("   and does NOT clear needs_review", world.orders.get("ord-1")!.needs_review, true);
+    check("   no paid-patch ever carries needs_review: false", paidPatches(world).some((u) => u.patch.needs_review === false), false);
+    check("   a clean patch omits the key entirely", "needs_review" in paidPatches(world)[1].patch, false);
+  }
+  {
+    const { world, deps } = makeWorld({ order: { needs_review: true } });
+    await settle(deps);
+    check("   a pre-existing flag survives a clean first settlement", world.orders.get("ord-1")!.needs_review, true);
   }
 
-  // ── 6. Stock-short review flag ───────────────
-  console.log("\n=== stock short: flagged on the column the admin reads ===");
+  console.log("\n=== 10, 11. the stored basket is the only basket ===");
   {
-    const { world, deps } = makeWorld({
-      pending: { id: "ord-5", items: STORED_A },
-      stockError: "SOLD_OUT:prod-A:M",
-    });
-    const r = await settleVerifiedPayment("order_5", "pay_5", deps);
+    const stored: StoredLine[] = [
+      { id: "prod-A", size: "M", quantity: 2, price_inr: 1000 },
+      { id: "prod-B", size: "One Size", quantity: 1, price_inr: 500 },
+    ];
+    const { world, deps } = makeWorld({ order: { items: stored }, stock: { "prod-A|M": 5, "prod-B|One Size": 5 } });
+    await settle(deps);
+    check("10. stock reserved from the stored lines, verbatim", world.reserveCalls[0].p_items, [
+      { id: "prod-A", size: "M", quantity: 2 },
+      { id: "prod-B", size: "One Size", quantity: 1 },
+    ]);
+    check("    the stored items were not rewritten", world.orders.get("ord-1")!.items, stored);
+    check("    no update patch ever carries items", world.updates.some((u) => "items" in u.patch), false);
+    check("11. the API takes two identifiers and nothing else", Object.keys({ razorpayOrderId: "", razorpayPaymentId: "" }).length, 2, "SettlementInput has no items field; a basket cannot be passed");
+  }
 
-    check("reports stock short", r.stockShort, true);
-    check("still marked paid — the customer has paid", world.updates[0].payment_status, "paid");
-    check("needs_review is true", world.updates[0].needs_review, true);
-    check("the obsolete tracking_status is not written", "tracking_status" in world.updates[0], false);
+  console.log("\n=== 16. a paid order with no pending row ===");
+  {
+    const { world, deps } = makeWorld({ order: null });
+    const r = await settle(deps, "order_x", "pay_x");
+    check("reported as an orphan", [r.ok, r.orphan, r.stock], [true, true, "none"]);
+    check("a thin row was inserted, paid, with the captured amount", [world.inserts[0].payment_status, world.inserts[0].total_inr], ["paid", 2950]);
+    check("the thin row carries NO items — there is no trusted source for them", "items" in world.inserts[0], false);
+    check("flagged for review", [r.flaggedForReview, world.inserts[0].needs_review], [true, true]);
+    check("no stock reserved, no invoice, no email — nothing to base them on", [world.reserveCalls.length, world.invoiceCalls, world.emails.length], [0, 0, 0]);
+    const again = await settle(deps, "order_x", "pay_x");
+    check("a replay finds the thin row and does not insert a second", [again.orderId, world.orders.size], ["thin-1", 1]);
+    check("and still issues no invoice and sends no email for a row with no contents", [world.invoiceCalls, world.emails.length, again.stock], [0, 0, "none"]);
+    check("the flag stays up", world.orders.get("thin-1")!.needs_review, true);
+  }
+
+  console.log("\n=== 17. the gateway being unreachable ===");
+  {
+    const { world, deps } = makeWorld({ gatewayDown: true, order: { items: [{ id: "prod-A", size: "M", quantity: 2, price_inr: 1200 }] } });
+    const r = await settle(deps);
+    check("still settles", [r.ok, r.stock], [true, "reserved"]);
+    check("total falls back to the STORED prices, never a request", world.orders.get("ord-1")!.total_inr, 2400);
+    check("fee and tax are recorded as unknown", [paidPatches(world)[0].patch.gateway_fee_inr, paidPatches(world)[0].patch.gateway_tax_inr], [null, null]);
     check("still emailed", world.emails.length, 1);
   }
+
+  console.log("\n=== 18. the shape of the email claim ===");
   {
-    const { world, deps } = makeWorld({ pending: { id: "ord-6", items: STORED_A } });
-    await settleVerifiedPayment("order_6", "pay_6", deps);
-    check(
-      "a clean settlement does not touch needs_review at all",
-      "needs_review" in world.updates[0],
-      false,
-      "so a flag a human has not looked at yet is never cleared"
-    );
-    check("nor tracking_status", "tracking_status" in world.updates[0], false);
+    const { world, deps } = makeWorld({});
+    await settle(deps);
+    const claim = world.updates.find((u) => "confirmation_sent_at" in u.patch)!;
+    check("the claim is a conditional UPDATE on id AND confirmation_sent_at IS null", claim.filters, "id eq ord-1, confirmation_sent_at is null");
+    check("it carries nothing but the timestamp", Object.keys(claim.patch), ["confirmation_sent_at"]);
+    // A row already claimed by someone else — a webhook that got there first.
+    const w2 = makeWorld({ order: { confirmation_sent_at: "2026-09-19T00:00:00Z" } });
+    const r = await settle(w2.deps);
+    check("a row already claimed yields no email from this caller", [r.emailClaimed, w2.world.emails.length], [false, 0]);
   }
 
-  // ── 8. Missing pending order ─────────────────
-  console.log("\n=== a paid order with no pending row ===");
+  console.log("\n=== a failed send is contained, and not retried ===");
   {
-    const { world, deps } = makeWorld({ pending: null });
-    const r = await settleVerifiedPayment("order_7", "pay_7", deps);
-
-    check("reported as an orphan", r.orphan, true);
-    check("a thin row was inserted", world.inserts.length, 1);
-    check("the thin row is paid", world.inserts[0].payment_status, "paid");
-    check("with the captured amount", world.inserts[0].total_inr, 2950);
-    check("the thin row carries NO items — there is no trusted source for them", "items" in world.inserts[0], false);
-    check("the thin row is flagged for review", world.inserts[0].needs_review, true);
-    check("no stock was reserved — nothing says what was bought", reserved(world).length, 0);
-    check("no update was attempted", world.updates.length, 0);
-    check("no invoice number", world.rpcs.some((r) => r.name === "assign_invoice_number"), false);
+    const { world, deps } = makeWorld({});
+    const sends: string[] = [];
+    deps.sendConfirmation = ((id: string) => {
+      sends.push(id);
+      throw new Error("provider down");
+    }) as unknown as SettlementDeps["sendConfirmation"];
+    const r = await settle(deps);
+    check("a sender that throws synchronously does not fail settlement", [r.ok, r.emailClaimed], [true, true]);
+    check("the claim is consumed", typeof world.orders.get("ord-1")!.confirmation_sent_at, "string");
+    const again = await settle(deps);
+    check("a replay does NOT retry the send — at most one attempt", [again.emailClaimed, sends.length], [false, 1], "recovery is the admin re-send, by design");
   }
 
-  // ── A pending row with no lines ──────────────
-  console.log("\n=== a pending row whose lines are missing ===");
-  {
-    const { world, deps } = makeWorld({ pending: { id: "ord-8", items: null } });
-    const r = await settleVerifiedPayment("order_8", "pay_8", deps);
-
-    check("nothing reserved", reserved(world).length, 0);
-    check("flagged for review", world.updates[0].needs_review, true);
-    check("reports stock short", r.stockShort, true);
-  }
-
-  // ── The gateway being down ───────────────────
-  console.log("\n=== the gateway being unreachable is not fatal ===");
-  {
-    const { world, deps } = makeWorld({
-      pending: { id: "ord-9", items: [{ id: "prod-A", size: "M", quantity: 2, price_inr: 1200 }] },
-      gatewayDown: true,
-    });
-    const r = await settleVerifiedPayment("order_9", "pay_9", deps);
-
-    check("still settles", r.orderId, "ord-9");
-    check("total falls back to the STORED prices, never a request", world.updates[0].total_inr, 2400);
-    check("fees are simply unknown", world.updates[0].gateway_fee_inr, null);
-    check("stock still moves", reserved(world).length, 1);
-  }
-
-  // ── 7. Invalid signature, at the route ───────
-  // The real handler, a real request, a signature that does not match. No
-  // database is configured in this process, so if the route reached past the
-  // signature check it would fail loudly rather than quietly succeed.
   console.log("\n=== the route refuses a bad signature before touching anything ===");
   {
     process.env.RAZORPAY_KEY_SECRET = "route-test-secret";
@@ -314,8 +456,8 @@ async function main() {
         razorpay_order_id: "order_x",
         razorpay_payment_id: "pay_x",
         razorpay_signature: "not-a-signature",
-        // A basket smuggled in anyway. The contract no longer has this field,
-        // and the route must neither read it nor be moved by it.
+        // A basket smuggled in anyway. The contract has no such field, and
+        // the route must neither read it nor be moved by it.
         items: [{ id: "prod-B", size: "XL", quantity: 3, price_inr: 1 }],
       }),
     });
