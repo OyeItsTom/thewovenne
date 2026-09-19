@@ -9,6 +9,31 @@ export interface CartItem {
   image_url: string | null;
   size: string;
   quantity: number;
+  /**
+   * How many of this size the product page said were left when the piece was
+   * added. A UX HINT ONLY — it stops the stepper offering a quantity the
+   * customer would only be refused at checkout. It is NOT the stock check:
+   * it sits in localStorage, it goes stale the moment somebody else buys, and
+   * nothing about it is believed by the server, which re-reads the shelf
+   * before any payment starts (lib/checkoutPricing). Absent on lines written
+   * before it existed, and those lines are simply uncapped in the UI.
+   */
+  available?: number;
+}
+
+/**
+ * The most the cart will let a line rise to on its own. Infinity when the
+ * line carries no hint — the server still has the last word either way.
+ */
+export function lineCeiling(item: Pick<CartItem, "available">): number {
+  return typeof item.available === "number" && Number.isFinite(item.available)
+    ? Math.max(0, Math.floor(item.available))
+    : Infinity;
+}
+
+/** Whether the cart's "+" should do anything for this line. */
+export function canIncrease(item: Pick<CartItem, "available" | "quantity">): boolean {
+  return item.quantity < lineCeiling(item);
 }
 
 interface CartState {
@@ -50,15 +75,30 @@ export const useCartStore = create<CartState>()(
             (i) => i.id === item.id && i.size === item.size
           );
           if (existing) {
+            // Merged, and capped at what the product page has just said is
+            // left — the freshest number the browser has, so it replaces the
+            // line's old hint. A line already above the cap (stale, or added
+            // before hints existed) is left where it is rather than silently
+            // cut; the server says so at checkout, in words.
+            const hinted = { ...existing, ...item };
+            const ceiling = lineCeiling(hinted);
+            const merged = Math.max(
+              existing.quantity,
+              Math.min(existing.quantity + quantity, ceiling)
+            );
             return {
               items: state.items.map((i) =>
                 i.id === item.id && i.size === item.size
-                  ? { ...i, quantity: i.quantity + quantity }
+                  ? { ...hinted, quantity: merged }
                   : i
               ),
             };
           }
-          return { items: [...state.items, { ...item, quantity }] };
+          // A page that says nothing is left has nothing to add; a line of
+          // zero in the cart would be a sold-out piece pretending otherwise.
+          const first = Math.min(quantity, lineCeiling(item));
+          if (first <= 0) return state;
+          return { items: [...state.items, { ...item, quantity: first }] };
         }),
       removeItem: (id, size) =>
         set((state) => ({
@@ -70,7 +110,17 @@ export const useCartStore = create<CartState>()(
         set((state) => ({
           items: state.items
             .map((i) =>
-              i.id === id && i.size === size ? { ...i, quantity } : i
+              i.id === id && i.size === size
+                ? // Going DOWN is always allowed, whatever the hint says: the
+                  // cap only stops the stepper climbing past it.
+                  {
+                    ...i,
+                    quantity:
+                      quantity > i.quantity
+                        ? Math.max(i.quantity, Math.min(quantity, lineCeiling(i)))
+                        : quantity,
+                  }
+                : i
             )
             .filter((i) => i.quantity > 0),
         })),

@@ -57,9 +57,11 @@ async function handleCreate({ items, details: rawDetails, redeemPoints, couponCo
   // The cart comes from the browser, so its prices are a claim, not a fact.
   // Re-price from the database — this is what decides the amount charged, and
   // the client's own price_inr is ignored entirely.
-  const { items: priced, total, error } = await priceCart(items);
+  const { items: priced, total, error, reason } = await priceCart(items);
   if (error) {
-    return NextResponse.json({ error }, { status: 400 });
+    // `reason` lets the page tell a basket that asks for too much (worth
+    // editing) from one that cannot be priced at all (worth retrying).
+    return NextResponse.json({ error, reason }, { status: 400 });
   }
 
   // Re-read and recomputed from the server-priced subtotal. The code is the

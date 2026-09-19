@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { Minus, Plus, X } from "lucide-react";
-import { type CartItem as CartItemType, useCartStore } from "@/lib/store";
+import { type CartItem as CartItemType, canIncrease, useCartStore } from "@/lib/store";
 import { formatINR } from "@/lib/utils";
 
 export default function CartItem({ item }: { item: CartItemType }) {
@@ -53,12 +53,16 @@ export default function CartItem({ item }: { item: CartItemType }) {
               <Minus className="h-3.5 w-3.5" />
             </button>
             <span className="w-4 text-center text-sm">{item.quantity}</span>
+            {/* Stops at what the product page said was left. A hint for the
+                stepper, not the stock check — that happens on the server when
+                payment starts, whatever this button allowed. */}
             <button
               onClick={() =>
                 updateQuantity(item.id, item.size, item.quantity + 1)
               }
+              disabled={!canIncrease(item)}
               aria-label="Increase quantity"
-              className="tap-44 relative p-1.5 text-ink/60 transition-colors hover:text-ink"
+              className="tap-44 relative p-1.5 text-ink/60 transition-colors hover:text-ink disabled:opacity-40 disabled:hover:text-ink/60"
             >
               <Plus className="h-3.5 w-3.5" />
             </button>
