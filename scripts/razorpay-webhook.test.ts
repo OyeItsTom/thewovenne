@@ -97,6 +97,7 @@ function stubDeps(settleResult: Partial<SettlementResult> | Error = {}, opts: { 
       calls.push(input);
       if (settleResult instanceof Error) throw settleResult;
       return {
+        outcome: "settled", paymentStatus: "captured",
         ok: true, orderId: "ord-1", orphan: false, stock: "reserved", emailClaimed: true, flaggedForReview: false,
         ...settleResult,
       };
@@ -210,6 +211,20 @@ async function main() {
     check("    settleOrder ok:false → 500, not a false success", r6.status, 500);
     check("    and no event row", notRecorded.events.size, 0);
 
+    // What settleOrder's own API fetch says wins over what the event said.
+    for (const [outcome, status, expect] of [
+      ["indeterminate", null, 500],
+      ["pending_capture", "authorized", 500],
+      ["failed_payment", "failed", 500],
+      ["unknown_status", "weird", 500],
+      ["refunded", "refunded", 200],
+      ["mismatch", "captured", 200],
+    ] as const) {
+      const d = stubDeps({ ok: false, outcome, paymentStatus: status, orderId: null, stock: "none", emailClaimed: false });
+      const r = await handleRazorpayWebhook(request(captured()), d.deps);
+      check(`    API says ${outcome} → ${expect}${expect === 500 ? " (contradiction or unknown: retry)" : " (later state or permanent: acknowledged, not settled)"}`, [r.status, r.body.settled ?? null, d.events.size], [expect, expect === 200 ? false : null, 0]);
+    }
+
     const malformed = stubDeps();
     const junk = "{not json";
     const r7 = await handleRazorpayWebhook(request(junk), malformed.deps);
@@ -280,7 +295,7 @@ async function main() {
     // A paid order nobody created a pending row for: the webhook records a
     // thin flagged row and acknowledges — the money is on record, a human
     // reconciles the goods.
-    const w = makeWorld({ order: null, profile: false });
+    const w = makeWorld({ order: null, profile: false, payment: { order_id: "order_x" } });
     const r = await handleRazorpayWebhook(request(captured({ order_id: "order_x", id: "pay_x" })), realDeps(w));
     check("    an orphan payment is recorded thin, flagged, and acknowledged", [r.status, r.body.orphan, w.world.inserts[0]?.needs_review, "items" in (w.world.inserts[0] ?? {})], [200, true, true, false]);
   }
@@ -301,6 +316,33 @@ async function main() {
       w.world.stock.get("prod-A|M"), w.world.emails.length, w.world.awards.size, w.world.redemptions.size, w.world.couponUses.length, w.world.orders.get("ord-1")!.invoice_number,
     ], [4, 1, 1, 1, 1, "WOV-2026-0001"]);
     check("    one completion record", w.world.webhookEvents.size, 1);
+  }
+
+  console.log("\n=== CAPTURE AUTHORITY on the webhook path ===");
+  // Evidence source: the verified event is the TRIGGER; settleOrder's own
+  // payments.fetch is the authority, same as the browser path.
+  {
+    const w = makeWorld({ profile: true, payment: { status: "authorized" } });
+    const r = await handleRazorpayWebhook(request(captured()), realDeps(w));
+    check("event says captured but the API says authorized → 500 deferred, nothing touched", [r.status, w.world.reserveCalls.length, w.world.emails.length, w.world.webhookEvents.size], [500, 0, 0, 0]);
+    check("the API was asked", w.world.paymentFetches, ["pay_1"]);
+    w.world.gatewayDown = false;
+    // Razorpay later captures; the retry finds it captured.
+    (w.deps.gateway as { payments: { fetch: (id: string) => Promise<unknown> } }).payments.fetch = async (id: string) => ({
+      id, order_id: "order_1", status: "captured", captured: true, amount: 295000, currency: "INR", fee: 5900, tax: 900,
+    });
+    const retry = await handleRazorpayWebhook(request(captured()), realDeps(w));
+    check("18. the retry after capture settles exactly once", [retry.status, retry.body.stock, w.world.stock.get("prod-A|M"), w.world.emails.length], [200, "reserved", 4, 1]);
+  }
+  {
+    const w = makeWorld({ profile: true, payment: { order_id: "order_OTHER" } });
+    const r = await handleRazorpayWebhook(request(captured()), realDeps(w));
+    check("event's ids do not match the API's binding → 200 not settled, nothing touched", [r.status, r.body.settled, r.body.outcome, w.world.reserveCalls.length], [200, false, "mismatch", 0]);
+  }
+  {
+    const w = makeWorld({ profile: true, gatewayDown: true });
+    const r = await handleRazorpayWebhook(request(captured()), realDeps(w));
+    check("API unreachable → 500 deferred, nothing touched, no event row", [r.status, w.world.updates.length, w.world.webhookEvents.size], [500, 0, 0]);
   }
 
   console.log("\n=== CRASH WINDOW ===");

@@ -27,6 +27,7 @@ import { verifyPaymentSignature } from "../lib/razorpayVerify";
 import { settleOrder, type SettlementDeps, type StoredLine } from "../lib/settleOrder";
 import { POST } from "../app/api/checkout/razorpay/route";
 import { makeWorld, type World } from "./settlement-world";
+import { toPaise } from "../lib/utils";
 
 let pass = 0;
 let fail = 0;
@@ -165,7 +166,7 @@ async function main() {
 
   console.log("\n=== 16. a paid order with no pending row ===");
   {
-    const { world, deps } = makeWorld({ order: null });
+    const { world, deps } = makeWorld({ order: null, payment: { order_id: "order_x" } });
     const r = await settle(deps, "order_x", "pay_x");
     check("reported as an orphan", [r.ok, r.orphan, r.stock], [true, true, "none"]);
     check("a thin row was inserted, paid, with the captured amount", [world.inserts[0].payment_status, world.inserts[0].total_inr], ["paid", 2950]);
@@ -180,12 +181,126 @@ async function main() {
 
   console.log("\n=== 17. the gateway being unreachable ===");
   {
-    const { world, deps } = makeWorld({ gatewayDown: true, order: { items: [{ id: "prod-A", size: "M", quantity: 2, price_inr: 1200 }] } });
+    // The payment fetch is now the capture authority, so without it nothing
+    // may happen. Not a failure: Razorpay may well have the money, and the
+    // webhook's retries will bring the answer back.
+    const { world, deps } = makeWorld({ gatewayDown: true });
     const r = await settle(deps);
-    check("still settles", [r.ok, r.stock], [true, "reserved"]);
-    check("total falls back to the STORED prices, never a request", world.orders.get("ord-1")!.total_inr, 2400);
-    check("fee and tax are recorded as unknown", [paidPatches(world)[0].patch.gateway_fee_inr, paidPatches(world)[0].patch.gateway_tax_inr], [null, null]);
-    check("still emailed", world.emails.length, 1);
+    check("nothing settles", [r.outcome, r.ok, r.paymentStatus], ["indeterminate", false, null]);
+    check("no database read or write at all", [world.updates.length, world.inserts.length, world.reserveCalls.length, world.emails.length], [0, 0, 0, 0]);
+    check("the row stays pending", world.orders.get("ord-1")!.payment_status, "pending");
+    check("fees are not the point: the payment itself is", world.paymentFetches, ["pay_1"]);
+    world.gatewayDown = false;
+    const later = await settle(deps);
+    check("when the gateway answers, the same call settles as a first settlement", [later.outcome, later.stock, later.emailClaimed], ["settled", "reserved", true]);
+  }
+
+  console.log("\n=== CAPTURE AUTHORITY: Razorpay's API, fetched server-side ===");
+  // Evidence source for the browser path: settleOrder's own payments.fetch.
+  // Nothing the request carries can stand in for it — the route hands over
+  // two ids and the API is asked.
+  {
+    const { world, deps } = makeWorld({ profile: true });
+    const r = await settle(deps);
+    check("1. fetched captured payment → settles", [r.outcome, r.ok, r.paymentStatus, r.stock], ["settled", true, "captured", "reserved"]);
+    check("2. the fetched payment's order_id matched the expected order", world.paymentFetches, ["pay_1"]);
+    check("   total is the CAPTURED amount from the payment", world.orders.get("ord-1")!.total_inr, 2950);
+    check("   fee and tax from the same fetch, in rupees", [paidPatches(world)[0].patch.gateway_fee_inr, paidPatches(world)[0].patch.gateway_tax_inr], [59, 9]);
+  }
+  const untouched = (world: World) => [world.updates.length, world.inserts.length, world.reserveCalls.length, world.emails.length, world.awards.size, world.redemptions.size, world.couponUses.length, world.invoiceCalls];
+  {
+    const { world, deps } = makeWorld({ payment: { order_id: "order_OTHER" } });
+    const r = await settle(deps);
+    check("3. captured payment for a DIFFERENT order → mismatch, nothing settled", [r.outcome, r.ok], ["mismatch", false]);
+    check("   and nothing touched", untouched(world), [0, 0, 0, 0, 0, 0, 0, 0]);
+    const { world: w2, deps: d2 } = makeWorld({ payment: { order_id: null } });
+    check("   a payment with no order at all → mismatch", (await settle(d2)).outcome, "mismatch");
+    check("   nothing touched", untouched(w2), [0, 0, 0, 0, 0, 0, 0, 0]);
+  }
+  for (const [n, status, outcome] of [
+    ["4", "authorized", "pending_capture"],
+    ["5", "created", "pending_capture"],
+    ["6", "failed", "failed_payment"],
+    ["7", "refunded", "refunded"],
+    ["8", "settled_by_mars", "unknown_status"],
+    ["8", undefined, "unknown_status"],
+  ] as const) {
+    const { world, deps } = makeWorld({ profile: true, order: { loyalty_points_spent: 50, coupon_code: "LAUNCH", coupon_discount_inr: 100 }, payment: { status } });
+    const r = await settle(deps);
+    check(`${n}. status ${JSON.stringify(status)} → ${outcome}, nothing settled`, [r.outcome, r.ok, r.paymentStatus ?? null], [outcome, false, status ?? null]);
+    check(`   19. no stock, no email, no award, no redemption, no coupon, no invoice, no row write`, untouched(world), [0, 0, 0, 0, 0, 0, 0, 0]);
+    check(`   the row stays pending, unflagged`, [world.orders.get("ord-1")!.payment_status, world.orders.get("ord-1")!.needs_review], ["pending", false]);
+  }
+  {
+    const { world, deps } = makeWorld({ payment: { currency: "USD" } });
+    check("   a non-INR payment → mismatch", (await settle(deps)).outcome, "mismatch");
+    check("   nothing touched", untouched(world), [0, 0, 0, 0, 0, 0, 0, 0]);
+    const { world: w2, deps: d2 } = makeWorld({ payment: { amount: 100 } });
+    check("   an amount other than what the server asked for → mismatch", (await settle(d2)).outcome, "mismatch");
+    check("   nothing touched", untouched(w2), [0, 0, 0, 0, 0, 0, 0, 0]);
+    const { deps: d3 } = makeWorld({ payment: { amount: 0 } });
+    check("   a zero amount → mismatch", (await settle(d3)).outcome, "mismatch");
+  }
+  console.log("\n=== money: rupees to paise, once, on both sides ===");
+  {
+    for (const [rupees, paise] of [[799.1, 79910], [999.99, 99999], [1234.55, 123455], [0.1, 10], [2950, 295000], [1, 100], [0.01, 1], [10.005, 1001]] as const) {
+      check(`toPaise(${rupees}) = ${paise}`, toPaise(rupees), paise);
+    }
+    check("the creation-side amount and the settlement-side expectation agree", toPaise(799.1) === toPaise(Number("799.10")), true, "a numeric(10,2) round-trip changes nothing");
+    for (const total of [799.1, 999.99, 1234.55, 0.1]) {
+      const { deps } = makeWorld({ order: { total_inr: total }, payment: { amount: toPaise(total) } });
+      check(`   a stored total of ${total} settles against ${toPaise(total)} paise`, (await settle(deps)).outcome, "settled");
+    }
+    const { deps: off } = makeWorld({ order: { total_inr: 999.99 }, payment: { amount: 99998 } });
+    check("   one paisa short is a mismatch", (await settle(off)).outcome, "mismatch");
+    const { deps: strTotal } = makeWorld({ order: { total_inr: "2950.00" as unknown as number } });
+    check("   a total that arrives as a string still compares exactly", (await settle(strTotal)).outcome, "settled");
+    const { deps: lower } = makeWorld({ payment: { currency: "inr" } });
+    check("   currency is matched exactly as Razorpay sends it — lowercase is not INR", (await settle(lower)).outcome, "mismatch");
+    const { deps: noCur } = makeWorld({ payment: { currency: undefined } });
+    check("   a missing currency fails closed", (await settle(noCur)).outcome, "mismatch");
+  }
+  {
+    // 9/10 are test 17 above. 11–13: nothing the caller passes can say
+    // "captured", bind an order, or set an amount — SettlementInput has only
+    // the two ids, and the fake gateway is the only source of status.
+    const { world, deps } = makeWorld({ payment: { status: "authorized" } });
+    const forged = await settleOrder(
+      { razorpayOrderId: "order_1", razorpayPaymentId: "pay_1", status: "captured", captured: true, order_id: "order_1", amount: 295000 } as never,
+      deps
+    );
+    check("11/12. extra 'status'/'captured' fields on the input change nothing — the API said authorized", forged.outcome, "pending_capture");
+    check("13. nor can the input bind an order the API does not", untouched(world), [0, 0, 0, 0, 0, 0, 0, 0]);
+  }
+  {
+    // F. Authorised again and again: still nothing.
+    const { world, deps } = makeWorld({ profile: true, payment: { status: "authorized" } });
+    for (let i = 0; i < 3; i++) await settle(deps);
+    check("F. browser authorized three times → no side effects at all", untouched(world), [0, 0, 0, 0, 0, 0, 0, 0]);
+    check("   and the API was asked each time", world.paymentFetches.length, 3);
+  }
+  {
+    // B. Indeterminate at browser time, captured later.
+    const { world, deps } = makeWorld({ profile: true, gatewayDown: true });
+    await settle(deps);
+    check("B. browser indeterminate → nothing touched", untouched(world), [0, 0, 0, 0, 0, 0, 0, 0]);
+    world.gatewayDown = false;
+    const hook = await settle(deps);
+    check("   later captured (webhook-shaped call) → one settlement", [hook.outcome, hook.stock, world.emails.length], ["settled", "reserved", 1]);
+  }
+  {
+    // 18. Authorised at browser time, captured later: the browser touches
+    // nothing; the webhook (or any later call) settles exactly once.
+    const { world, deps } = makeWorld({ profile: true, payment: { status: "authorized" } });
+    const first = await settle(deps);
+    check("18. browser sees authorized → pending, nothing touched", [first.outcome, untouched(world)], ["pending_capture", [0, 0, 0, 0, 0, 0, 0, 0]]);
+    const { world: after, deps: laterDeps } = makeWorld({ profile: true });
+    // Same order row state carried over: still pending, untouched.
+    after.orders.set("ord-1", world.orders.get("ord-1")!);
+    const second = await settle(laterDeps);
+    const third = await settle(laterDeps);
+    check("    later, captured: settles once", [second.outcome, second.stock, third.stock], ["settled", "reserved", "already_reserved"]);
+    check("    one decrement, one email, one award", [after.stock.get("prod-A|M"), after.emails.length, after.awards.size], [4, 1, 1]);
   }
 
   console.log("\n=== 18. the shape of the email claim ===");

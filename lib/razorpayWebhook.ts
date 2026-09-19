@@ -158,6 +158,11 @@ export interface WebhookDeps {
  *        set or the database back. settleOrder is safe to run again, so a
  *        retry can only help.
  *
+ * The event's own "captured" is only the trigger. settleOrder asks Razorpay's
+ * API for the payment and settles only if THAT says captured and bound to the
+ * order — the same rule the browser path is held to. If the API cannot be
+ * reached or has not caught up, 500 and let the retry come back.
+ *
  * NO EVENT ID (header missing or empty): the payment is still settled — the
  * signature and the captured payload are what make it trustworthy, not the
  * dedupe header — and no completion record is written, so every re-delivery
@@ -232,9 +237,39 @@ export async function handleRazorpayWebhook(
     return { status: 500, body: { error: "settlement failed" } };
   }
   if (!result.ok) {
-    // Nothing was recorded. Ask for the retry rather than pretend.
-    console.error(`Webhook settlement could not record ${target.razorpayOrderId}.`);
-    return { status: 500, body: { error: "settlement not recorded" } };
+    // The event said captured; settleOrder asked Razorpay's API and did not
+    // get a settlement out of it. Which kind decides whether a retry helps.
+    switch (result.outcome) {
+      case "indeterminate":
+      case "pending_capture":
+      case "failed_payment":
+      case "unknown_status":
+        // Could not ask, or the API contradicts a cryptographically genuine
+        // captured event — not caught up yet, a stale read, or a status this
+        // code does not know. A captured payment cannot become "failed", so
+        // that is a contradiction too. Nothing recorded; ask again later. If
+        // the contradiction is permanent the 24-hour failure alert is the
+        // right escalation, and the retries in between are idempotent no-ops.
+        console.error(
+          `Webhook for ${target.razorpayOrderId}: settlement deferred (${result.outcome}, status ${result.paymentStatus ?? "unknown"}).`
+        );
+        return { status: 500, body: { error: "settlement deferred" } };
+      case "refunded":
+      case "mismatch":
+        // Not contradictions. A payment captured and then refunded is a real
+        // later state, and this event is simply old news. A mismatch is the
+        // API disagreeing with the ORDER ROW about currency or amount, or a
+        // payment bound to another order — a retry fetches the same facts.
+        // Acknowledge so the endpoint stays healthy; the log line is the alarm.
+        console.error(
+          `Webhook for ${target.razorpayOrderId}: not settled (${result.outcome}, status ${result.paymentStatus ?? "unknown"}).`
+        );
+        return { status: 200, body: { ok: true, settled: false, outcome: result.outcome } };
+      default:
+        // Settled outcome but nothing recorded (no row could be written).
+        console.error(`Webhook settlement could not record ${target.razorpayOrderId}.`);
+        return { status: 500, body: { error: "settlement not recorded" } };
+    }
   }
 
   // Done. Record the delivery so a repeat can be answered without the work.

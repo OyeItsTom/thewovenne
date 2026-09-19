@@ -9,6 +9,7 @@ import { applyCoupon } from "@/lib/coupons";
 import { verifyPaymentSignature } from "@/lib/razorpayVerify";
 import { settleOrder } from "@/lib/settleOrder";
 import type { CartItem } from "@/lib/store";
+import { toPaise } from "@/lib/utils";
 
 interface CreatePayload {
   action: "create";
@@ -109,8 +110,12 @@ async function handleCreate({ items, details: rawDetails, redeemPoints, couponCo
   );
 
   try {
-    // Razorpay expects the amount in the smallest unit — paise for INR.
-    const amount = Math.round(grandTotal * 100);
+    // Razorpay expects the amount in the smallest unit — paise for INR. The
+    // stored total is derived from this SAME integer so that settlement, which
+    // compares what Razorpay captured against what this row says was asked,
+    // is comparing like with like to the paisa.
+    const amount = toPaise(grandTotal);
+    const totalInr = amount / 100;
 
     const order = await razorpay.orders.create({
       amount,
@@ -128,7 +133,7 @@ async function handleCreate({ items, details: rawDetails, redeemPoints, couponCo
       customer_name: details.name,
       customer_phone: details.phone,
       shipping_address: details.address,
-      total_inr: grandTotal,
+      total_inr: totalInr,
       shipping_cost_inr: shipping.cost,
       loyalty_points_spent: redemption.points,
       loyalty_discount_inr: redemption.discount,
@@ -261,22 +266,33 @@ async function handleVerify({
     return NextResponse.json({ verified: false });
   }
 
-  // Everything past the signature is shared with every other way of learning
-  // that a payment succeeded (lib/settleOrder) and works from the stored order
-  // row — the request has said which Razorpay order paid, and nothing else it
-  // says is trusted. Replaying this request is safe: every effect is guarded
-  // in the database.
+  // The signature proves this order id and payment id were issued together
+  // by Razorpay — nothing more. Whether the payment is CAPTURED is decided in
+  // lib/settleOrder by asking Razorpay's API, the same way the webhook path
+  // is decided; the request has named which pair to ask about, and nothing
+  // else it says is trusted. Replaying this request is safe: every effect is
+  // guarded in the database.
   const settled = await settleOrder({
     razorpayOrderId: razorpay_order_id,
     razorpayPaymentId: razorpay_payment_id,
   });
 
+  // Three things the page must be able to tell apart, and `verified` alone
+  // cannot: the signature was genuine in every case below.
+  //
+  //   outcome "settled"                     captured, recorded — confirm.
+  //   outcome "pending_capture" |
+  //           "indeterminate"               Razorpay has the payment (or could
+  //                                         not be asked); confirmation is
+  //                                         still to come, by webhook. The
+  //                                         customer must NOT pay again.
+  //   anything else                         not settled, and a retry will not
+  //                                         change it — failed, refunded, or a
+  //                                         payment that does not belong to
+  //                                         this order.
   return NextResponse.json({
     verified: true,
-    // For the page and the logs, not for the customer's eyes: whether this
-    // call found an order to settle against. The signature was genuine
-    // either way, so `verified` stays true — a failure to RECORD a payment
-    // is never reported to the payer as a failure to pay.
+    outcome: settled.outcome,
     recorded: settled.ok,
   });
 }

@@ -2,6 +2,7 @@ import { razorpay } from "./razorpay";
 import { createServiceClient } from "./supabase";
 import { settleLoyalty } from "./settleLoyalty";
 import { sendOrderConfirmation } from "./sendOrderConfirmation";
+import { toPaise } from "./utils";
 
 /**
  * Everything that happens once a Razorpay payment is known to be real.
@@ -42,11 +43,22 @@ import { sendOrderConfirmation } from "./sendOrderConfirmation";
  * fails after that point is logged and flagged for a human; none of it is a
  * reason to tell somebody their successful payment failed.
  *
- * WHAT THIS DOES NOT PROVE: that the payment was CAPTURED. The signature (or,
- * later, the webhook event) says Razorpay issued this payment against this
- * order; whether it is captured or merely authorised is a separate question
- * this function does not yet ask. payment_status is written exactly as the
- * verified flow always wrote it.
+ * NOTHING IS FULFILLED UNTIL RAZORPAY'S API SAYS THE PAYMENT IS CAPTURED.
+ * Whoever calls this — the browser route with a genuine checkout signature,
+ * the webhook with a genuine captured event — this function fetches the
+ * payment from Razorpay itself and requires: status "captured", the payment's
+ * order_id equal to the order being settled, INR, and the amount equal to
+ * what the server asked for at creation. That single fetch is the authority
+ * for every caller, so there is no "trust me, it's captured" input for anyone
+ * to forge, and the two paths cannot drift. An authorised-but-uncaptured
+ * payment (funds held, not settled to us, auto-refunded by Razorpay if never
+ * captured) touches nothing and is reported as pending_capture; it is not a
+ * failure and the customer must not be told to pay again. A payment that
+ * cannot be fetched touches nothing either — indeterminate, try later — and
+ * the webhook's retries will bring it back.
+ *
+ * Capture policy (auto or manual) is a dashboard setting this code does not
+ * assume and does not change: nothing here captures a payment.
  */
 
 export interface SettlementInput {
@@ -65,7 +77,35 @@ export interface StoredLine {
 interface PendingRow {
   id: string;
   items: StoredLine[] | null;
+  total_inr: number | null;
 }
+
+/** The fields of a fetched Razorpay payment that decide anything here. */
+interface GatewayPayment {
+  id?: string;
+  order_id?: string | null;
+  status?: string;
+  amount?: number | string;
+  currency?: string;
+  fee?: number | string | null;
+  tax?: number | string | null;
+}
+
+export type SettlementOutcome =
+  /** Captured, bound to this order, and recorded. */
+  | "settled"
+  /** Razorpay holds the money but has not captured it yet. Nothing touched. */
+  | "pending_capture"
+  /** Razorpay reports the payment failed. Nothing touched. */
+  | "failed_payment"
+  /** Razorpay reports the payment refunded. Nothing touched. */
+  | "refunded"
+  /** The fetched payment does not belong to this order, currency or amount. Nothing touched. */
+  | "mismatch"
+  /** A status this code does not know. Nothing touched. */
+  | "unknown_status"
+  /** Razorpay could not be asked. Nothing touched; ask again later. */
+  | "indeterminate";
 
 export type StockOutcome =
   /** Stock came out on this call. */
@@ -78,7 +118,10 @@ export type StockOutcome =
   | "none";
 
 export interface SettlementResult {
-  /** An order row was found or recorded and marked paid. */
+  outcome: SettlementOutcome;
+  /** What Razorpay's API said the payment's status was, or null if unreachable. */
+  paymentStatus: string | null;
+  /** Settled: an order row was found or recorded and marked paid. */
   ok: boolean;
   /** The internal order row settled against, or the thin row inserted. */
   orderId: string | null;
@@ -97,7 +140,7 @@ export interface SettlementResult {
  */
 export interface SettlementDeps {
   supabase: ReturnType<typeof createServiceClient>;
-  gateway: Pick<typeof razorpay, "orders" | "payments">;
+  gateway: Pick<typeof razorpay, "payments">;
   settlePoints: typeof settleLoyalty;
   sendConfirmation: typeof sendOrderConfirmation;
 }
@@ -111,49 +154,96 @@ export async function settleOrder(
   const settlePoints = deps?.settlePoints ?? settleLoyalty;
   const sendConfirmation = deps?.sendConfirmation ?? sendOrderConfirmation;
 
-  // The order as the SERVER priced it. Read first, because everything below
-  // is about this row: the stock that comes out, the id the movements are
-  // attached to, the total to fall back to if the gateway cannot be reached.
+  const nothing = (outcome: SettlementOutcome, paymentStatus: string | null): SettlementResult => ({
+    outcome,
+    paymentStatus,
+    ok: false,
+    orderId: null,
+    orphan: false,
+    stock: "none",
+    emailClaimed: false,
+    flaggedForReview: false,
+  });
+
+  // ── The payment, from Razorpay ──
+  // Asked first, before the database is touched, because nothing below is
+  // allowed to happen unless the answer is "captured". This is the one
+  // gateway call: the payment is the money, so its amount is the total, its
+  // fee and tax are the gateway cost, and its order_id is the binding.
+  let payment: GatewayPayment;
+  try {
+    payment = (await gateway.payments.fetch(razorpayPaymentId)) as GatewayPayment;
+  } catch (e) {
+    console.error(`Could not fetch Razorpay payment ${razorpayPaymentId} — settlement deferred:`, e);
+    return nothing("indeterminate", null);
+  }
+
+  const status = typeof payment?.status === "string" ? payment.status : null;
+  switch (status) {
+    case "captured":
+      break;
+    case "authorized":
+    case "created":
+      // Held, or still in flight. Razorpay will fire payment.captured when it
+      // captures (auto or by hand), and the webhook settles then.
+      return nothing("pending_capture", status);
+    case "failed":
+      return nothing("failed_payment", status);
+    case "refunded":
+      return nothing("refunded", status);
+    default:
+      console.error(`Razorpay payment ${razorpayPaymentId} has an unrecognised status — not settling.`);
+      return nothing("unknown_status", status);
+  }
+
+  // ── The binding ──
+  // The checkout signature says this order id and payment id were issued
+  // together; Razorpay's own record of the payment must agree, in INR. A
+  // disagreement is not a customer problem to work around — it is a request
+  // that should not exist, and it settles nothing.
+  if (payment.order_id !== razorpayOrderId) {
+    console.error(
+      `Razorpay payment ${razorpayPaymentId} belongs to ${payment.order_id ?? "no order"}, not ${razorpayOrderId} — not settling.`
+    );
+    return nothing("mismatch", status);
+  }
+  if (payment.currency !== "INR") {
+    console.error(`Razorpay payment ${razorpayPaymentId} is in ${payment.currency ?? "no currency"}, not INR — not settling.`);
+    return nothing("mismatch", status);
+  }
+  const paidPaise = Number(payment.amount);
+  if (!Number.isFinite(paidPaise) || paidPaise <= 0) {
+    console.error(`Razorpay payment ${razorpayPaymentId} has no usable amount — not settling.`);
+    return nothing("mismatch", status);
+  }
+  const capturedInr = paidPaise / 100;
+  const gatewayFeeInr = payment.fee === undefined || payment.fee === null ? null : Number(payment.fee) / 100;
+  const gatewayTaxInr = payment.tax === undefined || payment.tax === null ? null : Number(payment.tax) / 100;
+
+  // ── The order as the SERVER priced it ──
+  // Everything below is about this row: the stock that comes out, the id the
+  // movements are attached to, and the amount the server asked Razorpay for.
   const { data: pendingRow } = await supabase
     .from("orders")
-    .select("id, items")
+    .select("id, items, total_inr")
     .eq("razorpay_order_id", razorpayOrderId)
     .maybeSingle();
   const pending = (pendingRow as PendingRow | null) ?? null;
 
-  // What Razorpay actually took, and what it cost us to take it. Read from
-  // the gateway rather than recomputed: a discount window that closed between
-  // creation and payment would make a recomputation disagree with the money,
-  // and the money is the fact of record.
-  //
-  // NEVER FATAL. If the order cannot be fetched, total_inr falls back to the
-  // stored lines (what the server priced at creation — the same figure it
-  // sent to Razorpay). If the payment cannot be fetched, the fee and tax are
-  // recorded as unknown (null): a reporting gap in the P&L, not a reason to
-  // fail a confirmation somebody has paid for. Neither read is a capture
-  // check; see the header.
-  let capturedInr: number | null = null;
-  let gatewayFeeInr: number | null = null;
-  let gatewayTaxInr: number | null = null;
-  try {
-    const order = await gateway.orders.fetch(razorpayOrderId);
-    capturedInr = Number(order.amount) / 100;
-  } catch (e) {
-    console.error(`Could not fetch Razorpay order ${razorpayOrderId} for amount:`, e);
-  }
-  try {
-    const payment = await gateway.payments.fetch(razorpayPaymentId);
-    if (payment?.fee !== undefined && payment.fee !== null) {
-      gatewayFeeInr = Number(payment.fee) / 100;
+  // The amount captured must be the amount the server asked for. Razorpay
+  // enforces this for a standard order, so a difference means the row or the
+  // request is not what it seems — and settling a basket for money that does
+  // not match it is exactly the thing this file exists to refuse.
+  if (pending && pending.total_inr !== null && pending.total_inr !== undefined) {
+    // Same helper the checkout route used to ask for the amount, so the two
+    // sides cannot disagree by rounding.
+    const askedPaise = toPaise(Number(pending.total_inr));
+    if (askedPaise !== paidPaise) {
+      console.error(
+        `Razorpay payment ${razorpayPaymentId} captured ${paidPaise} paise but order ${pending.id} asked for ${askedPaise} — not settling.`
+      );
+      return nothing("mismatch", status);
     }
-    if (payment?.tax !== undefined && payment.tax !== null) {
-      gatewayTaxInr = Number(payment.tax) / 100;
-    }
-  } catch (e) {
-    console.error(
-      `Could not read Razorpay fees for payment ${razorpayPaymentId} — this order will show no gateway cost:`,
-      e
-    );
   }
 
   // ── No pending row ──
@@ -201,6 +291,8 @@ export async function settleOrder(
     }
 
     return {
+      outcome: "settled",
+      paymentStatus: status,
       ok: orderId !== null,
       orderId,
       orphan: true,
@@ -264,9 +356,8 @@ export async function settleOrder(
   // smoothly — a replay that reserves nothing is exactly such a settlement.
   const paidPatch: Record<string, unknown> = {
     payment_status: "paid",
-    total_inr:
-      capturedInr ??
-      lines.reduce((sum, item) => sum + Number(item.price_inr) * item.quantity, 0),
+    // What Razorpay captured — checked above to equal what the server asked.
+    total_inr: capturedInr,
     gateway_fee_inr: gatewayFeeInr,
     gateway_tax_inr: gatewayTaxInr,
   };
@@ -389,6 +480,8 @@ export async function settleOrder(
   }
 
   return {
+    outcome: "settled",
+    paymentStatus: status,
     ok: markedPaid,
     orderId,
     orphan: false,

@@ -17,6 +17,21 @@ export function cn(...inputs: ClassValue[]): string {
  * re-enable the PayPal button/route + env keys (see the TODO(payments) markers
  * in CartSummary, lib/types, and .env.local.example).
  */
+/**
+ * Rupees to paise, the smallest unit Razorpay counts in.
+ *
+ * ONE FORMULA, USED ON BOTH SIDES OF A PAYMENT: the checkout route turns the
+ * server-priced total into the amount it asks Razorpay for, and settlement
+ * turns the stored total back into the amount it expects Razorpay to have
+ * captured. Two formulas, however similar, would eventually disagree by a
+ * paisa and refuse a genuine payment. Rounded, because a rupee total is meant
+ * to have at most two decimals and binary floating point does not promise
+ * that 799.10 × 100 is exactly 79910.
+ */
+export function toPaise(rupees: number): number {
+  return Math.round(rupees * 100);
+}
+
 export function formatINR(amount: number): string {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",

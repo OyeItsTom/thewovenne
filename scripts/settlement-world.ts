@@ -45,6 +45,23 @@ export interface World {
   gatewayDown: boolean;
   /** razorpay_webhook_events: event_id → event_type. The 0058 primary key. */
   webhookEvents: Map<string, string | null>;
+  /** Every payment id the code asked the gateway about. */
+  paymentFetches: string[];
+}
+
+/**
+ * What Razorpay's API says about a payment. THE ONLY CAPTURE AUTHORITY the
+ * code under test has: settleOrder fetches this and settles on nothing else.
+ * Defaults to a captured INR payment for order_1 matching the stored total.
+ */
+export interface FakePayment {
+  id?: string;
+  order_id?: string | null;
+  status?: string;
+  amount?: number;
+  currency?: string;
+  fee?: number | null;
+  tax?: number | null;
 }
 
 export function makeWorld(opts: {
@@ -52,6 +69,8 @@ export function makeWorld(opts: {
   stock?: Record<string, number>;
   gatewayDown?: boolean;
   profile?: boolean;
+  /** Overrides for what the gateway reports about the payment. */
+  payment?: FakePayment;
 }): { world: World; deps: Partial<SettlementDeps> } {
   const world: World = {
     orders: new Map(),
@@ -68,6 +87,7 @@ export function makeWorld(opts: {
     inserts: [],
     gatewayDown: Boolean(opts.gatewayDown),
     webhookEvents: new Map(),
+    paymentFetches: [],
   };
   if (opts.order !== null) {
     world.orders.set("ord-1", {
@@ -224,16 +244,22 @@ export function makeWorld(opts: {
   const supabase = { from: table, rpc } as unknown as SettlementDeps["supabase"];
 
   const gateway = {
-    orders: {
-      fetch: async () => {
-        if (world.gatewayDown) throw new Error("gateway unreachable");
-        return { amount: 295000 };
-      },
-    },
     payments: {
-      fetch: async () => {
+      fetch: async (id: string) => {
+        world.paymentFetches.push(id);
         if (world.gatewayDown) throw new Error("gateway unreachable");
-        return { fee: 5900, tax: 900 };
+        return {
+          id,
+          entity: "payment",
+          order_id: "order_1",
+          status: "captured",
+          captured: true,
+          amount: 295000,
+          currency: "INR",
+          fee: 5900,
+          tax: 900,
+          ...(opts.payment ?? {}),
+        };
       },
     },
   } as unknown as SettlementDeps["gateway"];

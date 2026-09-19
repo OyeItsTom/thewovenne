@@ -109,11 +109,38 @@ export default function CheckoutForm({
             body: JSON.stringify({ action: "verify", ...response }),
           });
           const verifyData = await verifyRes.json();
-          if (verifyData.verified) {
+          // Only a payment Razorpay's API confirms as captured and recorded
+          // is a confirmed order. A genuine response whose capture is still
+          // pending must not be shown as confirmed — and must not be shown
+          // as failed either, because "failed" invites a second payment.
+          if (verifyData.verified && verifyData.outcome === "settled") {
             clearCart();
             router.push("/in/checkout/success");
-          } else {
+          } else if (
+            verifyData.verified &&
+            (verifyData.outcome === "pending_capture" || verifyData.outcome === "indeterminate")
+          ) {
+            // The cart is deliberately kept: nothing has been recorded yet.
+            setLoading(false);
+            setError(
+              "Razorpay has received your payment and we are waiting for it to be confirmed. " +
+                "Please do not pay again — your confirmation email will follow once it clears. " +
+                "If nothing arrives within an hour, contact us and we will find your payment."
+            );
+          } else if (!verifyData.verified || verifyData.outcome === "failed_payment") {
+            // Nothing genuine, or Razorpay says the payment failed: no money
+            // was taken, which is what the cancel page tells them.
             router.push("/in/checkout/cancel");
+          } else {
+            // refunded, mismatch, unknown_status: something is wrong and we
+            // cannot honestly say whether money moved. Neither "success" nor
+            // "no payment was taken" would be true, so say so and keep the
+            // cart. Never invite a second payment here.
+            setLoading(false);
+            setError(
+              "We could not confirm this payment. Please do not pay again — " +
+                "contact us with the time of your payment and we will sort it out."
+            );
           }
         },
         modal: { ondismiss: () => setLoading(false) },
