@@ -45,6 +45,9 @@ export default function ProductOptions({
         price_inr: effectivePrice(product).price,
         image_url: product.image_url,
         size,
+        // Same hint AddToCart carries, so a quick-add and a stepper-add cap
+        // the cart line identically.
+        available: sizes.length > 0 ? (selected?.stock_quantity ?? 0) : product.stock_quantity,
       },
       1
     );

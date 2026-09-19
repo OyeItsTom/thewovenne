@@ -40,6 +40,9 @@ export default function AddToCart({
         price_inr: effectivePrice(product).price,
         image_url: product.image_url,
         size,
+        // What this page knows is left, so the cart's own stepper stops where
+        // this one does. A hint; the server re-reads the shelf at checkout.
+        available: max,
       },
       quantity
     );
