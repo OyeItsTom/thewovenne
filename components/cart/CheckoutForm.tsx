@@ -11,6 +11,13 @@ import { type OrderDetails, type DeliveryChannel } from "@/lib/orderDetails";
 import { quoteShipping, type ShippingConfig } from "@/lib/shipping";
 import type { CheckoutIdentity } from "@/lib/checkoutIdentity";
 import Button from "@/components/ui/Button";
+import {
+  clearPaymentHold,
+  guardPayAttempt,
+  holdHref,
+  resolvePaymentOutcome,
+  writePaymentHold,
+} from "@/lib/paymentOutcome";
 
 /**
  * Contact and delivery details, then payment.
@@ -76,6 +83,17 @@ export default function CheckoutForm({
 
   async function handlePay(e: React.FormEvent) {
     e.preventDefault();
+
+    // THE HARD HALF OF THE RETRY GUARD, and the only one that actually stops
+    // a charge — see guardPayAttempt. Synchronous, in front of everything,
+    // and it does not care how old the hold is: only a settlement or a
+    // Razorpay-confirmed failure lifts one.
+    const attempt = guardPayAttempt();
+    if (!attempt.allowed) {
+      router.push(attempt.href);
+      return;
+    }
+
     setError(null);
     setLoading(true);
 
@@ -109,39 +127,41 @@ export default function CheckoutForm({
             body: JSON.stringify({ action: "verify", ...response }),
           });
           const verifyData = await verifyRes.json();
-          // Only a payment Razorpay's API confirms as captured and recorded
-          // is a confirmed order. A genuine response whose capture is still
-          // pending must not be shown as confirmed — and must not be shown
-          // as failed either, because "failed" invites a second payment.
-          if (verifyData.verified && verifyData.outcome === "settled") {
+          // WHERE THIS GOES IS DECIDED IN lib/paymentOutcome, not here.
+          // The rule it enforces — a customer whose money may have moved is
+          // never shown a way to pay again — is the reason this handler
+          // exists, and it is worth nothing if it cannot be tested. Only
+          // "settled" and a payment Razorpay's API calls failed leave the
+          // checkout door open; everything else, including anything this
+          // build does not recognise, becomes a hold.
+          const next = resolvePaymentOutcome(verifyData);
+
+          if (next.action === "success") {
+            clearPaymentHold();
             clearCart();
             router.push("/in/checkout/success");
-          } else if (
-            verifyData.verified &&
-            (verifyData.outcome === "pending_capture" || verifyData.outcome === "indeterminate")
-          ) {
-            // The cart is deliberately kept: nothing has been recorded yet.
-            setLoading(false);
-            setError(
-              "Razorpay has received your payment and we are waiting for it to be confirmed. " +
-                "Please do not pay again — your confirmation email will follow once it clears. " +
-                "If nothing arrives within an hour, contact us and we will find your payment."
-            );
-          } else if (!verifyData.verified || verifyData.outcome === "failed_payment") {
-            // Nothing genuine, or Razorpay says the payment failed: no money
-            // was taken, which is what the cancel page tells them.
-            router.push("/in/checkout/cancel");
-          } else {
-            // refunded, mismatch, unknown_status: something is wrong and we
-            // cannot honestly say whether money moved. Neither "success" nor
-            // "no payment was taken" would be true, so say so and keep the
-            // cart. Never invite a second payment here.
-            setLoading(false);
-            setError(
-              "We could not confirm this payment. Please do not pay again — " +
-                "contact us with the time of your payment and we will sort it out."
-            );
+            return;
           }
+
+          if (next.action === "cancel") {
+            // Razorpay says the payment itself failed, so nothing was
+            // captured and the cart is safe to pay for again.
+            clearPaymentHold();
+            router.push("/in/checkout/cancel");
+            return;
+          }
+
+          // The cart is deliberately kept: nothing has been recorded. The hold
+          // is written BEFORE the navigation so that a back-button press
+          // landing on this form again finds it — see the guard in handlePay
+          // and in CheckoutGate. `loading` is left set on purpose; the button
+          // must not come back to life during the redirect.
+          writePaymentHold({
+            state: next.state,
+            ref: response.razorpay_order_id,
+            at: Date.now(),
+          });
+          router.push(holdHref(next.state, response.razorpay_order_id));
         },
         modal: { ondismiss: () => setLoading(false) },
       });

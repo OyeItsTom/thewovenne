@@ -1,12 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Heart, PackageSearch, Truck } from "lucide-react";
+import { Heart, PackageSearch, Truck, ShieldAlert } from "lucide-react";
 import CheckoutForm from "@/components/cart/CheckoutForm";
 import { buttonClassName } from "@/components/ui/Button";
 import type { ShippingConfig } from "@/lib/shipping";
 import type { CheckoutIdentity } from "@/lib/checkoutIdentity";
+import {
+  holdCopyFor,
+  holdHref,
+  readPaymentHold,
+  type PaymentHold,
+} from "@/lib/paymentOutcome";
 
 /**
  * The fork a guest meets before the checkout form.
@@ -39,6 +45,60 @@ export default function CheckoutGate({
   identity: CheckoutIdentity;
 }) {
   const [asGuest, setAsGuest] = useState(false);
+  const [hold, setHold] = useState<PaymentHold | null>(null);
+
+  // A PAYMENT THAT MAY HAVE LANDED CLOSES THIS SCREEN, AND TIME DOES NOT
+  // REOPEN IT. Only a settlement or Razorpay reporting the payment failed
+  // lifts the hold; an old one goes quiet (stale copy) but still blocks.
+  //
+  // Both ways back here are covered: a browser Back from the pending page
+  // re-renders this component, and a restore from the back/forward cache does
+  // not, which is what `pageshow` is for.
+  //
+  // It starts null so the first client render matches the server's and
+  // hydration is clean. That leaves a frame in which the form is on screen,
+  // which is why CheckoutForm.handlePay re-reads the hold synchronously before
+  // it will start a charge — this half is what the customer sees, that half is
+  // what actually stops them.
+  useEffect(() => {
+    const sync = () => setHold(readPaymentHold());
+    sync();
+    window.addEventListener("pageshow", sync);
+    return () => window.removeEventListener("pageshow", sync);
+  }, []);
+
+  if (hold) {
+    // Stale drops the specific claim, never the block — see holdCopyFor.
+    const copy = holdCopyFor(hold.state, hold.stale);
+    return (
+      <div className="mt-10 rounded-2xl border border-terracotta/30 bg-terracotta/5 p-6 sm:p-7">
+        <div className="flex items-start gap-3">
+          <ShieldAlert
+            aria-hidden
+            className="mt-0.5 h-5 w-5 shrink-0 text-terracotta"
+            strokeWidth={1.75}
+          />
+          <div>
+            <h2 className="font-heading text-xl text-ink">{copy.title}</h2>
+            <p className="mt-2 text-sm leading-relaxed text-ink/70">
+              {copy.body}
+            </p>
+            <p className="mt-3 text-sm leading-relaxed text-ink/60">
+              Checkout is paused until we have confirmed it, so you cannot be
+              charged twice by accident.
+            </p>
+            {/* A link to the explanation, never to a payment. */}
+            <Link
+              href={holdHref(hold.state, hold.ref)}
+              className={buttonClassName("primary", "lg", "mt-5 w-full sm:w-auto")}
+            >
+              See what to do next
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (identity.signedIn || asGuest) {
     return <CheckoutForm shipping={shipping} identity={identity} />;
