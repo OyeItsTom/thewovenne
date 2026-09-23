@@ -9,6 +9,7 @@ import CategoryFilters from "@/components/shop/CategoryFilters";
 import { getSizesForProducts } from "@/lib/sizes";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 import { cPath } from "@/lib/country";
+import { categoryHref } from "@/lib/urls";
 
 /**
  * A sub-category listing, e.g. /women/sarees.
@@ -51,7 +52,14 @@ export async function generateMetadata({
   return {
     title,
     description,
-    alternates: { canonical: `/${parent.slug}/${child.slug}` },
+    // THROUGH categoryHref, WHICH CARRIES THE MARKET PREFIX. Written by hand
+    // this read `/${parent.slug}/${child.slug}` and metadataBase resolved it to
+    // https://www.thewovenne.com/women/sarees — a URL that only 308s back to
+    // this page. A canonical pointing at a redirect is the one tag a page
+    // cannot afford to get wrong: it is the whole of what it tells Google about
+    // which URL counts, and it was naming an address that never serves a page.
+    // The product routes have always used a helper for exactly this reason.
+    alternates: { canonical: categoryHref(parent.slug, child.slug) },
     openGraph: { title, description, images: [DEFAULT_OG_IMAGE] },
   };
 }

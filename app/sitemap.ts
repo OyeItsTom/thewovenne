@@ -2,14 +2,19 @@ import type { MetadataRoute } from "next";
 import { getAllProducts } from "@/lib/products";
 import { getVisibleCategoryTree } from "@/lib/categories";
 import { productHref } from "@/lib/urls";
-import { cPath } from "@/lib/country";
 import { getPublishedPosts } from "@/lib/journal";
 import { getPublishedPages } from "@/lib/pages";
+import { buildSitemap } from "@/lib/sitemapRoutes";
 
 const base = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
 export const revalidate = 3600;
 
+/**
+ * This route FETCHES. What is worth submitting, and what date may honestly be
+ * claimed for it, is decided in lib/sitemapRoutes — pure, and testable without
+ * a database (scripts/seo-indexing.test.ts).
+ */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const [products, posts, pages, tree] = await Promise.all([
     getAllProducts(),
@@ -18,65 +23,19 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     getVisibleCategoryTree(),
   ]);
 
-  // Every entry is country-prefixed. A sitemap listing the bare paths would
-  // advertise URLs that only 308 elsewhere — telling a crawler to spend its
-  // budget on redirects instead of pages.
-  const staticRoutes: MetadataRoute.Sitemap = [
-    "/",
-    "/shop",
-    "/journal",
-    "/cart",
-  ].map((path) => ({
-    url: `${base}${cPath(path)}`,
-    lastModified: new Date(),
-    changeFrequency: "weekly",
-    priority: path === "/" ? 1 : 0.7,
-  }));
-
-  const productRoutes: MetadataRoute.Sitemap = products.map((p) => ({
-    url: `${base}${productHref(p)}`,
-    lastModified: new Date(p.created_at),
-    changeFrequency: "weekly",
-    priority: 0.6,
-  }));
-
-  const journalRoutes: MetadataRoute.Sitemap = posts.map((post) => ({
-    url: `${base}${cPath(`/journal/${post.slug}`)}`,
-    lastModified: new Date(post.created_at),
-    changeFrequency: "monthly",
-    priority: 0.4,
-  }));
-
-  // Content pages are real URLs and belong in the sitemap like anything else.
-  const pageRoutes: MetadataRoute.Sitemap = pages.map((page) => ({
-    url: `${base}${cPath(`/${page.slug}`)}`,
-    lastModified: new Date(),
-    changeFrequency: "monthly",
-    priority: 0.5,
-  }));
-
-  // Category and sub-category listings are real pages, and they are what the
-  // product URLs hang off — a sitemap without them describes half the shop.
-  const categoryRoutes: MetadataRoute.Sitemap = tree.flatMap((parent) => [
-    {
-      url: `${base}${cPath(`/${parent.slug}`)}`,
-      lastModified: new Date(),
-      changeFrequency: "weekly" as const,
-      priority: 0.8,
-    },
-    ...parent.children.map((child) => ({
-      url: `${base}${cPath(`/${parent.slug}/${child.slug}`)}`,
-      lastModified: new Date(),
-      changeFrequency: "weekly" as const,
-      priority: 0.7,
+  return buildSitemap({
+    base,
+    // productHref stays the single source of product URLs, so a sitemap entry
+    // and the page's own canonical cannot disagree.
+    products: products.map((product) => ({
+      href: productHref(product),
+      created_at: product.created_at,
+      category_slug: product.category_slug,
+      category_parent_slug: product.category_parent_slug,
+      collection: product.collection,
     })),
-  ]);
-
-  return [
-    ...staticRoutes,
-    ...categoryRoutes,
-    ...pageRoutes,
-    ...productRoutes,
-    ...journalRoutes,
-  ];
+    categories: tree,
+    pages,
+    posts,
+  });
 }

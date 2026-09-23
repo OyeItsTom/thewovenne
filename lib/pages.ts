@@ -24,10 +24,19 @@ export interface SitePage {
   in_footer: boolean;
   sort_order: number;
   meta_description: string | null;
+  /**
+   * When this version went live — set by the publish queue (migration 0018).
+   *
+   * Read for the sitemap's lastModified, which is the one place a truthful
+   * "this page changed" timestamp matters. Null on a draft, and on any row that
+   * has never been through a publish, in which case no date is claimed at all.
+   */
+  published_at: string | null;
 }
 
 const PAGE_SELECT =
-  "page_id, slug, title, intro, body, in_footer, sort_order, meta_description";
+  "page_id, slug, title, intro, body, in_footer, sort_order, meta_description, " +
+  "published_at";
 
 type PageVersionRow = Omit<SitePage, "id" | "body"> & {
   page_id: string;
@@ -46,6 +55,7 @@ function mapPage(row: PageVersionRow): SitePage {
     in_footer: row.in_footer,
     sort_order: row.sort_order,
     meta_description: row.meta_description,
+    published_at: row.published_at,
   };
 }
 
