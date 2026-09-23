@@ -8,6 +8,7 @@ import {
 import { parseCatalogueParams, type RawSearchParams } from "@/lib/catalogueParams";
 import ShopFilters from "@/components/shop/ShopFilters";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { cPath } from "@/lib/country";
 
 /*
  * Reading searchParams makes this render dynamically — that is how App Router
@@ -23,6 +24,22 @@ export const metadata: Metadata = {
   title: "Shop All | THE WOVENNE",
   description:
     "Authentic handloom linen from Kerala — shirts, kurtas, sarees, and home. Woven in India, priced in ₹.",
+  /*
+   * THE UNFILTERED CATALOGUE, FOR EVERY FILTERED VIEW OF IT.
+   *
+   * Static, not per-request, and that is the point: this object is the metadata
+   * for /in/shop AND for every ?colour=&fabric=&size=&maxPrice= combination of
+   * it, because filters live in the URL rather than in a component. Five
+   * dimensions multiply into an unbounded set of URLs that each returned 200,
+   * each self-canonicalised, and each carried this same title, description and
+   * h1 — a duplicate cluster with no head.
+   *
+   * Naming the clean path here consolidates every one of them onto the page
+   * that should rank. The filters keep working exactly as before; a customer
+   * can still send a friend a filtered link and it still means what it says.
+   * Only what Google is told to index changes.
+   */
+  alternates: { canonical: cPath("/shop") },
   openGraph: {
     title: "Shop All | THE WOVENNE",
     description:
