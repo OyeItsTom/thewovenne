@@ -8,7 +8,7 @@ import {
   type DeliveryConfig,
   type DeliveryZone,
 } from "@/lib/delivery";
-import { DEFAULT_SHIPPING, type ShippingConfig } from "@/lib/shipping";
+import { DEFAULT_SHIPPING, type RegionalRate, type ShippingConfig } from "@/lib/shipping";
 
 /**
  * The delivery estimator's rules, in one place an operator can actually use.
@@ -85,6 +85,13 @@ export default function DeliverySettingsEditor({ onChange }: { onChange?: () => 
     setShipping(next);
     persist("shipping", next);
   };
+  /** Patch one regional rate in place, leaving the others alone. */
+  const setRegion = (index: number, patch: Partial<RegionalRate>) =>
+    setS(
+      "regional_rates",
+      shipping.regional_rates.map((r, i) => (i === index ? { ...r, ...patch } : r))
+    );
+
 
   const setZone = (index: number, patch: Partial<DeliveryZone>) => {
     const zones = delivery.zones.map((z, i) => (i === index ? { ...z, ...patch } : z));
@@ -136,11 +143,11 @@ export default function DeliverySettingsEditor({ onChange }: { onChange?: () => 
 
       <Block
         title="What delivery costs"
-        hint="These are the figures CHECKOUT CHARGES. The product page reads the same values, so the two cannot disagree. Free-delivery regions are matched on the start of a pincode — 67, 68, 69 covers Kerala."
+        hint="These are the figures CHECKOUT CHARGES. The product page reads the same values, so the two cannot disagree. Regions are matched on the start of a pincode — 67, 68, 69 covers Kerala."
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <Num
-            label="Standard delivery charge, ₹"
+            label="Standard delivery charge — rest of India, ₹"
             value={shipping.flat_rate_inr}
             onChange={(v) => setS("flat_rate_inr", v)}
           />
@@ -150,13 +157,70 @@ export default function DeliverySettingsEditor({ onChange }: { onChange?: () => 
             onChange={(v) => setS("free_above_inr", v)}
           />
         </div>
-        <div className="mt-4">
-          <Csv
-            label="Free-delivery pincode prefixes"
-            hint="Comma separated. Anything starting with one of these delivers free."
-            value={shipping.free_pin_prefixes}
-            onChange={(v) => setS("free_pin_prefixes", v)}
-          />
+
+        {/* Regions that pay something OTHER than the standard rate. There is no
+            "free region" control any more: the policy has none, and a field
+            that can silently zero a charge is the one worth not having. A
+            genuinely free region is a rate of 0 here, typed deliberately. */}
+        <div className="mt-6 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-ink">Regional delivery charges</p>
+            <button
+              onClick={() =>
+                setS("regional_rates", [
+                  ...shipping.regional_rates,
+                  { name: "", prefixes: [], rate_inr: 0 },
+                ])
+              }
+              className="rounded-lg border border-ink/15 px-3 py-1.5 text-xs text-ink/70 transition-colors hover:border-terracotta hover:text-terracotta"
+            >
+              Add a region
+            </button>
+          </div>
+
+          {shipping.regional_rates.length === 0 && (
+            <p className="text-sm text-ink/55">
+              No regional charges — everywhere in India pays the standard rate
+              below the free-delivery threshold.
+            </p>
+          )}
+
+          {shipping.regional_rates.map((region, i) => (
+            <div key={i} className="rounded-xl border border-ink/10 p-4">
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1 space-y-3">
+                  <Text
+                    label="Region name (for you, not customers)"
+                    value={region.name}
+                    onChange={(v) => setRegion(i, { name: v })}
+                  />
+                  <Csv
+                    label="Pincode prefixes"
+                    hint="Comma separated. Longest match wins, so 682 beats 68."
+                    value={region.prefixes}
+                    onChange={(v) => setRegion(i, { prefixes: v })}
+                  />
+                  <Num
+                    label="Delivery charge here, ₹"
+                    value={region.rate_inr}
+                    onChange={(v) => setRegion(i, { rate_inr: v })}
+                  />
+                </div>
+                <button
+                  onClick={() =>
+                    setS(
+                      "regional_rates",
+                      shipping.regional_rates.filter((_, idx) => idx !== i)
+                    )
+                  }
+                  aria-label={`Remove region ${region.name || i + 1}`}
+                  className="shrink-0 rounded-lg p-2 text-ink/40 transition-colors hover:bg-terracotta/10 hover:text-terracotta"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </Block>
 

@@ -179,7 +179,21 @@ check(
   over.status === "serviceable" && over.freeAboveInr,
   null
 );
-const alreadyFree = ask("670001", 500);
+// A FREE REGION HAS TO BE ASKED FOR NOW, and is expressed as a regional rate of
+// zero. The stock config used to deliver Kerala's 67/68/69 free, so this case
+// arose from the defaults; the published policy has no free region below the
+// threshold, so it no longer does. The rule is still worth pinning — the config
+// just has to say so out loud.
+const alreadyFree = resolveDelivery({
+  market: "in",
+  postalCode: "670001",
+  orderValueInr: 500,
+  delivery,
+  shipping: {
+    ...shipping,
+    regional_rates: [{ name: "Kerala", prefixes: ["67"], rate_inr: 0 }],
+  },
+});
 check(
   "already free by region — the threshold is noise",
   alreadyFree.status === "serviceable" && alreadyFree.freeAboveInr,
