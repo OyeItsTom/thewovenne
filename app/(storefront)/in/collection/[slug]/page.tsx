@@ -4,6 +4,7 @@ import { getCollectionSlugs, getProductsByCollection,  } from "@/lib/storefront"
 import { getContent } from "@/lib/storefront";
 import ProductGrid from "@/components/shop/ProductGrid";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { collectionHref } from "@/lib/urls";
 
 /**
  * A seasonal collection, e.g. /collection/onam-edit — where the homepage
@@ -43,6 +44,11 @@ export async function generateMetadata({
   return {
     title,
     description,
+    // params.slug, because a collection has no row to resolve against — it is a
+    // free-text value on products.collection. That is safe here rather than
+    // sloppy: a slug matching no product makes the page call notFound(), and
+    // the not-found boundary's noindex metadata replaces this whole object.
+    alternates: { canonical: collectionHref(params.slug) },
     openGraph: { title, description, images: [DEFAULT_OG_IMAGE] },
   };
 }

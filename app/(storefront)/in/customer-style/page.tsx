@@ -15,6 +15,9 @@ export const metadata: Metadata = {
   title: "Worn by You | THE WOVENNE",
   description:
     "Photographs sent to us by the people who wear our cloth — handloom linen and natural fibres, woven in Kerala.",
+  // The route keeps the name the URL was indexed under, so the canonical says
+  // customer-style even though the page is called Worn by You.
+  alternates: { canonical: cPath("/customer-style") },
 };
 
 /**

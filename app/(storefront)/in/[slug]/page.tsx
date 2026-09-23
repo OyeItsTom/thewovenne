@@ -8,6 +8,7 @@ import ProductGrid from "@/components/shop/ProductGrid";
 import PageBlocks from "@/components/page/PageBlocks";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 import { cPath } from "@/lib/country";
+import { rootSlugHref } from "@/lib/urls";
 
 /**
  * Root-level slugs: a category section (/men, /women) or a content page
@@ -62,6 +63,9 @@ export async function generateMetadata({
     return {
       title,
       description,
+      // Built from the slug that RESOLVED, not the one that was requested, so
+      // the canonical can only ever name the section actually being served.
+      alternates: { canonical: rootSlugHref(category.slug) },
       openGraph: { title, description, images: [DEFAULT_OG_IMAGE] },
     };
   }
@@ -72,6 +76,10 @@ export async function generateMetadata({
     return {
       title,
       description,
+      // Every content page gets one the moment it is published — /policies and
+      // /privacy-policy today, /contact and /shipping whenever they are
+      // written. Nothing to remember per page, because pages are rows.
+      alternates: { canonical: rootSlugHref(page.slug) },
       openGraph: { title, description, images: [DEFAULT_OG_IMAGE] },
     };
   }
