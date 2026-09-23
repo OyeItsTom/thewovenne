@@ -7,6 +7,8 @@ import SeasonalEdit from "@/components/home/SeasonalEdit";
 import LookbookSections from "@/components/home/LookbookSections";
 import { getCuratedProducts } from "@/lib/curated";
 import { getContent } from "@/lib/storefront";
+import JsonLd from "@/components/seo/JsonLd";
+import { organizationNode } from "@/lib/structuredData";
 
 
 /**
@@ -41,6 +43,12 @@ export default async function Home() {
 
   return (
     <>
+      {/* HERE AND NOWHERE ELSE. Google asks for organization markup on the home
+          page or one page describing the business, not on every page — and this
+          is the home page: "/" only 308s to it. Repeating it on each PDP would
+          add weight to every crawl and say nothing it does not say once here. */}
+      <JsonLd data={organizationNode()} />
+
       <Hero content={hero} />
 
       {/* Renders nothing when no campaign is enabled. */}

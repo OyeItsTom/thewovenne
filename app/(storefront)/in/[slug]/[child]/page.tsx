@@ -10,6 +10,8 @@ import { getSizesForProducts } from "@/lib/sizes";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
 import { cPath } from "@/lib/country";
 import { categoryHref } from "@/lib/urls";
+import JsonLd from "@/components/seo/JsonLd";
+import { breadcrumbNode } from "@/lib/structuredData";
 
 /**
  * A sub-category listing, e.g. /women/sarees.
@@ -79,6 +81,15 @@ export default async function SubCategoryPage({
 
   return (
     <div className="container-wovenne section-padding">
+      {/* Mirrors the visible trail immediately below it, two levels deep and
+          starting at the section — the page has no Home crumb, so neither does
+          this. */}
+      <JsonLd
+        data={breadcrumbNode([
+          { name: parent.name, path: `/${parent.slug}` },
+          { name: child.name },
+        ])}
+      />
       <nav aria-label="Breadcrumb" className="text-xs text-ink/50">
         <Link href={cPath(`/${parent.slug}`)} className="hover:text-terracotta">
           {parent.name}
