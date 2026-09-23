@@ -20,6 +20,9 @@ import { cPath } from "@/lib/country";
 import type { Product } from "@/lib/types";
 import type { ProductSize } from "@/lib/sizes";
 import { stockNote, stockState } from "@/lib/stock";
+import JsonLd from "@/components/seo/JsonLd";
+import { breadcrumbNode, productNode } from "@/lib/structuredData";
+import { productHref } from "@/lib/urls";
 
 /**
  * The product page body, shared so the canonical hierarchical route is the only
@@ -44,14 +47,21 @@ export default async function ProductDetail({
   /** Parent and sub-category, when the product is filed under both. */
   breadcrumb?: { parent: { slug: string; name: string }; child: { slug: string; name: string } };
 }) {
-  const { price, wasPrice } = effectivePrice(product);
+  const { price, wasPrice, active: discounted } = effectivePrice(product);
+  // ONE STOCK VERDICT FOR THE WHOLE PAGE, sizes included. It was computed
+  // without them, which was harmless while the only reader was the note below
+  // (that reader runs only when there are no sizes). It stopped being harmless
+  // when the structured data started reading it too: passing sizes is what makes
+  // "sold out" mean the same thing to a customer and to Google, because for a
+  // sized piece the stock column is not the truth — the sizes are (0021).
+  const stock = stockState(product.stock_quantity, sizes);
   // Decided before anything renders, so the note appears NEXT TO THE PRICE
   // rather than after a size is chosen — which was after the moment it mattered.
   // ONE-SIZE PRODUCTS ONLY. A sized piece says it beside the size instead, where
   // it follows what the customer actually picked — see ProductOptions. Keeping
   // both would put "almost gone in some sizes" under the price while the chosen
   // size says nothing, which is two answers to one question.
-  const note = sizes.length === 0 ? stockNote(stockState(product.stock_quantity)) : null;
+  const note = sizes.length === 0 ? stockNote(stock) : null;
   // Fetched HERE for the same reason reviews are: both routes render this file,
   // and a read done in one route and not the other is how two pages start
   // showing different things about one product.
@@ -74,6 +84,37 @@ export default async function ProductDetail({
 
   return (
     <div className="container-wovenne section-padding pb-28 lg:pb-24">
+      {/* SERVER-RENDERED, and next to the markup it describes rather than in the
+          route, because BOTH product routes render this file — the hierarchical
+          one and the legacy flat one. Putting it here is what stops the two
+          drifting into describing the same product differently. */}
+      <JsonLd
+        data={productNode({
+          name: product.name,
+          href: productHref(product),
+          images,
+          description: product.description,
+          price,
+          soldOut: stock.soldOut,
+          rating,
+          // Only while a discount is actually running: after it ends this price
+          // is no longer the price, which is the one thing the property says.
+          priceValidUntil: discounted ? product.discount_ends_at : null,
+        })}
+      />
+      {breadcrumb && (
+        <JsonLd
+          data={breadcrumbNode([
+            { name: breadcrumb.parent.name, path: `/${breadcrumb.parent.slug}` },
+            {
+              name: breadcrumb.child.name,
+              path: `/${breadcrumb.parent.slug}/${breadcrumb.child.slug}`,
+            },
+            // No path: this is the page itself.
+            { name: product.name },
+          ])}
+        />
+      )}
       {breadcrumb && (
         <nav aria-label="Breadcrumb" className="mb-8 text-xs text-ink/50">
           <Link href={cPath(`/${breadcrumb.parent.slug}`)} className="hover:text-terracotta">
