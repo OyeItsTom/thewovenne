@@ -4,6 +4,7 @@ import Link from "next/link";
 import { getPublishedPosts } from "@/lib/storefront";
 import WovenSeam from "@/components/weave/WovenSeam";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { cPath } from "@/lib/country";
 
 export const revalidate = 60;
 
@@ -11,6 +12,7 @@ export const metadata: Metadata = {
   title: "The Journal | THE WOVENNE",
   description:
     "Stories from our Kerala weavers, care guides, and notes from the loom.",
+  alternates: { canonical: cPath("/journal") },
   openGraph: {
     title: "The Journal | THE WOVENNE",
     description:

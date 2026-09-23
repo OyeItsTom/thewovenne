@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getPostBySlug, getPublishedPosts } from "@/lib/storefront";
 import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { journalHref } from "@/lib/urls";
 
 export const revalidate = 60;
 
@@ -23,6 +24,10 @@ export async function generateMetadata({
   return {
     title: `${post.title} | THE WOVENNE Journal`,
     description,
+    // From the post that RESOLVED, not the requested slug. A miss returns above
+    // with no canonical at all, and its 404 takes the not-found boundary's
+    // noindex metadata instead of this.
+    alternates: { canonical: journalHref(post.slug) },
     openGraph: {
       title: post.title,
       description,

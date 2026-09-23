@@ -9,6 +9,8 @@ import { getCuratedProducts } from "@/lib/curated";
 import { getContent } from "@/lib/storefront";
 import JsonLd from "@/components/seo/JsonLd";
 import { organizationNode } from "@/lib/structuredData";
+import { cPath } from "@/lib/country";
+import type { Metadata } from "next";
 
 
 /**
@@ -29,6 +31,27 @@ import { organizationNode } from "@/lib/structuredData";
  * CuratedPersonalizer.
  */
 export const revalidate = 60;
+
+/**
+ * ONLY A CANONICAL. Title, description and the Open Graph block still come from
+ * the root layout — Next merges metadata field by field down the chain, and
+ * nothing here names them, so nothing here replaces them. Declaring an
+ * openGraph key would swap the layout's out wholesale (see lib/seo), which is
+ * exactly the trap this stays clear of.
+ *
+ * WHY THE HOME PAGE NEEDS ONE AT ALL. It had none, and self-canonicalising was
+ * nearly harmless: "/" permanently redirects here, so there was no second
+ * address serving this page. Query strings are the gap. Every link out of an
+ * Instagram post or a marketing email arrives as /in?utm_source=..., each one a
+ * distinct URL returning 200 with identical content and, until now, pointing at
+ * itself. This consolidates them onto the plain path — the same reason
+ * /in/shop names its unfiltered self rather than each filter combination.
+ *
+ * Through cPath, so it says /in rather than a bare "/" that would only 308.
+ */
+export const metadata: Metadata = {
+  alternates: { canonical: cPath("/") },
+};
 
 export default async function Home() {
   // `null` and `false`: build the guest set. No session is read here, because
