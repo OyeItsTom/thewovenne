@@ -225,10 +225,37 @@ check("name", org.name, "THE WOVENNE");
 check("url is the site root, not a market inside it", org.url, "https://www.thewovenne.com/");
 check("SITE_URL constant agrees", SITE_URL, "https://www.thewovenne.com/");
 check("logo is absolute and public", org.logo, "https://www.thewovenne.com/logo_illustrated.png");
+check("email is the customer address", org.email, "hello@thewovenne.com");
+check("telephone", org.telephone, "+91 7736749305");
+check("address is the confirmed trading address", org.address, {
+  "@type": "PostalAddress",
+  streetAddress: "Anns Building",
+  addressLocality: "Kidangara",
+  addressRegion: "Kerala",
+  postalCode: "686102",
+  addressCountry: "IN",
+});
 const orgJson = JSON.stringify(org);
-for (const forbidden of ["email", "telephone", "address", "sameAs", "admin@thewovenne.com", "hello@thewovenne.com"]) {
-  ok(`no ${forbidden} until the business facts are reconciled`, !orgJson.includes(forbidden));
-}
+ok("admin@ never reaches the storefront — it is the operator's own login",
+  !orgJson.includes("admin@thewovenne.com"));
+ok("no sameAs: the Instagram link is admin-editable content, not a fixed fact",
+  !orgJson.includes("sameAs"));
+
+/*
+ * MERCHANT POLICY IS THE ORGANISATION'S, NOT THE PRODUCT'S. Google takes
+ * hasMerchantReturnPolicy and hasShippingService at organisation level, where
+ * one statement covers the whole catalogue. Repeating them on every Product
+ * would restate the same policy 33 times per crawl, and — worse — create a
+ * second place for it to be true, which is how a shipping rule ends up saying
+ * one thing on the shop and another in the markup.
+ */
+const productJson = JSON.stringify(productNode({ ...base, rating: REVIEWED }));
+ok("a Product carries no return policy of its own",
+  !productJson.includes("hasMerchantReturnPolicy"));
+ok("a Product carries no shipping service of its own",
+  !productJson.includes("hasShippingService"));
+ok("nor any postal address or contact details",
+  !productJson.includes("PostalAddress") && !productJson.includes("telephone"));
 
 console.log("\n=== JSON SAFETY ===");
 

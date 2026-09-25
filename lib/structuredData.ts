@@ -49,6 +49,47 @@ export const SITE_URL = `${PRODUCTION_ORIGIN}/`;
  */
 export const LOGO_URL = customerUrl("/logo_illustrated.png");
 
+/**
+ * The business facts, confirmed by the owner and published on the site.
+ *
+ * EVERY ONE OF THESE IS ALSO VISIBLE TO A CUSTOMER — on the contact page, the
+ * shipping page or the returns page. That is the test any value here has to
+ * pass: structured data restates what the site says, and may not be the only
+ * place a fact exists.
+ *
+ * hello@, NOT admin@. The site published both for a while — the footer's
+ * mailto and clause 18 of the Terms disagreed. admin@ is the operator's own
+ * login (migration 0008 promotes exactly that address), so it was never a
+ * customer address; it is internal, and it stays internal.
+ */
+export const PUBLIC_EMAIL = "hello@thewovenne.com";
+export const PUBLIC_PHONE = "+91 7736749305";
+
+/** The registered trading address, as printed on the contact page. */
+export const POSTAL_ADDRESS = {
+  "@type": "PostalAddress",
+  streetAddress: "Anns Building",
+  addressLocality: "Kidangara",
+  addressRegion: "Kerala",
+  postalCode: "686102",
+  addressCountry: "IN",
+} as const;
+
+/** The one market that can be bought from today. */
+export const SHIPPING_COUNTRY = "IN";
+/** Below this order value, delivery is charged. At or above it, it is free. */
+export const FREE_SHIPPING_THRESHOLD_INR = 3000;
+/**
+ * The rest-of-India rate below the threshold, and Kerala's.
+ *
+ * Exported for the tests that hold the visible policy and the till together.
+ * NEITHER is emitted as structured data — see shippingServiceNode for why
+ * India's regional split cannot be stated to Google without contradicting one
+ * group of customers or the other.
+ */
+export const STANDARD_SHIPPING_INR = 129;
+export const KERALA_SHIPPING_INR = 99;
+
 export type Availability =
   | "https://schema.org/InStock"
   | "https://schema.org/OutOfStock";
@@ -178,25 +219,114 @@ export function breadcrumbNode(crumbs: Crumb[]) {
 }
 
 /**
+ * What happens to a parcel, as schema can HONESTLY express it — which is less
+ * than the policy says, and deliberately so.
+ *
+ * ── THE POLICY ──
+ *
+ *   below ₹3,000   ₹99 within Kerala, ₹129 elsewhere in India
+ *   ₹3,000 and up  free, anywhere in India
+ *
+ * ── WHY ONLY THE SECOND LINE IS HERE ──
+ *
+ * Google resolves a shipping destination through DefinedRegion, which narrows
+ * below a country by addressRegion or postalCode — and both are limited to a
+ * handful of countries. addressRegion is supported for the US, Australia and
+ * Japan; postalCode for Australia, Canada and the US. India is on neither list,
+ * and postalCodePrefix is not a property Google reads at all.
+ *
+ * So "₹99 in Kerala" has no faithful encoding. The three ways to force it are
+ * all worse than silence:
+ *
+ *   ₹129 nationwide — true for most of India, and ₹30 more than a Kerala
+ *                     customer is charged. Over-quoting is the safer direction,
+ *                     but it still publishes a number the checkout contradicts.
+ *   ₹99 nationwide  — under-quotes almost every order. A customer told ₹99 and
+ *                     charged ₹129 is the failure this whole file exists to
+ *                     prevent.
+ *   invented region — markup Google does not read, describing a boundary it
+ *                     cannot resolve.
+ *
+ * The free tier has none of that trouble: at ₹3,000 and above delivery is free
+ * everywhere in India, with no regional distinction to lose. It is stated here
+ * because it is true for every order, everywhere, without qualification.
+ *
+ * Below the threshold, NOTHING is claimed. The shipping page carries the real
+ * rates and the checkout charges them; an absent rate sends a reader to the
+ * page, while a wrong one sends them to the wrong number.
+ *
+ * NO handlingTime OR transitTime either: the policy is written in BUSINESS
+ * days, and ServicePeriod expresses that as a day count plus the businessDays
+ * it counts in. Which days those are for Wovenne is not a confirmed fact, and a
+ * bare day count reads as calendar days — promising faster delivery than the
+ * page does.
+ */
+function shippingServiceNode() {
+  return {
+    "@type": "ShippingService",
+    name: "Free delivery within India on orders of ₹3,000 or more",
+    shippingConditions: [
+      {
+        "@type": "ShippingConditions",
+        shippingDestination: [
+          { "@type": "DefinedRegion", addressCountry: SHIPPING_COUNTRY },
+        ],
+        orderValue: {
+          "@type": "MonetaryAmount",
+          minValue: FREE_SHIPPING_THRESHOLD_INR,
+          currency: "INR",
+        },
+        shippingRate: { "@type": "MonetaryAmount", value: 0, currency: "INR" },
+      },
+    ],
+  };
+}
+
+/**
+ * The return policy, in the only three categories Google accepts.
+ *
+ * MerchantReturnNotPermitted, because the shop does not take returns for
+ * change of mind — and that category needs only applicableCountry. It must NOT
+ * become MerchantReturnFiniteReturnWindow with 7 days: the seven days in the
+ * policy are the window for REPORTING a damaged, incorrect or wrongly-sized
+ * item, not a window in which anything may be sent back for any reason.
+ * Encoding it as a return window would advertise a change-of-mind policy the
+ * shop does not offer, to customers who would then be refused.
+ *
+ * The remedies that do exist for damaged, defective or incorrect goods are on
+ * the returns page, which merchantReturnLink points at. Google's taxonomy has
+ * no category for "no returns except faulty", and the honest choice between
+ * what it does offer is this one.
+ */
+function returnPolicyNode() {
+  return {
+    "@type": "MerchantReturnPolicy",
+    applicableCountry: SHIPPING_COUNTRY,
+    returnPolicyCategory: "https://schema.org/MerchantReturnNotPermitted",
+    // THE SLUG THE PAGE ACTUALLY PUBLISHED UNDER. The admin titled it
+    // "Returns & Exchanges" and the CMS slugged it from the title, so the live
+    // URL is /in/returns-exchanges — not the /in/returns this was first written
+    // against. A merchantReturnLink is a promise that a policy is readable at
+    // that address; pointing it at a 404 would be worse than omitting it.
+    merchantReturnLink: customerUrl(cPath("/returns-exchanges")),
+  };
+}
+
+/**
  * The business.
  *
  * OnlineStore, not Organization: Google names it as the subtype to use for an
  * ecommerce site, and it is the more specific truth.
  *
- * NAME, URL AND LOGO ONLY, and the omissions are the considered part.
- * Google lists no required properties and explicitly prefers a few accurate
- * ones over many. What is left out:
+ * NOW CARRYING CONTACT DETAILS, which it could not before. The site used to
+ * publish two email addresses and this file refused to pick between them —
+ * correctly, because that was a business decision and not a rendering one. It
+ * has been settled: hello@ is the customer address, admin@ is the operator's
+ * own login and stays off the storefront.
  *
- *   email      — the site currently publishes TWO. The footer says
- *                hello@thewovenne.com; clause 18 of the Terms says
- *                admin@thewovenne.com. Picking one here would make this file
- *                the tie-breaker on a business fact, which is not its job.
- *   telephone  — a WhatsApp number is published, but whether it is THE business
- *                telephone is a decision, not a lookup.
- *   address    — none is published anywhere. There is nothing to read.
- *   sameAs     — the Instagram profile is real, but it is admin-editable
- *                content, and it belongs with the contact reconciliation rather
- *                than ahead of it.
+ * Still absent: sameAs. The Instagram profile is real, but it is admin-editable
+ * content rather than a fixed fact, and a link that can be changed in a text
+ * field is not something to assert as this business's identity from here.
  *
  * `url` is the root, which is what Google uses to identify the entity — not
  * /in, which is one market inside the site.
@@ -208,5 +338,10 @@ export function organizationNode() {
     name: BRAND_NAME,
     url: SITE_URL,
     logo: LOGO_URL,
+    email: PUBLIC_EMAIL,
+    telephone: PUBLIC_PHONE,
+    address: POSTAL_ADDRESS,
+    hasMerchantReturnPolicy: returnPolicyNode(),
+    hasShippingService: shippingServiceNode(),
   };
 }
