@@ -1992,3 +1992,71 @@ Also covered: concurrent stock updates during publish; sized products; a
 deliberate stock increase made in a draft (must it win, and how is that
 expressed); a publish that fails part-way (stock unchanged); and the stock and
 order history (`stock_movements`, manual stock log) preserved and consistent.
+
+## SEO-5E: content truthfulness — closed 26 September 2026
+
+**Code.** PR #154 (`328b884`) and PR #155 (`27b3d6d`, a lookbook-matching fix to
+the draft script) are merged. Production deployment `6677573973` serves
+`27b3d6d` exactly.
+
+**CMS.** The owner ran `scripts/seo-5e-drafts.mjs` (dry run, then `--apply`) and
+published seven drafts individually: home_hero, why_linen, lookbook, shipping,
+footer, About and Privacy Policy.
+
+**Verified live on 26 September, from fresh responses.** A cached page from
+before publication was served stale once and then regenerated; that was
+revalidation, not a failed publish.
+
+- Homepage Why Us: the title and all three approved cards match exactly, with
+  icons Hand, Shirt and Heart. No flax, "Kind to your skin" or "Made to last"
+  copy remains. The only "linen" is card 2's "becoming a key material".
+- Footer: "Chosen piece by piece. A considered selection of clothing, sarees
+  and jewellery, shipped across India." The old strapline is gone.
+- Lookbook: links to `/in/women/sarees/parrot-green-mul-cotton-saree` (200, no
+  redirect) with alt "Parrot green handloom mul cotton saree". Same image, and
+  the homepage's 13 images are unchanged.
+- About: the meta, `og:description`, intro and opening paragraph match exactly.
+  Exactly 2 of the 10 blocks changed. There is no Kerala-artisan or "direct
+  from the loom" claim.
+- Privacy Policy: dedicated meta and `og:description`, no "Last Updated"
+  excerpt. The body is present.
+- shipping.note: the approved text, as embedded in `/in/checkout`.
+- Code fixes: search examples (saree, mul cotton, zari), the journal index, the
+  checkout-success copy and the `og:title` fallback "THE WOVENNE | Chosen piece
+  by piece." are all live. Ask Wovenne is still off. The invoice and
+  credit-note PDFs are unchanged.
+- SEO: canonicals, indexing (`noindex, follow` only on empty subcategories),
+  Open Graph and Product JSON-LD (material from stored fabric only, none on
+  jewellery, prices and availability unchanged) show no regression. The
+  sitemap is valid with 56 URLs.
+
+**Published by the owner, not independently verifiable.** The home_hero text
+fields are neither rendered nor embedded.
+
+**Confirmed by the owner.** Admin → Review & Publish showed an empty pending
+queue on 26 September 2026, after all seven drafts were published.
+
+**Tests.** These passed offline on the merged code: content-truthfulness
+(121/121 after #155), footer, seo-metadata, seo-descriptions, seo-canonical,
+seo-indexing, seo-structured-data, merchant-policy, shipping-policy,
+checkout-pricing, checkout-pending, delivery-estimator and ai-daily-spend, plus
+tsc, lint and `next build`. Known baseline failures: ai-eval and ai-grounding,
+one stale migration-0058 guard each. **Not run:** chat-tools, chat-loop,
+order-tool, ai-budget and ai-observability, because they need the production
+database, and ai-eval-live, because it makes real model calls.
+
+**Still open, not part of SEO-5E.**
+
+- The product-draft stock defect (see "Deferred: a product draft can overwrite
+  newer stock") and, behind it, the four product whitespace fixes.
+- Legacy `/in/product/*` 404s: `resolveOldPath` receives the `/in`-prefixed
+  path while `product_url_history` stores unprefixed paths. Old category-path
+  redirects also emit an unprefixed hop (for example `/in/women/sarees/mul-cotton`
+  → `/women/sarees/…` → `/in/women/sarees/…`). This is the next technical SEO
+  PR.
+- The "More From the Loom" related-products heading, which is wrong for
+  jewellery.
+- The journal eyebrow "From the loom".
+- The admin label "Why linen" for the Why Us block.
+- The ai-eval and ai-grounding stale migration-0058 guards (a known baseline
+  failure).
