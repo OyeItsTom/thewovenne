@@ -128,7 +128,7 @@ $$;
 create or replace function public.guard_live_stock()
 returns trigger
 language plpgsql
-set search_path = public
+set search_path = public, pg_temp
 as $fn$
 begin
   if old.state = 'published'
@@ -158,7 +158,7 @@ create or replace function public.reserve_stock(p_items jsonb, p_order_id uuid d
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $fn$
 declare
   line      record;
@@ -277,7 +277,7 @@ create or replace function public.release_stock(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $fn$
 declare
   item       jsonb;
@@ -357,7 +357,7 @@ create or replace function public.cancel_order(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $fn$
 declare
   target      orders%rowtype;
@@ -455,7 +455,7 @@ create or replace function public.set_product_stock(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $fn$
 declare
   live_id  uuid;
@@ -584,7 +584,7 @@ create or replace function public.save_product_sizes(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $fn$
 declare
   item      jsonb;
@@ -712,7 +712,7 @@ create or replace function public.publish_one(p_kind text, p_id uuid, p_key text
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 declare
   d        record;
@@ -829,7 +829,7 @@ begin
 end;
 $$;
 
-revoke execute on function public.publish_one(text, uuid, text) from public;
+revoke execute on function public.publish_one(text, uuid, text) from public, anon;
 grant execute on function public.publish_one(text, uuid, text) to authenticated;
 
 -- ══ 10. publish_all: the same, for every product at once ══
@@ -841,7 +841,7 @@ create or replace function public.publish_all()
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 declare
   problem      text;
@@ -959,7 +959,7 @@ begin
 end;
 $$;
 
-revoke execute on function public.publish_all() from public;
+revoke execute on function public.publish_all() from public, anon;
 grant execute on function public.publish_all() to authenticated;
 
 -- ── Verify ────────────────────────────────────
