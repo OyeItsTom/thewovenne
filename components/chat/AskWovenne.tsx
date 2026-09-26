@@ -14,7 +14,7 @@ interface Msg {
 const GREETING: Msg = {
   role: "assistant",
   content:
-    "Namaskaram! I'm Ask Wovenne. I can help with fabric, sizing, care, shipping to the UK, or tracking an order. Ask me anything — in English or Malayalam.",
+    "Namaskaram! I'm Ask Wovenne. I can help with fabric, sizing, care, shipping within India, or tracking an order. Ask me anything — in English or Malayalam.",
 };
 
 export default function AskWovenne() {

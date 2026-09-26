@@ -3,7 +3,7 @@ import { Cormorant_Garamond, DM_Sans, Tiro_Devanagari_Hindi } from "next/font/go
 import "./globals.css";
 import { openGraph } from "@/lib/seo";
 
-const SITE_TITLE = "THE WOVENNE | Woven in India. Worn for life.";
+const SITE_TITLE = "THE WOVENNE | Chosen piece by piece.";
 /*
  * NO "WOVEN IN INDIA" HERE, and the reason is grammar rather than geography.
  *
@@ -51,10 +51,11 @@ const script = Tiro_Devanagari_Hindi({
  * sells into India and nowhere else. Kerala is not the answer either —
  * documented provenance is mixed and most rows store no origin at all.
  *
- * THE TITLE STILL SAYS "Woven in India", untouched. It is the brand's own
- * strapline rather than a description of a catalogue, it names no product
- * alongside it, and rewording a strapline is a brand decision and not a
- * metadata correction. Flagged for the owner rather than changed here.
+ * THE STRAPLINE IS "Chosen piece by piece." — the owner's decision, replacing
+ * "Woven in India. Worn for life.", which said every piece was woven on a site
+ * that also sells jewellery. The new one is true of everything in the shop:
+ * each piece is reviewed and chosen individually. It makes no claim of origin,
+ * material or scarcity, and should not be edited into one.
  *
  * The openGraph block carries a TITLE AND DESCRIPTION now. Next 14.2.5 does not
  * fill those from the page's own — see lib/seo — so until this line the site

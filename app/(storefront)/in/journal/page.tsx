@@ -10,15 +10,16 @@ export const revalidate = 60;
 
 const TITLE = "The Journal | THE WOVENNE";
 /*
- * UNCHANGED WORDING, deliberately. This describes the journal's articles, not
- * the catalogue, and the weavers those articles are about are the ones the
- * page's own standfirst names two lines below. Rewording the tag while leaving
- * the visible copy alone would make the two disagree, and editorial copy was
- * explicitly out of this change's scope. The index still says "website"; a
- * POST says "article" — see the [slug] route.
+ * NO "OUR KERALA WEAVERS". The published articles were read against that
+ * phrase and none of them supports it: the shop does not document a weaving
+ * relationship of its own, so claiming one is a provenance claim with nothing
+ * behind it. The tag and the visible standfirst below changed together, so the
+ * two cannot disagree. Individual articles that are genuinely about linen or a
+ * craft keep their own wording — this is the index, not the editorial. The
+ * index still says "website"; a POST says "article" — see the [slug] route.
  */
 const DESCRIPTION =
-  "Stories from our Kerala weavers, care guides, and notes from the loom.";
+  "Notes on fabric, craft, clothing care and the pieces we choose, from THE WOVENNE.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -43,8 +44,8 @@ export default async function JournalPage() {
             The Journal
           </h1>
           <p className="mx-auto mt-4 max-w-prose text-base leading-relaxed text-ink/70">
-            Stories from our weavers, care guides, and notes on the journey from
-            the Kerala loom to your home.
+            Notes on fabric and craft, how to care for what you own, and the
+            pieces we choose.
           </p>
         </header>
 

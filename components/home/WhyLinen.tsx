@@ -1,12 +1,14 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
-import { Hand, Heart, Leaf } from "lucide-react";
+import { Hand, Heart, Shirt } from "lucide-react";
 import { fadeUp, staggerContainer } from "@/lib/motion";
 import { DEFAULT_CONTENT } from "@/lib/content";
 import type { WhyLinenContent } from "@/lib/types";
 
-const ICONS = [Heart, Leaf, Hand];
+// In card order: chosen by hand, the cloth itself, worn again. No Leaf — an
+// environmental symbol implies a sustainability claim nothing here evidences.
+const ICONS = [Hand, Shirt, Heart];
 
 export default function WhyLinen({ content }: { content?: WhyLinenContent }) {
   const c = content ?? DEFAULT_CONTENT.why_linen;

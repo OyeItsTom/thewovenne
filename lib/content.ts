@@ -9,19 +9,34 @@ import { ANON_CTX, type ReadCtx } from "./readCtx";
  */
 export const DEFAULT_CONTENT: SiteContentMap = {
   home_hero: {
-    eyebrow: "Woven in India · Worn for life",
+    eyebrow: "Chosen piece by piece.",
     heading: "THE WOVENNE",
-    subheading:
-      "Authentic, handcrafted linen — sent direct from the loom houses of Kerala to your door. From the loom, to you. Nothing in between.",
+    subheading: "A considered selection of clothing, sarees and jewellery.",
     cta_label: "Explore the Collection",
     cta_href: "/in/shop",
   },
+  /*
+   * The "Why Us" section. The key and component keep their old linen names on
+   * purpose — renaming a site_content key orphans the stored row — but nothing
+   * in the copy may say the shop sells linen today. Card 2 names linen only as
+   * where the collection is going; product metadata and schema read the
+   * product's own fabric, never this.
+   */
   why_linen: {
-    title: "Why linen",
+    title: "Why Us",
     cards: [
-      { title: "Kind to your skin", text: "Naturally breathable and hypoallergenic — linen keeps you cool and comfortable all day." },
-      { title: "Kinder to the earth", text: "Flax needs little water and no irrigation. Woven by hand, it treads lightly." },
-      { title: "Made to last", text: "Linen softens with every wash and outlives fast fashion by decades." },
+      {
+        title: "Chosen piece by piece",
+        text: "Every product is reviewed and chosen before it reaches the shop. Many designs are carried in very small quantities, often just one or two pieces.",
+      },
+      {
+        title: "Natural fabrics first",
+        text: "Our clothing range is centred on natural fibres. Today that means cotton, including handloom mul cotton and tissue cotton, with linen becoming a key material as the collection grows.",
+      },
+      {
+        title: "Chosen to be worn again",
+        text: "We look for pieces with the fabric, feel and design to earn repeat wear — for an occasion, an ordinary day, or somewhere in between.",
+      },
     ],
   },
   seasonal_edit: {
@@ -40,12 +55,12 @@ export const DEFAULT_CONTENT: SiteContentMap = {
   // six blank sections in the editor invites filling them for the sake of it.
   lookbook: { sections: [] },
   brand_story: {
-    title: "From the loom, to you",
-    body: "THE WOVENNE works directly with handloom artisans across Kerala. No middleman, no compromise — just honest cloth, woven the way it has been for generations, sent straight to you.",
+    title: "Chosen piece by piece",
+    body: "THE WOVENNE is based in Kerala, India and built around a considered approach to what we stock. We focus on clothing and sarees in natural fabrics, alongside a small selected jewellery range.",
   },
   footer: {
     brand_description:
-      "Woven in India. Worn for life. Authentic handloom linen, sent direct from the source to your door in the UK.",
+      "Chosen piece by piece. A considered selection of clothing, sarees and jewellery, shipped across India.",
     brand_description_visible: true,
     /*
      * ONE DEFAULT OVERRIDE, AND IT IS A CASING FIX.

@@ -54,7 +54,7 @@ export async function gatherInsightsContext(): Promise<string> {
   ].join("\n");
 }
 
-export const INSIGHTS_SYSTEM = `You are the analytics assistant for THE WOVENNE, a handloom linen shop in Kerala, India. You are speaking to one of the three owners inside their admin panel.
+export const INSIGHTS_SYSTEM = `You are the analytics assistant for THE WOVENNE, a curated clothing, saree and jewellery shop based in Kerala, India. You are speaking to one of the owners inside their admin panel.
 
 Answer only from the STORE DATA block provided. It is the complete set of figures you have.
 
