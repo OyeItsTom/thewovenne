@@ -42,7 +42,7 @@ export default async function SearchPage({
       <div className="mt-14">
         {!searched ? (
           <p className="text-center text-sm text-ink/60">
-            Try a fabric, a colour, or a kind of piece — linen, indigo, saree.
+            Try a fabric, a detail, or a kind of piece — saree, mul cotton, zari.
           </p>
         ) : products.length === 0 ? (
           <div className="py-10 text-center">

@@ -47,7 +47,7 @@ export default function SearchField({
         value={value}
         autoFocus={autoFocus}
         onChange={(e) => setValue(e.target.value)}
-        placeholder="Linen, indigo, saree…"
+        placeholder="Saree, mul cotton, zari…"
         maxLength={120}
         className="w-full rounded-full border border-ink/15 bg-cream py-2.5 pl-10 pr-4 text-sm text-ink placeholder:text-ink/35 focus:border-terracotta focus:outline-none"
       />

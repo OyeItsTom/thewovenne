@@ -251,7 +251,7 @@ check("everything off leaves no rows and no empty column", rows(
 ).length, 0);
 
 console.log("\n=== the shipped defaults are the footer that exists today ===");
-check("the description is unchanged wording", DEFAULT_CONTENT.footer.brand_description.startsWith("Woven in India. Worn for life."), true);
+check("the description leads with the strapline", DEFAULT_CONTENT.footer.brand_description.startsWith("Chosen piece by piece."), true);
 check("the description is shown", DEFAULT_CONTENT.footer.brand_description_visible, true);
 check("the account matches the address the footer already linked", DEFAULT_CONTENT.footer.instagram.username, "thewovenne");
 check("the address matches the one already linked", DEFAULT_CONTENT.footer.instagram.url, "https://www.instagram.com/thewovenne");

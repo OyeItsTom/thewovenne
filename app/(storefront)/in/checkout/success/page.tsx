@@ -57,8 +57,7 @@ export default function CheckoutSuccessPage() {
           className="mt-4 max-w-md text-base leading-relaxed text-ink/70"
         >
           Your order has been received. A confirmation will be on its way
-          shortly — and your linen is one step closer to its journey from the
-          loom to your door.
+          shortly. Your order is one step closer to its journey to your door.
         </motion.p>
         <motion.div
           variants={item}
