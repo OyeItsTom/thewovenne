@@ -24,12 +24,21 @@ import { sizeChanges, type LoadedSize } from "../lib/inventory";
 
 const HISTORY_AUDIT = fs.readFileSync("scripts/stock-history-audit.sql", "utf8");
 
-/** scripts/stock-history-audit.sql, exactly as the owner would run it: read only. */
-async function historyAudit(c: Client) {
+/**
+ * scripts/stock-history-audit.sql, exactly as the owner would run it, in a
+ * read-only transaction. `confirmedStart` fills in confirmed_log_start, as the
+ * owner would if they established when 0038 was applied; without it the file
+ * runs unmodified.
+ */
+async function historyAudit(c: Client, confirmedStart?: string) {
+  const sql = confirmedStart
+    ? HISTORY_AUDIT.replace("select null::timestamptz as confirmed_log_start", `select timestamptz '${confirmedStart}' as confirmed_log_start`)
+    : HISTORY_AUDIT;
+  if (confirmedStart && sql === HISTORY_AUDIT) throw new Error("confirmed_log_start not found in the audit file");
   await asRoot(c);
   await c.query("begin read only");
   try {
-    return (await c.query(HISTORY_AUDIT)).rows as {
+    return (await c.query(sql)).rows as {
       section: string; slug: string; size_label: string | null; finding: string; confidence: string; changed_by: number;
     }[];
   } finally {
@@ -94,9 +103,16 @@ async function main() {
       await c.query("select public.save_product_sizes($1, $2::jsonb)", [z.productId, JSON.stringify([{ label: "M", stock_quantity: 1 }])]);
       check("before 0060: the old form put the sold size back", (await sizesOf(c, z.productId)).M, 1);
 
-      const audit = await historyAudit(c);
+      // As shipped, the audit does not assume when the log began: this draft was
+      // opened before the first movement ever logged, so it is not vouched for.
+      const asShipped = (await historyAudit(c)).filter((r) => r.slug === p.slug && r.finding !== "first publication");
+      check("history audit, default: a draft opened before the first logged movement is only 'inconclusive'",
+        asShipped.map((r) => [r.finding, r.confidence]), [["restored moved stock", "inconclusive"]]);
+
+      // Once the owner confirms the log covers it, the same row is a candidate.
+      const audit = await historyAudit(c, "2000-01-01 00:00:00+00");
       const row = (slug: string) => audit.filter((r) => r.slug === slug && r.finding !== "first publication");
-      check("history audit: the resurrected piece is a candidate 'restored moved stock', by +1",
+      check("history audit, log start confirmed: the resurrected piece is a candidate 'restored moved stock', by +1",
         row(p.slug).map((r) => [r.section, r.finding, r.confidence, r.changed_by]),
         [["publication", "restored moved stock", "candidate", 1]]);
       check("history audit: a deliberate old-style draft edit reads as intentional",
@@ -298,6 +314,18 @@ async function main() {
       await asRoot(c);
     }
 
+    // ── The audit file is read-only by construction ──
+    console.log("\n=== the history audit is a single read-only statement ===");
+    {
+      // Comments and string literals removed: `a.action = 'update'` names an
+      // audit-log value, it is not a statement.
+      const code = HISTORY_AUDIT.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n")
+        .replace(/'(?:[^']|'')*'/g, "''").toLowerCase();
+      check("no write, DDL, grant, transaction or side-effecting call outside comments",
+        code.match(/\b(insert|update|delete|merge|truncate|create|alter|drop|grant|revoke|copy|call|do|perform|nextval|setval|set_config|pg_advisory\w*|begin|commit|rollback|vacuum|refresh)\b/g), null);
+      check("exactly one statement", code.split(";").filter((x) => x.trim()).length, 1);
+    }
+
     // ── Failure and repetition ──
     console.log("\n=== failed publication rolls back; repeated publication is refused ===");
     {
@@ -455,6 +483,38 @@ async function main() {
       await asRoot(c);
     }
 
+    // ── The admin as it runs on main today, against 0060 ──
+    // Exactly the writes main's admin code makes (ProductModal, ProductTable's
+    // StockEditor, the CSV import, sizes, publish), made by an old browser tab
+    // after the migration and before the new app reaches it. None may move the
+    // shelf; the ones that would have are refused out loud.
+    console.log("\n=== an admin tab still running main's code, against 0060 ===");
+    {
+      const p = await liveProduct(c, admin, { stock: 2 });
+      const z = await liveProduct(c, admin, { sizes: [{ label: "M", stock_quantity: 2 }] });
+      const o = await paidOrder(c, [{ id: p.productId, quantity: 1 }, { id: z.productId, size: "M", quantity: 1 }]);
+      await sell(c, o, [{ id: p.productId, quantity: 1 }, { id: z.productId, size: "M", quantity: 1 }]);
+      await asAdmin(c, admin);
+      // The page was loaded before the sale: it shows 2 and M = 2.
+      const draft = (await c.query("select public.ensure_product_draft($1) id", [p.productId])).rows[0].id;
+      check("old ProductModal, description saved with the page's stale stock (2): refused out loud, nothing saved",
+        await failure(() => c.query("update product_versions set description = 'new words', stock_quantity = 2 where id = $1", [draft])), "STOCK_IS_LIVE");
+      check("old ProductModal, description saved with the draft's own figure: accepted",
+        await failure(() => c.query("update product_versions set description = 'new words', stock_quantity = (select stock_quantity from product_versions where id = $1) where id = $1", [draft])), "");
+      check("old StockEditor (writes the draft): refused out loud",
+        await failure(() => c.query("update product_versions set stock_quantity = 5 where id = $1", [draft])), "STOCK_IS_LIVE");
+      check("old CSV import update (writes stock into the draft): refused out loud",
+        await failure(() => c.query("update product_versions set price_inr = 2600, stock_quantity = 9 where id = $1", [draft])), "STOCK_IS_LIVE");
+      check("old sizes save (every loaded count, no expected): refused out loud",
+        await failure(() => c.query("select public.save_product_sizes($1, $2::jsonb)", [z.productId, JSON.stringify([{ label: "M", stock_quantity: 2 }])])), "EXPECTED_REQUIRED:M");
+      check("old sizes save for an unsized product (empty list): a harmless no-op",
+        await failure(() => c.query("select public.save_product_sizes($1, '[]'::jsonb)", [p.productId])), "");
+      check("old Publish button (the same RPC): publishes, carrying the live stock",
+        await failure(() => c.query("select public.publish_one('product', $1)", [p.productId])), "");
+      check("…and after all of that the shelf is exactly what the sale left", [(await liveRow(c, p.productId))!.stock_quantity, (await sizesOf(c, z.productId)).M], [1, 1]);
+      await asRoot(c);
+    }
+
     // ── Settlement guarantees from 0058 still hold ──
     console.log("\n=== 0058's settlement guarantees are intact ===");
     {
@@ -508,7 +568,10 @@ async function main() {
 
     console.log("\n=== the history audit finds nothing to question after 0060 ===");
     {
-      const audit = await historyAudit(c);
+      const asShipped = await historyAudit(c);
+      check("as shipped: no publication is flagged restored or unexplained",
+        asShipped.filter((r) => r.section === "publication" && !["consistent", "first publication"].includes(r.finding)).map((r) => [r.slug, r.finding]), []);
+      const audit = await historyAudit(c, "2000-01-01 00:00:00+00");
       const pubs = audit.filter((r) => r.section === "publication");
       check(`every publication in this run (${pubs.length}) is conclusive: consistent or a first publication`,
         pubs.filter((r) => r.confidence !== "conclusive").map((r) => [r.slug, r.finding]), []);

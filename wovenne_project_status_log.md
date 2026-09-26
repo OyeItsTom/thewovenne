@@ -2236,3 +2236,37 @@ Review corrections are folded into 0060 (still unapplied), branch
 
 Deployment goes migration first, under an admin write freeze. The procedure is
 in the PR. **Neither step is authorised yet.**
+
+### Stage 4 — integration and readiness, 26 September 2026
+
+- **Integration.** `main` (SEO-6A, `12cac8f`) merged into the branch as
+  `9748851` with no conflicts. The PR diff is still only the stock files.
+  PR #161 (SEO-6A closure docs) was still open. Both it and this section append
+  to the end of this log, so whichever merges second must keep both sections.
+- **Migration.** 0060 now starts with `set local lock_timeout = '10s'`. If it
+  can't get its locks it fails cleanly instead of queueing checkout queries
+  behind it.
+- **History audit.** It no longer assumes the log began on 8 August, which was
+  never verified. By default the log starts at its earliest movement, so
+  anything before that reads `inconclusive`. `confirmed_log_start` is an
+  explicit owner override. Admin ids were removed from the output.
+- **Tests.**
+  - `stock-integrity`: 138. Adds a static check that the audit is one
+    read-only statement, and a section that runs `main`'s exact admin writes
+    against 0060. Every stock-moving one fails out loud, the Publish button
+    carries live stock, and the shelf never moves.
+  - `stock-security`: 81.
+  - `stock-concurrency`: 68, three more clean runs.
+  - `inventory`: 35.
+  - 62 offline suites pass on the integrated tree, including SEO-6A's
+    `seo-images` and `product-care`.
+  - TypeScript, lint and build are clean. The intermittent Tailwind "invalid
+    theme value" warning also appears on a plain `origin/main` build, so it is
+    pre-existing.
+- **Write freeze.** An operational agreement, backed by the database
+  fail-closed behaviour tested above. No app-level lock is needed. The one
+  ordering that would be unsafe is merging (deploying) before 0060 is applied.
+- **Separate work package, not in #160.** 44 older `SECURITY DEFINER`
+  functions use `search_path = public`. None uses dynamic `EXECUTE` or creates
+  temp tables, and exploiting them needs a session that can run `CREATE TEMP
+  TABLE`, which PostgREST never provides. Harden them in their own PR.

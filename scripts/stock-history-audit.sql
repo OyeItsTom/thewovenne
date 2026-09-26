@@ -64,7 +64,15 @@
 --
 -- ══ What none of it can see ══
 --
---   * Anything before stock_movements existed (0038).
+--   * Anything before stock_movements existed (0038), and — unless the owner
+--     sets confirmed_log_start — anything before its first row.
+--   * movement.created_at is its transaction's START time. A sale that began
+--     just before a publish and committed after it is counted in the draft's
+--     window, not the live one; that can only raise a false flag
+--     (unexplained / restored), never make a bad publish read consistent
+--     unless two such errors cancel exactly.
+--   * It reports admin notes and product slugs only: no order, customer or
+--     admin identifiers.
 --   * Products that changed between sized and unsized: they appear in the
 --     section matching what they are NOW.
 --   * A pre-0060 cancellation whose return matched no row still wrote a
@@ -76,17 +84,21 @@
 -- A candidate is evidence, not proof that a piece was sold twice. Whether it was
 -- is answered by the orders after it.
 
--- When the movement log began. 0038 was merged on 8 August 2026 (dac9dcc); the
--- moment it was applied was never recorded (0057's backfill has no timestamps).
--- Movements cannot predate it, so an earlier first movement moves this back.
--- If the owner knows the application time, put it here: a version opened
--- before it reads as inconclusive, because its movements were not logged.
+-- When the movement log began. NOT KNOWN: 0038 (which created
+-- stock_movements) was merged on 8 August 2026 (dac9dcc), but the moment it was
+-- applied to production was never recorded — 0057's ledger backfill has no
+-- timestamps. So by default the log is taken to start at its EARLIEST ROW,
+-- which it provably cannot predate. That is conservative: a draft opened
+-- before the first logged movement reads 'inconclusive' rather than being
+-- vouched for. If the owner establishes the real application time from other
+-- evidence, set confirmed_log_start to it; nothing else should go here.
 with params as (
-  select timestamptz '2026-08-08 00:00:00+00' as log_start
+  select null::timestamptz as confirmed_log_start
 ),
 first_movement as (
-  select least((select log_start from params),
-               coalesce((select min(created_at) from stock_movements), 'infinity'::timestamptz)) as at
+  select coalesce((select confirmed_log_start from params),
+                  (select min(created_at) from stock_movements),
+                  'infinity'::timestamptz) as at
 ),
 unsized as (
   select p.id from products p
@@ -159,7 +171,7 @@ size_overwrite as (
          true,
          c.delta,
          jsonb_build_object(
-           'correction_note', c.note, 'actor_id', c.actor_id,
+           'correction_note', c.note,
            'sales_of_that_size_in_prior_24h',
              (select coalesce(sum(-s.delta), 0) from stock_movements s
                where s.product_id = c.product_id and s.reason = 'sale'

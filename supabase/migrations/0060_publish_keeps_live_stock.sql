@@ -83,6 +83,12 @@
 --
 -- Applied with scripts/run-migration.mjs in one transaction.
 
+-- Applied in one transaction (scripts/run-migration.mjs). If a long-running
+-- transaction holds a lock this needs, give up cleanly after 10 seconds rather
+-- than queue — a DDL statement waiting in the lock queue would hold up every
+-- checkout query behind it. Rerun at a quieter moment.
+set local lock_timeout = '10s';
+
 -- ══ 0. Nothing a caller creates can stand in for a real table ══
 --
 -- A SECURITY DEFINER function runs with its owner's rights but resolves names
