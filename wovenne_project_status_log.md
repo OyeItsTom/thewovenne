@@ -2176,13 +2176,21 @@ from the session). Whether Google indexes the images is a Search Console
 question and will take time.
 
 **Still open — deliberately separate.**
+- Google Rich Results Test on representative textile and jewellery products.
+- Search Console: whether Google indexes the `/_next/image` product images
+  (owner verification; will take time).
 - **Raw Supabase originals still return `X-Robots-Tag: none`.** `/_next/image`
   is an INTERIM URL for markup; it is not an approved permanent URL for a
   Merchant Center or OpenAI product feed. SEO-6B (per-object `x-robots-tag` on
   upload, then an approved decision on existing objects; also the malformed
   `cache-control: 31536000` on masters) must precede any feed.
 - Older product PNGs are below the 1500px Merchant Center recommendation.
-- `remotePatterns` allows any `*.supabase.co` host (pre-existing).
+- A permanent product-feed image strategy (after SEO-6B).
+- Image-optimizer host-pattern hardening: `remotePatterns` allows any
+  `*.supabase.co` host (pre-existing).
+- Owner review of product-specific factual claims: the four written care notes
+  were preserved as written, not verified, and product descriptions (e.g. the
+  Floral Embroidered Kasavu saree's "handcrafted detail") are unreviewed.
 - SEO-6C: sitemap product `lastModified` from `product_versions.published_at`,
   after the stock-integrity fix merges (it rewrites the functions that set it).
 - Product-fact verification (descriptions, colour, composition, care notes) and
