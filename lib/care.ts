@@ -1,14 +1,31 @@
 /**
- * Care advice by fabric.
+ * Care advice — what a product page may say about looking after a piece.
  *
- * MOVED OUT OF THE COMPONENT so it is data rather than markup. It was declared
- * inside CareAccordion, which meant a "use client" module was the only place
- * that knew how to wash linen — nothing on the server, and nothing in a test,
- * could read it. Ask Wovenne answers care questions from the written note; this
- * table is the fallback the page shows, and both should be able to reach it.
+ * ── THE RULE (SEO-6A) ──
  *
- * The written per-product note (migration 0051) always wins over anything here.
- * See MaterialCare.
+ * A product page shows the care note somebody wrote for THIS piece (migration
+ * 0051), and nothing else. No note, no Material & Care section.
+ *
+ * There used to be two fallbacks. Every product without a note got a generic
+ * list — hand wash, line dry, iron low, and a line calling every piece
+ * handmade — because none of the live fabric labels ("Cotton", "Handloom 120
+ * count mul cotton", "Tissue Cotton") is a key in the table below. That put
+ * ironing instructions on a gold-plated copper necklace and a craft claim on
+ * pieces nobody had verified. It was never checked for any product, and it is
+ * gone rather than reworded.
+ *
+ * The second fallback was this table, by fabric label. It is NOT consulted.
+ * A label says what a piece is called, not how it tolerates water or heat:
+ * zari, tissue and mul cotton do not all take the same wash, and several lines
+ * below are claims (natural dye, pre-shrunk, softening) nobody has verified for
+ * any product. Care advice from a label is a decision for the owner, piece by
+ * piece, and it belongs in the written note.
+ */
+
+/**
+ * DORMANT. Kept as reference text only; careFor() does not read it and nothing
+ * else imports it. scripts/product-care.test.ts fails if an exact label match
+ * ever starts producing care again, so re-activating it has to be deliberate.
  */
 export const CARE_BY_FABRIC: Record<string, string[]> = {
   "Pure Linen": [
@@ -43,9 +60,15 @@ export const CARE_BY_FABRIC: Record<string, string[]> = {
   ],
 };
 
-export const DEFAULT_CARE = [
-  "Hand wash or gentle machine cycle in cold water",
-  "Line dry in shade, away from direct sunlight",
-  "Iron on a low to medium setting",
-  "Handcrafted — slight variations are natural, not flaws",
-];
+/** The care a product page shows — a written note — or null. */
+export type CareGuidance = { source: "written"; text: string };
+
+/**
+ * The written note, trimmed, or null when there is none. Whitespace is not a
+ * note. The same rule for every kind of product: jewellery, garments and
+ * anything filed nowhere are all told only what was written for them.
+ */
+export function careFor({ careNote }: { careNote: string | null }): CareGuidance | null {
+  const written = careNote?.trim();
+  return written ? { source: "written", text: written } : null;
+}

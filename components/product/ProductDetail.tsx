@@ -22,6 +22,7 @@ import type { ProductSize } from "@/lib/sizes";
 import { stockNote, stockState } from "@/lib/stock";
 import JsonLd from "@/components/seo/JsonLd";
 import { productImageUrl } from "@/lib/seo";
+import { careFor } from "@/lib/care";
 import { breadcrumbNode, productNode } from "@/lib/structuredData";
 import { productHref } from "@/lib/urls";
 
@@ -76,6 +77,10 @@ export default async function ProductDetail({
     getBrandKnowledge({ productId: product.id }),
     getDeliveryConfig(),
   ]);
+
+  // Only a note written for this piece. Null means nothing approved to say, and
+  // the Material & Care section is not rendered. See lib/care.
+  const care = careFor({ careNote: knowledge?.care ?? null });
 
   // DECIDED ON THE SERVER. Both switches are read here, so "off" means the
   // component is never rendered and its markup never reaches the browser —
@@ -267,9 +272,9 @@ export default async function ProductDetail({
 
       <BrandKnowledgePanel knowledge={knowledge} productName={product.name} />
 
-      {/* The written note wins over the fabric table — a piece somebody has
-          written care instructions for should not be described by a lookup. */}
-      <MaterialCare fabric={product.fabric} careNote={knowledge?.care ?? null} />
+      {/* Only care somebody wrote for this piece — never a lookup by fabric
+          label, never generic advice. No note, no section. See lib/care. */}
+      {care && <MaterialCare fabric={product.fabric} care={care} />}
 
       <ProductReviews productId={product.id} reviews={reviews} rating={rating} />
 
@@ -279,7 +284,7 @@ export default async function ProductDetail({
         <div className="mt-24 border-t border-ink/10 pt-16">
           <div className="text-center">
             <span className="font-script text-2xl text-terracotta">
-              More From the Loom
+              More to Discover
             </span>
             <h2 className="mt-2 font-heading text-3xl text-ink sm:text-4xl">
               You May Also Like
