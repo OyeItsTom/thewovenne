@@ -5,7 +5,7 @@ import {
   getProductImages,
   getRelatedProducts,
 } from "@/lib/storefront";
-import { resolveOldPath } from "@/lib/redirects";
+import { flatProductHistoryPath, resolveOldPath } from "@/lib/redirects";
 import { getProductSizes } from "@/lib/sizes";
 import { productHref } from "@/lib/urls";
 import { productMetaDescription } from "@/lib/metadata";
@@ -82,7 +82,7 @@ export default async function LegacyProductPage({
 
   if (!product) {
     // Renamed since this link was made — the history table still knows it.
-    const moved = await resolveOldPath(`/in/product/${params.slug}`);
+    const moved = await resolveOldPath(flatProductHistoryPath(params.slug));
     if (moved) permanentRedirect(moved);
     notFound();
   }
