@@ -2031,8 +2031,10 @@ revalidation, not a failed publish.
   sitemap is valid with 56 URLs.
 
 **Published by the owner, not independently verifiable.** The home_hero text
-fields are neither rendered nor embedded. The empty publish queue is the
-owner's to confirm in Admin → Review & Publish.
+fields are neither rendered nor embedded.
+
+**Confirmed by the owner.** Admin → Review & Publish showed an empty pending
+queue on 26 September 2026, after all seven drafts were published.
 
 **Tests.** These passed offline on the merged code: content-truthfulness
 (121/121 after #155), footer, seo-metadata, seo-descriptions, seo-canonical,
