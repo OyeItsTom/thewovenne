@@ -89,6 +89,12 @@
 -- checkout query behind it. Rerun at a quieter moment.
 set local lock_timeout = '10s';
 
+-- Several statements below name tables without a schema (stock_requests,
+-- stock_movements, product_versions …). Pinned here so they cannot resolve
+-- anywhere but public whatever the migrating role's search_path is — Supabase's
+-- default begins with "$user", which would win if a schema of that name existed.
+set local search_path = public, pg_temp;
+
 -- ══ 0. Nothing a caller creates can stand in for a real table ══
 --
 -- A SECURITY DEFINER function runs with its owner's rights but resolves names
@@ -1220,6 +1226,98 @@ $$;
 
 revoke execute on function public.publish_all() from public, anon;
 grant execute on function public.publish_all() to authenticated;
+
+-- ══ 12. Refuse to commit a half-hardened database ══
+--
+-- In production this runs as `postgres`, which on Supabase is NOT a superuser.
+-- A REVOKE there removes only grants that role (or the object's owner) made;
+-- a grant some other role made survives with nothing but a WARNING. So every
+-- security outcome above is checked here, as the database now actually is,
+-- and any that did not land aborts the whole migration — nothing is applied,
+-- and the message names what to fix. Checked with has_*_privilege, which
+-- counts grants to PUBLIC and through role membership.
+do $$
+declare
+  problems text[] := array[]::text[];
+  fn       text;
+  r        text;
+begin
+  foreach r in array array['anon', 'authenticated'] loop
+    if has_schema_privilege(r, 'public', 'CREATE') then
+      problems := problems || format('%s can still CREATE in schema public', r);
+    end if;
+    if has_table_privilege(r, 'public.product_sizes', 'INSERT, UPDATE, DELETE, TRUNCATE') then
+      problems := problems || format('%s can still write product_sizes', r);
+    end if;
+    if has_table_privilege(r, 'public.stock_movements', 'INSERT, UPDATE, DELETE, TRUNCATE') then
+      problems := problems || format('%s can still write stock_movements', r);
+    end if;
+    if has_table_privilege(r, 'public.stock_requests', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE') then
+      problems := problems || format('%s can reach stock_requests', r);
+    end if;
+    foreach fn in array array[
+      'public.reserve_stock(jsonb, uuid)',
+      'public.release_stock(jsonb, uuid, text)',
+      'public.claim_stock_request(uuid, uuid, text, text)',
+      'public.guard_live_stock()'
+    ] loop
+      if has_function_privilege(r, fn, 'EXECUTE') then
+        problems := problems || format('%s can still EXECUTE %s', r, fn);
+      end if;
+    end loop;
+  end loop;
+
+  foreach fn in array array[
+    'public.publish_one(text, uuid, text)',
+    'public.publish_all()',
+    'public.cancel_order(uuid, text)',
+    'public.set_product_stock(uuid, integer, integer, uuid, text, text)',
+    'public.save_product_sizes(uuid, jsonb, text, uuid)'
+  ] loop
+    if has_function_privilege('anon', fn, 'EXECUTE') then
+      problems := problems || format('anon can still EXECUTE %s', fn);
+    end if;
+    if not has_function_privilege('authenticated', fn, 'EXECUTE') then
+      problems := problems || format('authenticated can no longer EXECUTE %s', fn);
+    end if;
+  end loop;
+
+  foreach fn in array array['public.reserve_stock(jsonb, uuid)', 'public.release_stock(jsonb, uuid, text)'] loop
+    if not has_function_privilege('service_role', fn, 'EXECUTE') then
+      problems := problems || format('service_role can no longer EXECUTE %s', fn);
+    end if;
+  end loop;
+
+  if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'save_product_sizes') <> 1 then
+    problems := problems || 'save_product_sizes has more than one signature';
+  end if;
+  if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'reserve_stock') <> 1 then
+    problems := problems || 'reserve_stock has more than one signature';
+  end if;
+  if not exists (select 1 from pg_trigger where tgrelid = 'public.product_versions'::regclass and tgname = 'guard_live_stock') then
+    problems := problems || 'guard_live_stock trigger missing';
+  end if;
+
+  select problems || coalesce(array_agg(p.oid::regprocedure::text || ' lacks search_path=public, pg_temp'), array[]::text[])
+    into problems
+    from pg_proc p
+   where p.pronamespace = 'public'::regnamespace
+     and p.proname in ('product_size_total', 'derive_version_stock', 'resync_versions_from_sizes',
+                       'is_admin', 'log_admin_action', 'record_product_path', 'product_path',
+                       'require_images_to_publish', 'sync_published_product_extras',
+                       'orders_cancel_needs_credit_note', 'issue_credit_note', 'validate_publish',
+                       'ensure_product_draft', 'create_product_draft', 'draft_is_noop', 'settle_draft',
+                       'gallery_matches', 'pending_queue', 'pending_changes', 'discard_one',
+                       'discard_drafts', 'checkout_prices', 'reserve_stock', 'release_stock',
+                       'cancel_order', 'claim_stock_request', 'set_product_stock',
+                       'save_product_sizes', 'publish_one', 'publish_all', 'guard_live_stock')
+     and not (coalesce(p.proconfig, '{}') @> array['search_path=public, pg_temp']);
+
+  if array_length(problems, 1) > 0 then
+    raise exception 'MIGRATION_0060_SELF_CHECK_FAILED: %', array_to_string(problems, '; ')
+      using hint = 'Nothing was applied. A privilege granted by a role other than the one running this migration usually causes this; revoke it as that role (or its owner), then rerun.';
+  end if;
+end $$;
 
 -- ── Verify ────────────────────────────────────
 select

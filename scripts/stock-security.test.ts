@@ -16,7 +16,8 @@
  * Never touches a real database. Exits non-zero on failure.
  */
 import { randomUUID } from "node:crypto";
-import { asAdmin, asRoot, asService, failure, makeAdmin, startEngine, type Client } from "./pg-world";
+import fs from "node:fs";
+import { asAdmin, asRoot, asService, failure, handToOwner, makeAdmin, startEngine, type Client } from "./pg-world";
 import { liveProduct, liveRow, movements, nameOnlyDraft, paidOrder, sell, sizesOf } from "./stock-world";
 
 let passed = 0;
@@ -39,6 +40,21 @@ async function shadow(c: Client, table: string) {
     return;
   }
   await c.query(`create temp table if not exists ${table} (like public.${table} including defaults)`);
+}
+
+/** 0060 exactly as scripts/run-migration.mjs applies it: one transaction, as `owner`. */
+async function apply0060As(c: Client, owner: string): Promise<string> {
+  const sql = fs.readFileSync("supabase/migrations/0060_publish_keeps_live_stock.sql", "utf8");
+  await c.query("begin");
+  try {
+    await c.query(`set local role ${owner}`);
+    await c.query(sql);
+    await c.query("commit");
+    return "";
+  } catch (e) {
+    await c.query("rollback");
+    return (e as Error).message;
+  }
 }
 
 async function main() {
@@ -107,6 +123,70 @@ async function main() {
         check(`${tag}: sale — an empty temp product_sizes ${before ? "makes the sale skip the size (M stays 2)" : "is ignored; size M goes 2 → 1"}`,
           [out, sizes.M], before ? ["", 2] : ["", 1]);
       }
+      await root.end();
+    }
+
+    // ══ 0060 applied by a non-superuser, as in production ══
+    console.log("\n=== 0060 applied by an ordinary role that owns the schema, as production's `postgres` ===");
+    {
+      await engine.database("nonsuper", "0059");
+      const root = await engine.connect("nonsuper");
+      await handToOwner(root, "nonsuper", "migrator");
+      const before = (await root.query("select md5(prosrc) m from pg_proc where proname = 'publish_one'")).rows[0].m;
+      check("0060 applies, self-check included", await apply0060As(root, "migrator"), "");
+      const owners = (await root.query(`select distinct pg_get_userbyid(proowner) o from pg_proc where pronamespace = 'public'::regnamespace
+        and proname in ('publish_one', 'set_product_stock', 'claim_stock_request', 'save_product_sizes', 'guard_live_stock', 'product_size_total')`)).rows.map((r) => r.o);
+      check("its functions are owned by that role", owners, ["migrator"]);
+      check("publish_one was really replaced", (await root.query("select md5(prosrc) m from pg_proc where proname = 'publish_one'")).rows[0].m !== before, true);
+      const privs = (await root.query(`select has_schema_privilege('anon', 'public', 'CREATE') a, has_schema_privilege('authenticated', 'public', 'CREATE') b,
+        has_table_privilege('authenticated', 'product_sizes', 'UPDATE') c, has_function_privilege('anon', 'public.publish_one(text, uuid, text)', 'EXECUTE') d`)).rows[0];
+      check("its revokes took effect without superuser", [privs.a, privs.b, privs.c, privs.d], [false, false, false, false]);
+      // And it works: the acceptance test, against functions owned by an ordinary role.
+      const admin = await makeAdmin(root, "ns-admin@example.test");
+      const p = await liveProduct(root, admin, { stock: 1 });
+      await nameOnlyDraft(root, admin, p.productId, "Renamed NS");
+      const o = await paidOrder(root, [{ id: p.productId, quantity: 1 }]);
+      await sell(root, o, [{ id: p.productId, quantity: 1 }]);
+      await asAdmin(root, admin);
+      await root.query("select public.publish_one('product', $1)", [p.productId]);
+      const r = (await root.query("select public.set_product_stock($1, 0, 2, gen_random_uuid()) r", [p.productId])).rows[0].r;
+      await asRoot(root);
+      check("acceptance: stock stays 0 through publish; a checked adjustment then applies",
+        [r.status, (await liveRow(root, p.productId))!.stock_quantity, (await liveRow(root, p.productId))!.name], ["applied", 2, "Renamed NS"]);
+      await root.end();
+    }
+
+    console.log("\n=== 0060 refuses to half-apply when it cannot revoke a grant ===");
+    {
+      await engine.database("foreigngrant", "0059");
+      const root = await engine.connect("foreigngrant");
+      await handToOwner(root, "foreigngrant", "migrator");
+      // CREATE on public reaches anon through ANOTHER role's grant — the case a
+      // non-superuser's REVOKE cannot touch.
+      await root.query(`do $$ begin create role other_grantor nologin; exception when duplicate_object then null; end $$`);
+      await root.query("grant create on schema public to other_grantor with grant option");
+      await root.query("set role other_grantor; grant create on schema public to anon; reset role");
+      const before = (await root.query("select md5(prosrc) m from pg_proc where proname = 'publish_one'")).rows[0].m;
+      const err = await apply0060As(root, "migrator");
+      check("the migration refuses, naming the grant", /MIGRATION_0060_SELF_CHECK_FAILED: .*anon can still CREATE in schema public/.test(err), true);
+      check("…and nothing was applied: no stock_requests, publish_one untouched",
+        [(await root.query("select to_regclass('public.stock_requests') is null n")).rows[0].n,
+         (await root.query("select md5(prosrc) m from pg_proc where proname = 'publish_one'")).rows[0].m === before], [true, true]);
+      await root.query("set role other_grantor; revoke create on schema public from anon; reset role");
+      check("once that grant is revoked by its grantor, the same file applies", await apply0060As(root, "migrator"), "");
+      await root.end();
+    }
+
+    console.log("\n=== 0060 fails cleanly when it does not own something it replaces ===");
+    {
+      await engine.database("foreignowner", "0059");
+      const root = await engine.connect("foreignowner");
+      await handToOwner(root, "foreignowner", "migrator");
+      await root.query(`do $$ begin create role someone_else nologin; exception when duplicate_object then null; end $$`);
+      await root.query("alter function public.is_admin() owner to someone_else");
+      const err = await apply0060As(root, "migrator");
+      check("refused: must be owner", /must be owner of function (public\.)?is_admin/.test(err), true);
+      check("…and nothing was applied", (await root.query("select to_regclass('public.stock_requests') is null n")).rows[0].n, true);
       await root.end();
     }
 

@@ -2358,3 +2358,30 @@ in the PR. **Neither step is authorised yet.**
   functions use `search_path = public`. None uses dynamic `EXECUTE` or creates
   temp tables, and exploiting them needs a session that can run `CREATE TEMP
   TABLE`, which PostgREST never provides. Harden them in their own PR.
+
+### Stage 5 — production preflight prepared, 26 September 2026 (nothing run on production)
+
+- **The migration role is not a superuser.** `run-migration.mjs` connects as
+  `postgres` on the direct database host. On Supabase that role is **not** a
+  superuser, but every earlier test applied 0060 as one. A non-superuser's
+  `REVOKE` silently skips grants made by other roles. So 0060 now **checks its
+  own security outcome before committing** (section 12) and refuses to apply
+  anything if a revoke or hardening step didn't land. It also pins
+  `search_path = public, pg_temp` for its own transaction.
+  `stock-security.test.ts` (91) applies it as a non-superuser owner, and it
+  succeeds and works end to end. When a grant it can't revoke was made by
+  another role, it refuses and rolls back; when it doesn't own a function it
+  replaces, it fails cleanly.
+- **Preflight.** `scripts/stock-0060-preflight.sql` is one read-only `SELECT`
+  of about 30 checks. Each returns PASS, REVIEW or BLOCKER: version, ledger,
+  absent 0060 objects, the signatures, owners and bodies (md5 against
+  0001–0059) of every function 0060 touches, grants and their grantors,
+  `public` schema ownership and CREATE, table ownership, columns, RLS and
+  triggers. `stock-preflight.test.ts` (24) proves each bad state produces its
+  verdict, and that a ready database — including one owned by a non-superuser
+  — is all PASS.
+- **Performance.** At about 50× the expected production size (10,010
+  versions, 20,000 movements, 30,000 audit rows), the history audit took
+  ~1.2 s and the preflight 37 ms, locally.
+- **Unchanged.** Function fingerprints are identical to the Stage 3 table.
+  Nothing has been run against production.

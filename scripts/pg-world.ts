@@ -222,3 +222,40 @@ export async function failureCode(fn: () => Promise<unknown>): Promise<string> {
     return String((e as { code?: string }).code ?? "");
   }
 }
+
+/**
+ * Production applies migrations as `postgres`, which on Supabase is NOT a
+ * superuser; everything else in these tests runs them as one. This hands a
+ * database built through 0059 to an ordinary role — every object in public,
+ * the database itself (so it acts for pg_database_owner, which owns public),
+ * and Supabase-style default grants for what it creates — so 0060 can be
+ * applied the way production will apply it.
+ */
+export async function handToOwner(root: Client, db: string, owner: string) {
+  await root.query(`do $$ begin create role ${owner} nologin nosuperuser nocreaterole nobypassrls;
+    exception when duplicate_object then null; end $$`);
+  await root.query(`alter database ${db} owner to ${owner}`);
+  await root.query(`grant usage on schema auth to ${owner}; grant select, references on auth.users to ${owner}`);
+  await root.query(`do $$ declare r record; begin
+    for r in select c.oid::regclass::text n, c.relkind k from pg_class c
+              where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v', 'm', 'f') loop
+      execute format('alter %s %s owner to ${owner}', case r.k when 'v' then 'view' when 'm' then 'materialized view' when 'f' then 'foreign table' else 'table' end, r.n);
+    end loop;
+    for r in select c.oid::regclass::text n from pg_class c
+              where c.relnamespace = 'public'::regnamespace and c.relkind = 'S'
+                and not exists (select 1 from pg_depend d where d.objid = c.oid and d.deptype in ('a', 'i')) loop
+      execute format('alter sequence %s owner to ${owner}', r.n);
+    end loop;
+    for r in select p.oid::regprocedure::text n from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind in ('f', 'p') loop
+      execute format('alter routine %s owner to ${owner}', r.n);
+    end loop;
+    for r in select t.oid::regtype::text n from pg_type t
+              where t.typnamespace = 'public'::regnamespace and t.typtype in ('e', 'd')
+                 or (t.typnamespace = 'public'::regnamespace and t.typtype = 'c' and (select relkind from pg_class where oid = t.typrelid) = 'c') loop
+      execute format('alter type %s owner to ${owner}', r.n);
+    end loop;
+  end $$`);
+  await root.query(`alter default privileges for role ${owner} in schema public grant all on tables to anon, authenticated, service_role;
+    alter default privileges for role ${owner} in schema public grant all on functions to anon, authenticated, service_role;
+    alter default privileges for role ${owner} in schema public grant all on sequences to anon, authenticated, service_role`);
+}
