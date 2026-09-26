@@ -26,7 +26,10 @@ export default function BrandStory({ content }: { content?: BrandStoryContent })
       >
         <Image
           src="https://placehold.co/800x1000/F0EAD6/1C1F3B?text=THE+WOVENNE"
-          alt="An artisan weaving linen on a traditional handloom in India"
+          // The src is a placeholder panel, and the alt described a photograph
+          // that is not there — of linen, which the catalogue does not sell.
+          // It says what is on screen until a real image replaces it.
+          alt=""
           fill
           sizes="(min-width: 768px) 50vw, 100vw"
           className="object-cover"

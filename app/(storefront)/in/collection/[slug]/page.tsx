@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { getCollectionSlugs, getProductsByCollection,  } from "@/lib/storefront";
 import { getContent } from "@/lib/storefront";
 import ProductGrid from "@/components/shop/ProductGrid";
-import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { openGraph } from "@/lib/seo";
 import { collectionHref } from "@/lib/urls";
 
 /**
@@ -40,7 +40,12 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const name = titleise(params.slug);
   const title = `${name} | THE WOVENNE`;
-  const description = `${name} — a seasonal selection of handloom linen, woven in Kerala.`;
+  // "a seasonal selection of handloom linen, woven in Kerala" was three claims
+  // about products this route cannot see: a collection is a free-text tag, and
+  // what carries it is whatever an admin tagged that week. The only honest
+  // description is the one that describes the SELECTION rather than its
+  // contents.
+  const description = `${name} — a seasonal selection from THE WOVENNE. Shipped across India.`;
   return {
     title,
     description,
@@ -49,7 +54,11 @@ export async function generateMetadata({
     // sloppy: a slug matching no product makes the page call notFound(), and
     // the not-found boundary's noindex metadata replaces this whole object.
     alternates: { canonical: collectionHref(params.slug) },
-    openGraph: { title, description, images: [DEFAULT_OG_IMAGE] },
+    openGraph: openGraph({
+      title,
+      description,
+      path: collectionHref(params.slug),
+    }),
   };
 }
 

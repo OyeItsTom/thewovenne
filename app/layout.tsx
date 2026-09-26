@@ -1,6 +1,23 @@
 import type { Metadata } from "next";
 import { Cormorant_Garamond, DM_Sans, Tiro_Devanagari_Hindi } from "next/font/google";
 import "./globals.css";
+import { openGraph } from "@/lib/seo";
+
+const SITE_TITLE = "THE WOVENNE | Woven in India. Worn for life.";
+/*
+ * NO "WOVEN IN INDIA" HERE, and the reason is grammar rather than geography.
+ *
+ * This sentence lists three things, and one of them is jewellery. "Handloom
+ * cotton" attaches to "sarees" — the noun beside it — but a trailing "Woven in
+ * India" attaches to the whole list, which makes the site-wide description say
+ * the necklaces are woven. India IS the right origin claim for the cloth; it is
+ * simply not sayable in a sentence that also mentions metal.
+ *
+ * So the origin claim is left to the pages where it is scoped to cloth, and this
+ * one states only what is true of everything listed: where it ships.
+ */
+const SITE_DESCRIPTION =
+  "Handloom cotton sarees, clothing and jewellery from THE WOVENNE. Shipped across India.";
 
 const heading = Cormorant_Garamond({
   subsets: ["latin"],
@@ -23,20 +40,39 @@ const script = Tiro_Devanagari_Hindi({
   display: "swap",
 });
 
+/**
+ * THE SITE-WIDE FALLBACK, and only that. Every route worth indexing now names
+ * its own title and description; what is here is what an unnamed route gets.
+ *
+ * THE DESCRIPTION IT REPLACES SAID "linen", "direct from the source" AND "for
+ * the UK", and inherited down onto the homepage, which had no description of
+ * its own. Three claims, none of them supportable: the catalogue is 31 cotton
+ * pieces and 2 jewellery pieces with no linen anywhere in it, and the storefront
+ * sells into India and nowhere else. Kerala is not the answer either —
+ * documented provenance is mixed and most rows store no origin at all.
+ *
+ * THE TITLE STILL SAYS "Woven in India", untouched. It is the brand's own
+ * strapline rather than a description of a catalogue, it names no product
+ * alongside it, and rewording a strapline is a brand decision and not a
+ * metadata correction. Flagged for the owner rather than changed here.
+ *
+ * The openGraph block carries a TITLE AND DESCRIPTION now. Next 14.2.5 does not
+ * fill those from the page's own — see lib/seo — so until this line the site
+ * emitted og:image and og:site_name and no og:title anywhere at all.
+ */
 export const metadata: Metadata = {
   // Resolves relative OG/icon URLs to absolute ones for social crawlers.
   metadataBase: new URL(
     process.env.NEXT_PUBLIC_SITE_URL || "https://www.thewovenne.com"
   ),
-  title: "THE WOVENNE | Woven in India. Worn for life.",
-  description:
-    "Authentic handloom Indian linen, direct from the source. Premium, sustainable, body-friendly garments for the UK.",
-  openGraph: {
-    type: "website",
-    siteName: "THE WOVENNE",
-    // Square mark in a 1.91:1 slot — placeholder until a proper OG card exists.
-    images: ["/logo_illustrated.png"],
-  },
+  title: SITE_TITLE,
+  description: SITE_DESCRIPTION,
+  openGraph: openGraph({
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    // No path: this is the fallback for whatever route inherits it, and a
+    // shared og:url would name the homepage on every one of them.
+  }),
 };
 
 export default function RootLayout({

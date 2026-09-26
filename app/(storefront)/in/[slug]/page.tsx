@@ -1,14 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getVisibleCategoryTree } from "@/lib/storefront";
+import { getNavCategoryTree, getVisibleCategoryTree } from "@/lib/storefront";
 import { getProductsByCategoryIds } from "@/lib/storefront";
 import { getPageBySlug, getPublishedPages } from "@/lib/storefront";
 import ProductGrid from "@/components/shop/ProductGrid";
 import PageBlocks from "@/components/page/PageBlocks";
-import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { openGraph } from "@/lib/seo";
 import { cPath } from "@/lib/country";
 import { rootSlugHref } from "@/lib/urls";
+import {
+  categoryDescription,
+  categoryTitle,
+  emptyCategoryRobots,
+  metaDescription,
+  stockedChildrenOf,
+} from "@/lib/metadata";
 
 /**
  * Root-level slugs: a category section (/men, /women) or a content page
@@ -50,6 +57,26 @@ async function resolve(slug: string) {
   return { category: tree.find((p) => p.slug === slug) ?? null, page };
 }
 
+/**
+ * The sub-categories under this section that hold a product, or null when the
+ * catalogue could not be read.
+ *
+ * THE SAME AUTHORITY THE NAVIGATION USES. getNavCategoryTree() is the visible
+ * tree narrowed to children with at least one active product — one small read
+ * of category_id, not a fetch of every product — and it is already what decides
+ * whether this section appears in the header at all. Deriving the description
+ * and the robots directive from it keeps three answers to "is there anything
+ * here?" in step: the nav, the sitemap and this tag. A hard-coded list of the
+ * ten currently-empty sub-categories would be a fourth, and would be wrong the
+ * first time one of them is stocked.
+ *
+ * stockedChildrenOf() is what separates "nothing is filed here" from "nobody
+ * could say", which matters because only one of those may produce a noindex.
+ */
+async function stockedChildren(slug: string) {
+  return stockedChildrenOf(await getNavCategoryTree(), slug);
+}
+
 export async function generateMetadata({
   params,
 }: {
@@ -58,21 +85,38 @@ export async function generateMetadata({
   const { category, page } = await resolve(params.slug);
 
   if (category) {
-    const title = `${category.name} | THE WOVENNE`;
-    const description = `Handloom linen for ${category.name.toLowerCase()} — woven in Kerala, sent direct from the loom.`;
+    const stocked = await stockedChildren(category.slug);
+    const input = {
+      parent: { slug: category.slug, name: category.name },
+      stockedChildren: (stocked ?? []).map((child) => child.name),
+    };
+    const title = categoryTitle(input);
+    const description = categoryDescription(input);
     return {
       title,
       description,
       // Built from the slug that RESOLVED, not the one that was requested, so
       // the canonical can only ever name the section actually being served.
+      // SPELLED OUT AT BOTH CALL SITES rather than hoisted into a local: the
+      // shape of this line is what scripts/seo-canonical.test.ts reads to prove
+      // no canonical anywhere is a hand-written path. A variable would hide it.
       alternates: { canonical: rootSlugHref(category.slug) },
-      openGraph: { title, description, images: [DEFAULT_OG_IMAGE] },
+      robots: emptyCategoryRobots(stocked),
+      openGraph: openGraph({
+        title,
+        description,
+        path: rootSlugHref(category.slug),
+      }),
     };
   }
 
   if (page) {
     const title = `${page.title} | THE WOVENNE`;
-    const description = page.meta_description ?? page.intro ?? undefined;
+    // Through the same collapse-and-truncate the product and journal routes
+    // use: `intro` is a paragraph, and a paragraph pasted into a meta
+    // description arrives with its line breaks in it.
+    const description =
+      metaDescription(page.meta_description) ?? metaDescription(page.intro);
     return {
       title,
       description,
@@ -80,7 +124,7 @@ export async function generateMetadata({
       // /privacy-policy today, /contact and /shipping whenever they are
       // written. Nothing to remember per page, because pages are rows.
       alternates: { canonical: rootSlugHref(page.slug) },
-      openGraph: { title, description, images: [DEFAULT_OG_IMAGE] },
+      openGraph: openGraph({ title, description, path: rootSlugHref(page.slug) }),
     };
   }
 

@@ -154,12 +154,29 @@ ok("product canonical untouched", productRoute.includes("canonical: productHref(
 ok("legacy product canonical untouched", legacyRoute.includes("canonical: productHref(product)"));
 ok("shop canonical untouched", shopRoute.includes('canonical: cPath("/shop")'));
 
-ok("the home page declares no openGraph KEY of its own",
-  !/openGraph\s*:/.test(home),
-  "declaring one would replace the root layout's wholesale");
-ok("and its metadata export carries only alternates",
-  /export const metadata: Metadata = \{\s*alternates: \{ canonical: cPath\("\/"\) \},\s*\};/.test(home),
-  "title and description keep coming from the root layout");
+/*
+ * THE HOME PAGE USED TO BE ASSERTED THE OTHER WAY ROUND, and the reason it
+ * changed is worth keeping. It carried only a canonical, so that declaring an
+ * openGraph key could not silently discard the root layout's type, siteName and
+ * image — a real hazard, since Next replaces that object wholesale.
+ *
+ * openGraph() now carries all four, so the hazard is closed at the builder
+ * rather than by one route abstaining. What abstaining actually cost was the
+ * page's own words: /in inherited the layout's description, and the layout's
+ * description advertised linen for the UK.
+ *
+ * So the rule here is no longer "declare nothing". It is "declare it through
+ * the helper" — and scripts/seo-metadata.test.ts holds the same line for every
+ * other route.
+ */
+ok("the home page builds its openGraph through the helper",
+  /openGraph:\s*openGraph\(/.test(home),
+  "an object literal would still drop siteName, type and the image");
+ok("and now carries a title and description of its own",
+  /title:\s*TITLE/.test(home) && /description:\s*DESCRIPTION/.test(home),
+  "inheriting them is what put the root layout's claims on the most-linked page");
+ok("its canonical is untouched by any of that",
+  /alternates:\s*\{ canonical: cPath\("\/"\) \}/.test(home));
 
 console.log("\n=== COMPLETENESS: every storefront route is accounted for ===");
 

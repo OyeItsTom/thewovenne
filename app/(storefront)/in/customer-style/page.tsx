@@ -4,6 +4,7 @@ import { getApprovedStyle } from "@/lib/style";
 import StyleGallery from "@/components/style/StyleGallery";
 import { buttonClassName } from "@/components/ui/Button";
 import { cPath } from "@/lib/country";
+import { openGraph } from "@/lib/seo";
 
 /**
  * WORN BY YOU is the customer-facing name; "Customer Style" survives as the
@@ -11,13 +12,24 @@ import { cPath } from "@/lib/country";
  * does not change with the label — it is indexed, and a rename would cost the
  * page its history to save four characters nobody reads.
  */
+const TITLE = "Worn by You | THE WOVENNE";
+// "handloom linen and natural fibres, woven in Kerala" described neither the
+// catalogue nor this page, which is a gallery of customer photographs and makes
+// no claim about what is in them. It now says what it is.
+const DESCRIPTION =
+  "Photographs sent to us by the people who wear our cloth — THE WOVENNE, as it is actually worn.";
+
 export const metadata: Metadata = {
-  title: "Worn by You | THE WOVENNE",
-  description:
-    "Photographs sent to us by the people who wear our cloth — handloom linen and natural fibres, woven in Kerala.",
+  title: TITLE,
+  description: DESCRIPTION,
   // The route keeps the name the URL was indexed under, so the canonical says
   // customer-style even though the page is called Worn by You.
   alternates: { canonical: cPath("/customer-style") },
+  openGraph: openGraph({
+    title: TITLE,
+    description: DESCRIPTION,
+    path: cPath("/customer-style"),
+  }),
 };
 
 /**
