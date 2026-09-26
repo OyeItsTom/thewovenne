@@ -21,6 +21,7 @@ import type { Product } from "@/lib/types";
 import type { ProductSize } from "@/lib/sizes";
 import { stockNote, stockState } from "@/lib/stock";
 import JsonLd from "@/components/seo/JsonLd";
+import { productImageUrl } from "@/lib/seo";
 import { breadcrumbNode, productNode } from "@/lib/structuredData";
 import { productHref } from "@/lib/urls";
 
@@ -92,7 +93,10 @@ export default async function ProductDetail({
         data={productNode({
           name: product.name,
           href: productHref(product),
-          images,
+          // First-party optimizer URLs, not the raw storage ones Supabase marks
+          // noindex. Order and count unchanged; the gallery below keeps the
+          // stored URLs. See productImageUrl in lib/seo.
+          images: images.map((src) => productImageUrl(src, "jsonLd")),
           description: product.description,
           // The same column MaterialCare and the fabric line below render, so
           // the markup and the page cannot name two different materials.
