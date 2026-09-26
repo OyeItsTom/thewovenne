@@ -2109,3 +2109,77 @@ deployment, not on a local build.
 **Not verified.** Only three historical mappings were tested end to end; the
 complete `product_url_history` table was not audited. Still open: a renamed
 product whose category has no published parent 404s at its old URL.
+
+## Product stock integrity — Stage 2 implemented, NOT merged or applied, 26 September 2026
+
+Fixes the deferred defect above, plus the second one Stage 1 found. Branch
+`fix/draft-stock-integrity` (from `main` 24c215b). **Migration 0060 has not been
+applied to any real database, and nothing is merged or deployed.**
+
+**What was wrong.** (1) Publishing promoted the draft row wholesale, so a draft's
+copy of an unsized product's stock became the live figure, bringing sold pieces
+back. (2) The product form saved every size's *loaded* count straight back
+through `save_product_sizes`, live. A description edit on a sized product
+therefore restocked any size that sold while the form was open, and could log
+nothing for it.
+
+**The rule now.** Stock is operational state, not content.
+- Publishing carries the **live** stock forward. A brand-new product keeps its
+  opening stock.
+- Deliberate changes go live immediately, checked against the figure the admin
+  saw: `set_product_stock` for unsized products (expected value plus a request
+  id), and `save_product_sizes` for sized ones (per-size `expected`; untouched
+  counts are never written).
+- `stock_quantity` is in `version_noise()`, so a stale draft figure is not a
+  pending change.
+
+**Lock protocol.** Locks are always taken in this order:
+1. The `orders` row. `FOR KEY SHARE` for sales and releases; `cancel_order`
+   keeps its own `FOR UPDATE`.
+2. The `products` rows, sorted by id. `FOR UPDATE` for publishing, because it
+   may rewrite the unique slug. `FOR NO KEY UPDATE` for every stock writer.
+3. Then the version, size and movement rows.
+
+Every lock is taken at its final strength, so there are no lock upgrades. The
+audit's first draft would have deadlocked sale against cancel on the orders
+row, so sales now take the order lock first.
+
+**Also in 0060.**
+- `release_stock` writes a movement only when a row actually changed.
+  `cancel_order` reports any lines it could not return.
+- The `guard_live_stock` trigger stops a PostgREST role writing an unsized
+  product's live stock directly.
+- Direct `product_sizes` writes are revoked from `authenticated`.
+- The old 3-argument `save_product_sizes` is dropped, so an old browser tab
+  reaches the checks and gets `EXPECTED_REQUIRED`.
+
+**Tests.** They run on a real, throwaway PostgreSQL through `scripts/pg-world.ts`:
+embedded-postgres, the full migration chain unmodified, and a Supabase shim. It
+never uses `.env.local`.
+- `stock-integrity.test.ts`: 118 assertions. Includes a control run on 0001–0059
+  that reproduces the bug, and runs `stock-history-audit.sql`.
+- `stock-concurrency.test.ts`: 60 assertions. Forced overlaps A–G, each confirmed
+  as a real lock wait through `pg_blocking_pids`, with before-0060 controls that
+  reproduce the false SOLD_OUT, the resurrection, the phantom return and the
+  sized overwrite. Also a randomised 4-connection run checking
+  live = opening + movements.
+- `inventory.test.ts`: 32 offline assertions.
+
+Run them with `PG_HARNESS_DIR=<dir containing node_modules/embedded-postgres>`.
+
+**Known, not fixed here.**
+- Two admins forking a draft of the same product at the same instant: the
+  second gets a unique-violation error. Changes nothing; seen in the randomised
+  run.
+- `ensure_product_draft` racing a publish can fork from the version being
+  archived, which is descriptive staleness only.
+- 0040's `log_admin_action` dropped 0014's grouping by product id, so
+  product-version audit rows are keyed by version id.
+- The AI suites' "no migration 0060" gate (`ai-eval`, `ai-eval-live`,
+  `ai-grounding`) now fails alongside their existing "0058 still not taken"
+  failure on `main`. Left unmodified for the owner to decide.
+
+**Before production.** The owner reviews the PR, then runs
+`scripts/stock-history-audit.sql` read-only, then applies 0060. Deploy the app
+straight after the migration, and don't edit stock in the admin during that
+window. Verify the function fingerprints recorded in the PR.

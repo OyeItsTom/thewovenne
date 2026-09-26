@@ -360,9 +360,20 @@ export async function getAdminProducts(
   // always sees what it will look like once published.
   const rows = (data as unknown as AdminProductRow[]) ?? [];
   const byProduct = new Map<string, AdminProductRow>();
+  const liveStock = new Map<string, number>();
   for (const row of rows) {
     const seen = byProduct.get(row.product_id);
     if (!seen || row.state === "draft") byProduct.set(row.product_id, row);
+    if (row.state === "published") liveStock.set(row.product_id, row.stock_quantity);
+  }
+  // …except stock. A draft's stock is a copy taken when it was opened, and
+  // publishing never applies it (migration 0060), so the shelf is the published
+  // figure. Showing the draft's would put a stale number in front of the admin
+  // — and it is the number a stock edit is checked against. A product never
+  // published has only its draft's opening stock, which is right.
+  for (const [id, row] of byProduct) {
+    const live = liveStock.get(id);
+    if (live !== undefined) byProduct.set(id, { ...row, stock_quantity: live });
   }
 
   // A product whose only draft deletes it is still live, so it stays listed —
