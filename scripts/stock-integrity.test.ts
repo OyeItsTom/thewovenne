@@ -29,7 +29,9 @@ async function historyAudit(c: Client) {
   await asRoot(c);
   await c.query("begin read only");
   try {
-    return (await c.query(HISTORY_AUDIT)).rows as { slug: string; finding: string; changed_by: number }[];
+    return (await c.query(HISTORY_AUDIT)).rows as {
+      section: string; slug: string; size_label: string | null; finding: string; confidence: string; changed_by: number;
+    }[];
   } finally {
     await c.query("rollback");
   }
@@ -83,12 +85,24 @@ async function main() {
       await c.query("update product_versions set stock_quantity = 5 where id = $1", [qd]);
       await c.query("select public.publish_one('product', $1)", [q.productId]);
 
+      // And the old product form over a sale: loaded M = 1, the piece sells, the
+      // form saves M = 1 back and logs it as a correction.
+      const z = await liveProduct(c, admin, { sizes: [{ label: "M", stock_quantity: 1 }] });
+      const zo = await paidOrder(c, [{ id: z.productId, size: "M", quantity: 1 }]);
+      await sell(c, zo, [{ id: z.productId, size: "M", quantity: 1 }]);
+      await asAdmin(c, admin);
+      await c.query("select public.save_product_sizes($1, $2::jsonb)", [z.productId, JSON.stringify([{ label: "M", stock_quantity: 1 }])]);
+      check("before 0060: the old form put the sold size back", (await sizesOf(c, z.productId)).M, 1);
+
       const audit = await historyAudit(c);
       const row = (slug: string) => audit.filter((r) => r.slug === slug && r.finding !== "first publication");
-      check("history audit flags the resurrected piece as SUSPECT, by +1",
-        row(p.slug).map((r) => [r.finding, r.changed_by]), [["SUSPECT", 1]]);
-      check("history audit reads a deliberate old-style draft edit as intentional",
-        row(q.slug).map((r) => [r.finding, r.changed_by]), [["intentional edit", 3]]);
+      check("history audit: the resurrected piece is a candidate 'restored moved stock', by +1",
+        row(p.slug).map((r) => [r.section, r.finding, r.confidence, r.changed_by]),
+        [["publication", "restored moved stock", "candidate", 1]]);
+      check("history audit: a deliberate old-style draft edit reads as intentional",
+        row(q.slug).map((r) => [r.finding, r.confidence, r.changed_by]), [["intentional draft edit", "candidate", 3]]);
+      check("history audit: the sized form overwrite is a size-overwrite candidate",
+        row(z.slug).map((r) => [r.section, r.size_label, r.confidence, r.changed_by]), [["size overwrite", "M", "candidate", 1]]);
       await c.end();
     }
 
@@ -192,8 +206,18 @@ async function main() {
       check("the open draft shows the same figure", draftQty, 6);
       check("products mirror follows", (await liveRow(c, p.productId))!.mirror, 6);
       await asAdmin(c, admin);
-      const r2 = (await c.query("select public.set_product_stock($1, 4, 6, $2) r", [p.productId, req])).rows[0].r;
-      check("retry with the SAME request id: already applied", r2.status, "already_applied");
+      const r2 = (await c.query("select public.set_product_stock($1, 4, 6, $2, 'Found two more', 'restock') r", [p.productId, req])).rows[0].r;
+      check("an identical retry (same id, same request): already applied, same answer",
+        [r2.status, r2.quantity, r2.delta], ["already_applied", 6, 2]);
+      for (const [label, args] of [
+        ["another quantity", [4, 7, "restock"]],
+        ["another expected", [5, 6, "restock"]],
+        ["another reason", [4, 6, "correction"]],
+      ] as const) {
+        check(`the same id with ${label}: REQUEST_ID_REUSED, not already_applied`,
+          await failure(() => c.query("select public.set_product_stock($1, $2, $3, $4, null, $5)", [p.productId, args[0], args[1], req, args[2]])),
+          "REQUEST_ID_REUSED");
+      }
       const ms = await movements(c, p.productId);
       check("…and it wrote nothing more", ms.map((m) => [m.reason, m.delta, m.request_id === req, m.actor_id === admin]), [["restock", 2, true, true]]);
 
@@ -337,8 +361,13 @@ async function main() {
       check("…but other live fields are not affected by the guard",
         await failure(() => c.query("update product_versions set is_active = true where id = $1", [live.id])), "");
       const vid = (await c.query("select public.ensure_product_draft($1) id", [p.productId])).rows[0].id;
-      check("draft stock can still be written (it is ignored for a live product)",
-        await failure(() => c.query("update product_versions set stock_quantity = 9 where id = $1", [vid])), "");
+      // What an admin tab still running the old code does for a stock edit: it
+      // writes the draft. That now fails out loud instead of saving a figure
+      // publishing would ignore.
+      check("an old-style stock write into a live product's draft is refused",
+        await failure(() => c.query("update product_versions set stock_quantity = 9 where id = $1", [vid])), "STOCK_IS_LIVE");
+      check("…while a descriptive write to the same draft is not",
+        await failure(() => c.query("update product_versions set name = 'Still editable' where id = $1", [vid])), "");
       check("the draft's figure still does not reach the shelf", await (async () => {
         await c.query("select public.publish_one('product', $1)", [p.productId]);
         return (await liveRow(c, p.productId))!.stock_quantity;
@@ -480,8 +509,15 @@ async function main() {
     console.log("\n=== the history audit finds nothing to question after 0060 ===");
     {
       const audit = await historyAudit(c);
-      const odd = audit.filter((r) => r.finding === "SUSPECT" || r.finding === "UNEXPLAINED");
-      check(`every publication in this run (${audit.length}) is consistent or a first publication`, odd, []);
+      const pubs = audit.filter((r) => r.section === "publication");
+      check(`every publication in this run (${pubs.length}) is conclusive: consistent or a first publication`,
+        pubs.filter((r) => r.confidence !== "conclusive").map((r) => [r.slug, r.finding]), []);
+      check("every size count in this run matches its movement history",
+        audit.filter((r) => r.section === "size balance").map((r) => [r.slug, r.size_label]), []);
+      // Deliberate recounts right after a sale look like the old overwrite, by
+      // design of the heuristic; they must only ever be candidates.
+      check("size-overwrite rows are only ever candidates",
+        audit.filter((r) => r.section === "size overwrite" && r.confidence !== "candidate").length, 0);
     }
 
     await c.end();

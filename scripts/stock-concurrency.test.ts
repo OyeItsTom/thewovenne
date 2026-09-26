@@ -322,6 +322,46 @@ async function main() {
       check("CONTROL before 0060: …and logs nothing for it", ms.filter((m) => m.reason === "correction").length, 0);
     }
 
+    // ══ H. The same request twice, at once ══
+    console.log("\n=== H. duplicate and reused request ids, concurrently ===");
+    {
+      const p = await liveProduct(w.root, w.admin, { stock: 1 });
+      const id = randomUUID();
+      const same = async (c: Client) => {
+        await asAdmin(c, w.admin);
+        return (await c.query("select public.set_product_stock($1, 1, 4, $2) r", [p.productId, id])).rows[0].r;
+      };
+      const r = await overlap(w, same, same);
+      check("identical request twice at once: the second really waited", r.waited, true);
+      check("…first applied, second already_applied", [(r.first.value as { status: string })?.status, (r.second.value as { status: string })?.status], ["applied", "already_applied"]);
+      check("…stock moved once (1 → 4), one movement", [(await liveRow(w.root, p.productId))!.stock_quantity, (await movements(w.root, p.productId)).length], [4, 1]);
+    }
+    {
+      const p = await liveProduct(w.root, w.admin, { stock: 1 });
+      const q = await liveProduct(w.root, w.admin, { stock: 1 });
+      const id = randomUUID();
+      const on = (productId: string) => async (c: Client) => {
+        await asAdmin(c, w.admin);
+        return (await c.query("select public.set_product_stock($1, 1, 4, $2) r", [productId, id])).rows[0].r;
+      };
+      const r = await overlap(w, on(p.productId), on(q.productId));
+      check("one id on two products at once: the second waited on the claim", r.waited, true);
+      check("…and was refused as a reused id", r.second.error, "REQUEST_ID_REUSED");
+      check("…so only the first product moved", [(await liveRow(w.root, p.productId))!.stock_quantity, (await liveRow(w.root, q.productId))!.stock_quantity], [4, 1]);
+    }
+    {
+      const p = await liveProduct(w.root, w.admin, { stock: 1 });
+      const id = randomUUID();
+      const same = async (c: Client) => {
+        await asAdmin(c, w.admin);
+        return (await c.query("select public.set_product_stock($1, 1, 4, $2) r", [p.productId, id])).rows[0].r;
+      };
+      const r = await overlap(w, same, same, "rollback");
+      check("first attempt rolled back: the duplicate waited, then did the work itself",
+        [r.waited, (r.second.value as { status: string })?.status], [true, "applied"]);
+      check("…once", [(await liveRow(w.root, p.productId))!.stock_quantity, (await movements(w.root, p.productId)).length], [4, 1]);
+    }
+
     // ══ Randomised ══
     console.log("\n=== randomised: 4 connections, sales, cancels, adjustments and publishes at once ===");
     {

@@ -40,9 +40,9 @@ check("a product with no sizes, still none → no call", sizeChanges([], []), []
 check("one count changed: every size goes with what was seen; untouched ones unchanged",
   sizeChanges(loaded, same().map((r) => (r.id === "l" ? { ...r, stock_quantity: 5 } : r))),
   [
-    { label: "S", stock_quantity: 1, expected: 1 },
-    { label: "M", stock_quantity: 0, expected: 0 },
-    { label: "L", stock_quantity: 5, expected: 2 },
+    { id: "s", label: "S", stock_quantity: 1, expected: 1 },
+    { id: "m", label: "M", stock_quantity: 0, expected: 0 },
+    { id: "l", label: "L", stock_quantity: 5, expected: 2 },
   ]);
 check("reordering alone is a change (positions are saved), counts all untouched",
   sizeChanges(loaded, [same()[2], same()[0], same()[1]]).map((c) => [c.label, "stock_quantity" in c && "expected" in c && c.stock_quantity === c.expected]),
@@ -50,9 +50,9 @@ check("reordering alone is a change (positions are saved), counts all untouched"
 check("removing a size sends its seen count, first",
   sizeChanges(loaded, same().filter((r) => r.id !== "m")),
   [
-    { label: "M", remove: true, expected: 0 },
-    { label: "S", stock_quantity: 1, expected: 1 },
-    { label: "L", stock_quantity: 2, expected: 2 },
+    { id: "m", label: "M", remove: true, expected: 0 },
+    { id: "s", label: "S", stock_quantity: 1, expected: 1 },
+    { id: "l", label: "L", stock_quantity: 2, expected: 2 },
   ]);
 check("adding a size sends no expected",
   sizeChanges(loaded, [...same(), { label: "XL", stock_quantity: 3 }]).at(-1),
@@ -60,27 +60,27 @@ check("adding a size sends no expected",
 check("removed and re-added under the same name is one edit, checked against what was seen",
   sizeChanges(loaded, [...same().filter((r) => r.id !== "m"), { label: "m", stock_quantity: 4 }]),
   [
-    { label: "S", stock_quantity: 1, expected: 1 },
-    { label: "L", stock_quantity: 2, expected: 2 },
-    { label: "m", stock_quantity: 4, expected: 0 },
+    { id: "s", label: "S", stock_quantity: 1, expected: 1 },
+    { id: "l", label: "L", stock_quantity: 2, expected: 2 },
+    { id: "m", label: "m", stock_quantity: 4, expected: 0 },
   ]);
 check("a rename is a removal of the old size and a new size",
   sizeChanges(loaded, same().map((r) => (r.id === "l" ? { ...r, label: "Large" } : r))),
   [
-    { label: "L", remove: true, expected: 2 },
-    { label: "S", stock_quantity: 1, expected: 1 },
-    { label: "M", stock_quantity: 0, expected: 0 },
+    { id: "l", label: "L", remove: true, expected: 2 },
+    { id: "s", label: "S", stock_quantity: 1, expected: 1 },
+    { id: "m", label: "M", stock_quantity: 0, expected: 0 },
     { label: "Large", stock_quantity: 2 },
   ]);
 check("a change of case only is the same size",
   sizeChanges(loaded, same().map((r) => (r.id === "s" ? { ...r, label: "s" } : r)))[0],
-  { label: "s", stock_quantity: 1, expected: 1 });
+  { id: "s", label: "s", stock_quantity: 1, expected: 1 });
 check("two sizes swapping names swap counts, each checked",
   sizeChanges(loaded, same().map((r) => (r.id === "s" ? { ...r, label: "L" } : r.id === "l" ? { ...r, label: "S" } : r))),
   [
-    { label: "L", stock_quantity: 1, expected: 2 },
-    { label: "M", stock_quantity: 0, expected: 0 },
-    { label: "S", stock_quantity: 2, expected: 1 },
+    { id: "l", label: "L", stock_quantity: 1, expected: 2 },
+    { id: "m", label: "M", stock_quantity: 0, expected: 0 },
+    { id: "s", label: "S", stock_quantity: 2, expected: 1 },
   ]);
 check("blank rows are dropped, as before", sizeChanges([], [{ label: "  ", stock_quantity: 3 }]), []);
 check("a duplicate is refused before anything is sent",
@@ -99,6 +99,9 @@ check("sized product in the table", /size by size/.test(stockErrorMessage("SIZED
 check("duplicate", stockErrorMessage("DUPLICATE_SIZE:XL").message, '"XL" is listed twice.');
 check("negative", stockErrorMessage("NEGATIVE_STOCK:XL").message, "Stock for XL can't be below zero.");
 check("an old tab", /out of date/.test(stockErrorMessage("EXPECTED_REQUIRED:S").message), true);
+check("a size row from another product", /no longer matches/.test(stockErrorMessage("SIZE_MISMATCH:M").message), true);
+check("a reused request id", /Nothing was changed/.test(stockErrorMessage("REQUEST_ID_REUSED").message), true);
+check("an old tab writing draft stock", /reload/.test(stockErrorMessage("STOCK_IS_LIVE").message), true);
 check("anything else passes through", stockErrorMessage("Only admins can edit stock").message, "Only admins can edit stock");
 
 // ── The app no longer writes stock into a draft ──

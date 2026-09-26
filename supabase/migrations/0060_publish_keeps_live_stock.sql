@@ -47,7 +47,8 @@
 --   (2) the products rows involved, by id        FOR UPDATE      publish (it may rewrite the
 --                                                                unique slug, a key column)
 --                                                FOR NO KEY UPDATE  every stock writer
---   (3) then version, size and movement rows.
+--   (3) then the admin request claim (stock_requests, section 1), and the
+--       version, size and movement rows.
 --
 -- Why each step is safe:
 --
@@ -82,25 +83,167 @@
 --
 -- Applied with scripts/run-migration.mjs in one transaction.
 
--- ══ 1. A request can be recognised when it is retried ══
+-- ══ 0. Nothing a caller creates can stand in for a real table ══
+--
+-- A SECURITY DEFINER function runs with its owner's rights but resolves names
+-- through its search_path, and Postgres searches the caller's temporary schema
+-- (pg_temp) FIRST for tables unless the path lists it explicitly. With
+-- `search_path = public`, a session that can create a temporary table named
+-- product_sizes changes what these functions read. That was reproduced on a
+-- real engine during review: a temporary product_sizes row made 0056's
+-- derivation trigger write 99 onto a live product.
+--
+-- Who can do that: every role holds TEMP on the database by default, but none
+-- of the app's interfaces lets a caller run a CREATE — PostgREST exposes tables
+-- and functions, not statements. So it is not reachable from the shop or the
+-- admin today. It is still wrong for a privileged function to depend on that,
+-- so every function this migration relies on, and every trigger that fires
+-- inside it, now resolves names with pg_temp LAST, and the three 0056 stock
+-- functions are restated with every table qualified.
+--
+-- `public` is the only other schema on the path, so it must not be writable by
+-- the API roles either; the CREATE revoke below makes that true whatever the
+-- project's defaults were. Nothing in the app creates schema objects.
+revoke create on schema public from public, anon, authenticated;
+
+create or replace function public.product_size_total(p_product_id uuid)
+returns integer
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $fn$
+  select case when count(*) = 0 then null else coalesce(sum(ps.stock_quantity), 0)::integer end
+    from public.product_sizes ps
+   where ps.product_id = p_product_id;
+$fn$;
+
+create or replace function public.derive_version_stock()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+declare
+  total integer;
+begin
+  if new.state not in ('draft', 'published') then
+    return new;
+  end if;
+
+  total := public.product_size_total(new.product_id);
+  if total is not null then
+    new.stock_quantity := total;
+  end if;
+
+  return new;
+end;
+$fn$;
+
+create or replace function public.resync_versions_from_sizes()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+declare
+  pid   uuid := coalesce(new.product_id, old.product_id);
+  total integer;
+begin
+  total := public.product_size_total(pid);
+
+  if total is null then
+    return coalesce(new, old);
+  end if;
+
+  update public.product_versions
+     set stock_quantity = total
+   where product_id = pid
+     and state in ('draft', 'published')
+     and stock_quantity is distinct from total;
+
+  return coalesce(new, old);
+end;
+$fn$;
+
+-- Everything else that runs inside a stock, publish, cancel or draft path —
+-- the functions they call and the triggers their writes fire. Only the search
+-- path changes; each body is exactly as its own migration left it.
+alter function public.is_admin()                                        set search_path = public, pg_temp;
+alter function public.log_admin_action()                                set search_path = public, pg_temp;
+alter function public.record_product_path()                             set search_path = public, pg_temp;
+alter function public.product_path(uuid)                                set search_path = public, pg_temp;
+alter function public.require_images_to_publish()                       set search_path = public, pg_temp;
+alter function public.sync_published_product_extras()                   set search_path = public, pg_temp;
+alter function public.orders_cancel_needs_credit_note()                 set search_path = public, pg_temp;
+alter function public.issue_credit_note(uuid, text, numeric, text, jsonb) set search_path = public, pg_temp;
+alter function public.validate_publish()                                set search_path = public, pg_temp;
+alter function public.ensure_product_draft(uuid)                        set search_path = public, pg_temp;
+alter function public.create_product_draft()                            set search_path = public, pg_temp;
+alter function public.draft_is_noop(text, uuid)                         set search_path = public, pg_temp;
+alter function public.settle_draft(text, uuid)                          set search_path = public, pg_temp;
+alter function public.gallery_matches(uuid, uuid)                       set search_path = public, pg_temp;
+alter function public.pending_queue()                                   set search_path = public, pg_temp;
+alter function public.pending_changes()                                 set search_path = public, pg_temp;
+alter function public.discard_one(text, uuid, text)                     set search_path = public, pg_temp;
+alter function public.discard_drafts()                                  set search_path = public, pg_temp;
+alter function public.checkout_prices(uuid[])                           set search_path = public, pg_temp;
+
+-- ══ 1. A request is claimed once, for one operation ══
 --
 -- An admin stock edit is an absolute figure, and an absolute figure cannot be
 -- made idempotent by comparing it with what is on the shelf: "the shelf already
 -- says 3" is equally true when my first attempt landed and when a sale took the
--- shelf from 4 to 3 in between. The caller therefore names each attempt, and the
--- movement that attempt wrote carries the name. Seeing the name again means the
--- attempt already landed; nothing else does.
+-- shelf from 4 to 3 in between. So the caller names each attempt, and the name
+-- is CLAIMED — bound to the product, the operation and a digest of exactly what
+-- was asked — in the same transaction as the change:
+--
+--   * the same name, the same request      → the answer it got the first time,
+--                                            nothing changes ('already_applied');
+--   * the same name, anything different     → REQUEST_ID_REUSED, nothing changes;
+--   * two identical requests at once        → the primary key makes the second
+--                                            wait for the first, then see its claim;
+--   * a request that is refused or fails    → its claim rolls back with it, so the
+--                                            name was never spent.
+--
+-- The movement a request writes carries the name too, so the log shows which
+-- admin action produced it.
+create table if not exists stock_requests (
+  request_id  uuid primary key,
+  product_id  uuid not null references products(id) on delete cascade,
+  operation   text not null check (operation in ('set_product_stock', 'save_product_sizes')),
+  digest      text not null,
+  outcome     jsonb not null default '{}'::jsonb,
+  actor_id    uuid references auth.users(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+
+comment on table stock_requests is
+  'One row per admin stock request that changed or confirmed stock (0060). The
+   request id is bound to its product, operation and payload digest, so a retry
+   is recognised and a reused id with a different payload is refused.';
+
+-- Written only by the two SECURITY DEFINER functions. RLS on with no policy,
+-- and no grants to the API roles: nothing outside those functions needs it.
+alter table stock_requests enable row level security;
+revoke all on stock_requests from public, anon, authenticated;
+grant select on stock_requests to service_role;
+
 alter table stock_movements
   add column if not exists request_id uuid;
 
 comment on column stock_movements.request_id is
-  'The admin request that wrote this movement (set_product_stock,
-   save_product_sizes). A retry of the same request finds it and changes
-   nothing. Null for sales, returns and anything written before 0060.';
+  'The admin request (stock_requests) that wrote this movement. Null for
+   sales, returns and anything written before 0060.';
 
 create unique index if not exists stock_movements_one_per_request
   on stock_movements (request_id, product_id, coalesce(size_label, ''))
   where request_id is not null;
+
+-- The movement log is written by the stock functions and nothing else. 0038
+-- granted the API roles SELECT only, but a project's default privileges can
+-- grant more; RLS would still refuse an insert, and this says so outright.
+revoke insert, update, delete, truncate on stock_movements from public, anon, authenticated;
 
 -- ══ 2. Draft stock is not a pending change ══
 --
@@ -117,41 +260,81 @@ as $$
                 'published_at', 'pending_delete', 'stock_quantity']::text[];
 $$;
 
--- ══ 3. Live stock cannot be edited around these functions ══
+-- ══ 3. Stock and publication cannot be written around these functions ══
 --
 -- product_versions is writable by admins through PostgREST, because that is how
--- drafts are saved. That also lets a browser write stock onto the PUBLISHED row
--- — today only by accident (a save racing a publish), but an accident is all it
--- takes. Live unsized stock may now change only inside the SECURITY DEFINER
--- functions, where current_user is the function owner rather than a PostgREST
--- role. A sized product's column is derived by 0056 and not guarded here.
+-- drafts are saved. Without a guard that same access lets a browser:
+--
+--   * write stock onto the PUBLISHED row (today only by accident — a save
+--     racing a publish — but an accident is all it takes);
+--   * write stock into the DRAFT of a live product, which publishing now
+--     ignores — so an old admin tab would appear to save a stock edit that
+--     silently never happens;
+--   * promote or archive a version by writing `state`, skipping publish_one's
+--     locks and its carry-forward of live stock;
+--   * insert a version that is already published or archived.
+--
+-- For the API roles (anon, authenticated) all four now raise. Inside the
+-- SECURITY DEFINER functions current_user is the function's owner, so the
+-- publish, stock and draft RPCs are unaffected, as is service_role. A new
+-- product's draft still takes its opening stock directly — there is no shelf
+-- yet — and a sized product's column is derived by 0056, so it is not judged
+-- here. Deleting a version is not a stock write and is left to RLS.
 create or replace function public.guard_live_stock()
 returns trigger
 language plpgsql
 set search_path = public, pg_temp
 as $fn$
 begin
-  if old.state = 'published'
-     and new.state = 'published'
-     and new.stock_quantity is distinct from old.stock_quantity
-     and current_user in ('anon', 'authenticated')
-     and public.product_size_total(new.product_id) is null then
-    raise exception 'LIVE_STOCK_LOCKED'
-      using hint = 'Live stock changes through set_product_stock, which checks the figure you saw is still the figure on the shelf.';
+  if current_user not in ('anon', 'authenticated') then
+    return new;
   end if;
+
+  if tg_op = 'INSERT' then
+    if new.state is distinct from 'draft' then
+      raise exception 'VERSION_STATE_LOCKED'
+        using hint = 'Versions are created as drafts; publish_one and publish_all publish them.';
+    end if;
+    return new;
+  end if;
+
+  if new.state is distinct from old.state then
+    raise exception 'VERSION_STATE_LOCKED'
+      using hint = 'Publishing and archiving happen through publish_one and publish_all.';
+  end if;
+
+  if new.stock_quantity is distinct from old.stock_quantity
+     and public.product_size_total(new.product_id) is null then
+    if old.state = 'published' then
+      raise exception 'LIVE_STOCK_LOCKED'
+        using hint = 'Live stock changes through set_product_stock, which checks the figure you saw is still the figure on the shelf.';
+    end if;
+    if exists (
+      select 1 from public.product_versions pub
+       where pub.product_id = new.product_id and pub.state = 'published'
+    ) then
+      raise exception 'STOCK_IS_LIVE'
+        using hint = 'This product is live: its stock is changed on the shelf with set_product_stock, not in a draft. Reload the admin.';
+    end if;
+  end if;
+
   return new;
 end;
 $fn$;
 
 drop trigger if exists guard_live_stock on product_versions;
 create trigger guard_live_stock
-  before update on product_versions
+  before insert or update on product_versions
   for each row execute function public.guard_live_stock();
+
+-- A trigger function is never called directly, and firing a trigger does not
+-- check EXECUTE; nobody needs it.
+revoke execute on function public.guard_live_stock() from public, anon, authenticated;
 
 -- Sizes are written by save_product_sizes (0039) and nothing else in the app.
 -- The direct grant let a browser bypass both the lock order and the check
 -- below; it goes.
-revoke insert, update, delete on product_sizes from authenticated, anon;
+revoke insert, update, delete, truncate on product_sizes from public, anon, authenticated;
 
 -- ══ 4. reserve_stock: same function as 0058, now in the lock order ══
 create or replace function public.reserve_stock(p_items jsonb, p_order_id uuid default null)
@@ -426,21 +609,63 @@ $fn$;
 revoke execute on function public.cancel_order(uuid, text) from public, anon;
 grant execute on function public.cancel_order(uuid, text) to authenticated, service_role;
 
--- ══ 7. set_product_stock: the one way to change an unsized product's stock ══
+-- ══ 7. Claiming a request ══
+--
+-- Shared by the two admin stock functions; see section 1. Returns NULL when
+-- this call has just claimed the id (go ahead), or the first answer marked
+-- 'already_applied' when the same request was already done. Anything else
+-- about the id — another product, another operation, another payload — is
+-- REQUEST_ID_REUSED. Called only from inside those functions, after the
+-- product lock, so a concurrent duplicate waits on the primary key.
+create or replace function public.claim_stock_request(
+  p_request_id uuid,
+  p_product_id uuid,
+  p_operation text,
+  p_digest text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+declare
+  prior public.stock_requests%rowtype;
+begin
+  insert into public.stock_requests (request_id, product_id, operation, digest, actor_id)
+  values (p_request_id, p_product_id, p_operation, p_digest, auth.uid())
+  on conflict (request_id) do nothing;
+  if found then
+    return null;
+  end if;
+
+  select * into prior from public.stock_requests where request_id = p_request_id;
+  if prior.product_id is distinct from p_product_id
+     or prior.operation is distinct from p_operation
+     or prior.digest is distinct from p_digest then
+    raise exception 'REQUEST_ID_REUSED'
+      using hint = 'Each stock request needs its own id. This one was already used for a different change.';
+  end if;
+  return prior.outcome || jsonb_build_object('status', 'already_applied');
+end;
+$fn$;
+
+revoke execute on function public.claim_stock_request(uuid, uuid, text, text) from public, anon, authenticated;
+
+-- ══ 8. set_product_stock: the one way to change an unsized product's stock ══
 --
 -- Contract:
 --   p_expected    the figure the admin was looking at. If the shelf no longer
 --                 says that, nothing changes and STOCK_CHANGED:<live> is raised.
 --   p_quantity    the new absolute figure. Never negative.
---   p_request_id  names this attempt. If a movement with it already exists,
---                 the attempt already landed: the answer is 'already_applied'
---                 and nothing changes. A retry is only safe with the SAME id.
+--   p_request_id  names this attempt (section 1). The same id with the same
+--                 product, expected, quantity and reason returns the first
+--                 answer as 'already_applied'; with anything different it is
+--                 REQUEST_ID_REUSED. A refused attempt does not spend its id.
 --
 -- Outcomes: 'applied' (moved, movement written), 'unchanged' (expected matched
--- and was already the requested figure — nothing written, so a retry is
--- re-evaluated against the shelf), 'already_applied', or — for a product never
--- published — 'opening_stock', which sets the draft's figure (there is no
--- shelf yet, so no movement; its idempotency is the expected check alone).
+-- and was already the requested figure — nothing moved), 'already_applied', or
+-- — for a product never published — 'opening_stock', which sets the draft's
+-- figure (there is no shelf yet, so no movement).
 --
 -- The draft, if there is one, is brought to the same figure so the admin's
 -- draft-merged view does not show a number the next publish would ignore.
@@ -460,7 +685,8 @@ as $fn$
 declare
   live_id  uuid;
   live_qty integer;
-  seen     stock_movements%rowtype;
+  replay   jsonb;
+  result   jsonb;
 begin
   if not public.is_admin() then
     raise exception 'Only admins can edit stock';
@@ -474,39 +700,36 @@ begin
   if p_quantity is null or p_quantity < 0 then
     raise exception 'NEGATIVE_STOCK';
   end if;
-  if p_reason not in ('correction', 'restock') then
+  if p_reason is null or p_reason not in ('correction', 'restock') then
     raise exception 'Unknown stock movement reason: %', p_reason;
   end if;
 
-  perform 1 from products where id = p_product_id for no key update;
+  perform 1 from public.products where id = p_product_id for no key update;
   if not found then
     raise exception 'No such product';
   end if;
 
-  select * into seen from stock_movements where request_id = p_request_id limit 1;
-  if found then
-    if seen.product_id is distinct from p_product_id then
-      raise exception 'REQUEST_ID_REUSED';
-    end if;
-    return jsonb_build_object('status', 'already_applied',
-      'quantity', (select stock_quantity from product_versions
-                    where product_id = p_product_id and state = 'published'));
+  replay := public.claim_stock_request(
+    p_request_id, p_product_id, 'set_product_stock',
+    md5(concat_ws('|', p_product_id, p_expected, p_quantity, p_reason)));
+  if replay is not null then
+    return replay;
   end if;
 
-  if exists (select 1 from product_sizes where product_id = p_product_id) then
+  if exists (select 1 from public.product_sizes where product_id = p_product_id) then
     raise exception 'SIZED_PRODUCT'
       using hint = 'A sized product''s stock is per size: use save_product_sizes.';
   end if;
 
   select id, stock_quantity into live_id, live_qty
-    from product_versions
+    from public.product_versions
    where product_id = p_product_id and state = 'published'
    for update;
 
   if not found then
     -- Never published: the only figure is the draft's opening stock.
     select id, stock_quantity into live_id, live_qty
-      from product_versions
+      from public.product_versions
      where product_id = p_product_id and state = 'draft'
      for update;
     if not found then
@@ -515,38 +738,37 @@ begin
     if live_qty <> p_expected then
       raise exception 'STOCK_CHANGED:%', live_qty;
     end if;
-    update product_versions set stock_quantity = p_quantity where id = live_id;
-    return jsonb_build_object('status', 'opening_stock', 'quantity', p_quantity);
-  end if;
-
-  if live_qty <> p_expected then
+    update public.product_versions set stock_quantity = p_quantity where id = live_id;
+    result := jsonb_build_object('status', 'opening_stock', 'quantity', p_quantity);
+  elsif live_qty <> p_expected then
     raise exception 'STOCK_CHANGED:%', live_qty;
+  elsif p_quantity = live_qty then
+    result := jsonb_build_object('status', 'unchanged', 'quantity', live_qty);
+  else
+    update public.product_versions set stock_quantity = p_quantity where id = live_id;
+    update public.product_versions set stock_quantity = p_quantity
+     where product_id = p_product_id and state = 'draft';
+    update public.products set stock_quantity = p_quantity where id = p_product_id;
+
+    insert into public.stock_movements
+      (product_id, size_label, delta, reason, note, actor_id, request_id)
+    values
+      (p_product_id, null, p_quantity - live_qty, p_reason,
+       coalesce(p_note, 'Edited in the admin'), auth.uid(), p_request_id);
+
+    result := jsonb_build_object('status', 'applied', 'quantity', p_quantity,
+                                 'delta', p_quantity - live_qty);
   end if;
 
-  if p_quantity = live_qty then
-    return jsonb_build_object('status', 'unchanged', 'quantity', live_qty);
-  end if;
-
-  update product_versions set stock_quantity = p_quantity where id = live_id;
-  update product_versions set stock_quantity = p_quantity
-   where product_id = p_product_id and state = 'draft';
-  update products set stock_quantity = p_quantity where id = p_product_id;
-
-  insert into stock_movements
-    (product_id, size_label, delta, reason, note, actor_id, request_id)
-  values
-    (p_product_id, null, p_quantity - live_qty, p_reason,
-     coalesce(p_note, 'Edited in the admin'), auth.uid(), p_request_id);
-
-  return jsonb_build_object('status', 'applied', 'quantity', p_quantity,
-                            'delta', p_quantity - live_qty);
+  update public.stock_requests set outcome = result where request_id = p_request_id;
+  return result;
 end;
 $fn$;
 
 revoke execute on function public.set_product_stock(uuid, integer, integer, uuid, text, text) from public, anon;
 grant execute on function public.set_product_stock(uuid, integer, integer, uuid, text, text) to authenticated, service_role;
 
--- ══ 8. save_product_sizes: only what the admin changed, and only if unchanged since ══
+-- ══ 9. save_product_sizes: only what the admin changed, and only if unchanged since ══
 --
 -- 0039's version upserted every size the form sent at the quantity the form
 -- sent, and deleted every size it did not send. A form open across a sale
@@ -554,19 +776,26 @@ grant execute on function public.set_product_stock(uuid, integer, integer, uuid,
 -- adding a size deleted it.
 --
 -- Each element is now one of:
---   {label, stock_quantity, expected}   an existing size. When stock_quantity
---                                       equals expected the admin did not
---                                       touch the count: only the label's
---                                       casing and position are saved, and the
---                                       live count is left alone whatever it is.
---                                       Otherwise the live count must still be
+--   {id?, label, stock_quantity, expected}  an existing size. When
+--                                       stock_quantity equals expected the
+--                                       admin did not touch the count: only the
+--                                       label's casing and position are saved,
+--                                       and the live count is left alone. Else
+--                                       the live count must still be
 --                                       `expected`, or STOCK_CHANGED.
 --   {label, stock_quantity}             a new size (expected absent or null).
 --                                       If the size exists after all, the admin
 --                                       could not have seen its count: refused.
---   {label, remove: true, expected}     delete a size, only if its count is
+--   {id?, label, remove: true, expected} delete a size, only if its count is
 --                                       still `expected`. Already gone is fine.
 -- Sizes not mentioned are left exactly as they are.
+--
+-- `id`, when given, is the size row the form loaded. It must belong to
+-- p_product_id and carry the same name, so a payload built for one product can
+-- never reach another product's sizes; the form always sends it.
+--
+-- p_request_id, when given, is claimed as in section 1, over the product and
+-- the whole payload.
 --
 -- BOUNDED COMPATIBILITY. The old 3-argument function is dropped, not kept
 -- beside this one: a PostgREST call naming p_product_id and p_sizes resolves to
@@ -588,6 +817,9 @@ set search_path = public, pg_temp
 as $fn$
 declare
   item      jsonb;
+  v_id      uuid;
+  v_row_id  uuid;
+  v_row     text;
   v_label   text;
   v_qty     integer;
   v_expect  integer;
@@ -598,20 +830,25 @@ declare
   v_logged  integer := 0;
   v_saved   integer := 0;
   seen      text[] := array[]::text[];
+  replay    jsonb;
+  result    jsonb;
 begin
   if not public.is_admin() then
     raise exception 'Only admins can edit stock';
   end if;
 
-  perform 1 from products where id = p_product_id for no key update;
+  perform 1 from public.products where id = p_product_id for no key update;
   if not found then
     raise exception 'No such product';
   end if;
 
-  if p_request_id is not null and exists (
-    select 1 from stock_movements where request_id = p_request_id
-  ) then
-    return jsonb_build_object('status', 'already_applied', 'saved', 0, 'logged', 0);
+  if p_request_id is not null then
+    replay := public.claim_stock_request(
+      p_request_id, p_product_id, 'save_product_sizes',
+      md5(p_product_id::text || '|' || coalesce(p_sizes, '[]'::jsonb)::text));
+    if replay is not null then
+      return replay;
+    end if;
   end if;
 
   for item in select * from jsonb_array_elements(coalesce(p_sizes, '[]'::jsonb)) loop
@@ -619,6 +856,7 @@ begin
     v_remove := coalesce((item ->> 'remove')::boolean, false);
     v_expect := (item ->> 'expected')::integer;
     v_qty    := (item ->> 'stock_quantity')::integer;
+    v_id     := nullif(item ->> 'id', '')::uuid;
 
     if v_label = '' then
       continue;
@@ -633,11 +871,22 @@ begin
       raise exception 'NEGATIVE_STOCK:%', v_label;
     end if;
 
-    select stock_quantity into v_live
-      from product_sizes
-     where product_id = p_product_id and lower(label) = lower(v_label)
-     for update;
-    v_found := found;
+    if v_id is not null then
+      select id, label, stock_quantity into v_row_id, v_row, v_live
+        from public.product_sizes
+       where id = v_id and product_id = p_product_id
+       for update;
+      v_found := found;
+      if v_found and lower(v_row) <> lower(v_label) then
+        raise exception 'SIZE_MISMATCH:%', v_label;
+      end if;
+    else
+      select id, label, stock_quantity into v_row_id, v_row, v_live
+        from public.product_sizes
+       where product_id = p_product_id and lower(label) = lower(v_label)
+       for update;
+      v_found := found;
+    end if;
 
     if v_remove then
       if not v_found then
@@ -647,13 +896,12 @@ begin
         raise exception 'STOCK_CHANGED:%:%', v_label, v_live;
       end if;
       if v_live <> 0 then
-        insert into stock_movements (product_id, size_label, delta, reason, note, actor_id, request_id)
+        insert into public.stock_movements (product_id, size_label, delta, reason, note, actor_id, request_id)
         values (p_product_id, v_label, -v_live, 'correction',
                 coalesce(p_note, 'Size removed in the product form'), auth.uid(), p_request_id);
         v_logged := v_logged + 1;
       end if;
-      delete from product_sizes
-       where product_id = p_product_id and lower(label) = lower(v_label);
+      delete from public.product_sizes where id = v_row_id;
       continue;
     end if;
 
@@ -664,30 +912,31 @@ begin
 
       if v_qty = v_expect then
         -- The admin did not touch this count. Save the label and position only.
-        update product_sizes
+        update public.product_sizes
            set label = v_label, sort_order = v_sort
-         where product_id = p_product_id and lower(label) = lower(v_label);
+         where id = v_row_id;
       else
         if v_live <> v_expect then
           raise exception 'STOCK_CHANGED:%:%', v_label, v_live;
         end if;
-        update product_sizes
+        update public.product_sizes
            set stock_quantity = v_qty, label = v_label, sort_order = v_sort
-         where product_id = p_product_id and lower(label) = lower(v_label);
-        insert into stock_movements (product_id, size_label, delta, reason, note, actor_id, request_id)
+         where id = v_row_id;
+        insert into public.stock_movements (product_id, size_label, delta, reason, note, actor_id, request_id)
         values (p_product_id, v_label, v_qty - v_live, 'correction',
                 coalesce(p_note, 'Edited in the product form'), auth.uid(), p_request_id);
         v_logged := v_logged + 1;
       end if;
     else
-      if v_expect is not null then
-        -- The admin saw this size, and it has since been removed.
+      if v_expect is not null or v_id is not null then
+        -- The admin saw this size, and it has since been removed (or it was
+        -- never this product's size at all).
         raise exception 'STOCK_CHANGED:%:gone', v_label;
       end if;
-      insert into product_sizes (product_id, label, stock_quantity, sort_order)
+      insert into public.product_sizes (product_id, label, stock_quantity, sort_order)
       values (p_product_id, v_label, v_qty, v_sort);
       if v_qty > 0 then
-        insert into stock_movements (product_id, size_label, delta, reason, note, actor_id, request_id)
+        insert into public.stock_movements (product_id, size_label, delta, reason, note, actor_id, request_id)
         values (p_product_id, v_label, v_qty, 'restock',
                 coalesce(p_note, 'Size added in the product form'), auth.uid(), p_request_id);
         v_logged := v_logged + 1;
@@ -698,14 +947,18 @@ begin
     v_saved := v_saved + 1;
   end loop;
 
-  return jsonb_build_object('status', 'applied', 'saved', v_saved, 'logged', v_logged);
+  result := jsonb_build_object('status', 'applied', 'saved', v_saved, 'logged', v_logged);
+  if p_request_id is not null then
+    update public.stock_requests set outcome = result where request_id = p_request_id;
+  end if;
+  return result;
 end;
 $fn$;
 
 revoke execute on function public.save_product_sizes(uuid, jsonb, text, uuid) from public, anon;
 grant execute on function public.save_product_sizes(uuid, jsonb, text, uuid) to authenticated, service_role;
 
--- ══ 9. publish_one: carry the live stock forward ══
+-- ══ 10. publish_one: carry the live stock forward ══
 -- Only the product branch changes; the others are restated from 0018 as they
 -- were, because a function is replaced whole.
 create or replace function public.publish_one(p_kind text, p_id uuid, p_key text default null)
@@ -832,7 +1085,7 @@ $$;
 revoke execute on function public.publish_one(text, uuid, text) from public, anon;
 grant execute on function public.publish_one(text, uuid, text) to authenticated;
 
--- ══ 10. publish_all: the same, for every product at once ══
+-- ══ 11. publish_all: the same, for every product at once ══
 -- Restated from 0015. The product section now works on a fixed set: the
 -- products that had drafts when their locks were taken, locked by id. A draft
 -- opened for another product while this runs is left for the next publish
@@ -976,9 +1229,31 @@ select
      where n.nspname = 'public' and p.proname = 'reserve_stock') as reserve_overloads_must_be_1,
   (select has_function_privilege('authenticated', 'public.reserve_stock(jsonb, uuid)', 'EXECUTE')) as reserve_authenticated_must_be_false,
   (select has_function_privilege('anon', 'public.set_product_stock(uuid, integer, integer, uuid, text, text)', 'EXECUTE')) as set_stock_anon_must_be_false,
-  -- Should be zero: a live unsized product whose draft and published stock
-  -- differ is exactly what the old publish would have "restored".
+  (select has_function_privilege('anon', 'public.publish_one(text, uuid, text)', 'EXECUTE')
+       or has_function_privilege('anon', 'public.publish_all()', 'EXECUTE')) as publish_anon_must_be_false,
+  (select has_function_privilege('authenticated', 'public.claim_stock_request(uuid, uuid, text, text)', 'EXECUTE')) as claim_api_must_be_false,
+  (select has_table_privilege('authenticated', 'stock_movements', 'INSERT')
+       or has_table_privilege('anon', 'stock_movements', 'INSERT')) as movements_api_insert_must_be_false,
+  (select has_schema_privilege('authenticated', 'public', 'CREATE')
+       or has_schema_privilege('anon', 'public', 'CREATE')) as api_create_on_public_must_be_false,
+  -- Every function on a stock, publish, cancel or draft path resolves names
+  -- with pg_temp last (section 0).
+  (select count(*)::int from pg_proc p
+    where p.pronamespace = 'public'::regnamespace
+      and p.proname in ('product_size_total', 'derive_version_stock', 'resync_versions_from_sizes',
+                        'is_admin', 'log_admin_action', 'record_product_path', 'product_path',
+                        'require_images_to_publish', 'sync_published_product_extras',
+                        'orders_cancel_needs_credit_note', 'issue_credit_note', 'validate_publish',
+                        'ensure_product_draft', 'create_product_draft', 'draft_is_noop', 'settle_draft',
+                        'gallery_matches', 'pending_queue', 'pending_changes', 'discard_one',
+                        'discard_drafts', 'checkout_prices', 'reserve_stock', 'release_stock',
+                        'cancel_order', 'claim_stock_request', 'set_product_stock',
+                        'save_product_sizes', 'publish_one', 'publish_all', 'guard_live_stock')
+      and not (coalesce(p.proconfig, '{}') @> array['search_path=public, pg_temp'])) as stock_path_fns_without_pg_temp_last_must_be_0,
+  -- Informational, not an error: drafts of live unsized products whose copied
+  -- stock has drifted from the shelf. Before 0060 publishing them would have
+  -- overwritten the shelf; now publishing ignores the figure.
   (select count(*)::int from product_versions d
      join product_versions pub on pub.product_id = d.product_id and pub.state = 'published'
     where d.state = 'draft' and d.stock_quantity is distinct from pub.stock_quantity
-      and public.product_size_total(d.product_id) is null) as drafts_with_stale_stock_now_harmless;
+      and public.product_size_total(d.product_id) is null) as drafts_with_stale_stock_now_ignored;

@@ -403,8 +403,19 @@ console.log("\n=== GATE 25 + 26: privacy and no-judge ===");
 console.log("\n=== GATE 29: protected areas ===");
 {
   const migs = fs.readdirSync("supabase/migrations");
-  t("no migration 0060", migs.filter((f) => /^0060_/.test(f)).length === 0);
-  t("0058 still not taken", migs.filter((f) => /^0058_/.test(f)).length === 0);
+  // The AI phases must not change the schema. These guards used to pin migration
+  // NUMBERS ("no 0060", "0058 still not taken" — 0058 was held for the parked
+  // settlement PR). Other work has since taken both numbers legitimately, so the
+  // guard is now what the numbers stood for: 0058 is the payment migration, and
+  // no migration after 0059 (the AI phase's own) touches an AI object.
+  const AI_OBJECT = /\b(ai|chat|eval)_[a-z_]+/;
+  const sqlOf = (f: string) =>
+    fs.readFileSync(`supabase/migrations/${f}`, "utf8").split("\n").filter((l: string) => !/^\s*--/.test(l)).join("\n");
+  const laterAiMigrations = migs.filter((f: string) => /^\d{4}_/.test(f) && Number(f.slice(0, 4)) > 59 && AI_OBJECT.test(sqlOf(f)));
+  t("the guard can see an AI migration (it flags 0059's own objects)", AI_OBJECT.test(sqlOf("0059_ai_daily_spend.sql")));
+  t("no migration after 0059 touches an AI object", laterAiMigrations.length === 0, laterAiMigrations.join(", "));
+  t("0058 is the payment settlement migration, not an AI one",
+    JSON.stringify(migs.filter((f: string) => /^0058_/.test(f))) === JSON.stringify(["0058_settlement_is_idempotent.sql"]));
   t("no provider added to the live entrypoint",
     !fs.readFileSync("scripts/ai-eval-live.ts", "utf8").includes("anthropicProvider"));
   t("chat route untouched by 2.5B",

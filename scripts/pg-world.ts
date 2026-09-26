@@ -64,6 +64,15 @@ alter table storage.objects enable row level security;
 create or replace function storage.foldername(name text) returns text[] language sql immutable as
   $f$ select string_to_array(name, '/') $f$;
 grant usage on schema auth, storage to anon, authenticated, service_role;
+-- Supabase's own grants, so permission tests mean something: every table,
+-- function and sequence created in public is granted to the API roles unless a
+-- migration revokes it, and — the worst case, not confirmed for this project —
+-- the API roles may CREATE in public. Migrations must hold up against that.
+grant usage on schema public to anon, authenticated, service_role;
+grant create on schema public to anon, authenticated;
+alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
 `;
 
 interface EmbeddedPostgresCtor {

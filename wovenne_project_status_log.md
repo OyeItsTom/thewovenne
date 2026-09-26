@@ -2183,3 +2183,56 @@ Run them with `PG_HARNESS_DIR=<dir containing node_modules/embedded-postgres>`.
 `scripts/stock-history-audit.sql` read-only, then applies 0060. Deploy the app
 straight after the migration, and don't edit stock in the admin during that
 window. Verify the function fingerprints recorded in the PR.
+
+### Stage 3 — security review, 26 September 2026
+
+Review corrections are folded into 0060 (still unapplied), branch
+`fix/draft-stock-integrity`:
+
+- **Temp-table shadowing — fixed.** A `SECURITY DEFINER` function with
+  `search_path = public` resolves tables in the caller's `pg_temp` first.
+  Reproduced on the real engine: a caller's temporary `product_sizes` made
+  0056's trigger write 99 onto live stock, and an empty one made a paid sale
+  skip its size. Every function on a stock, publish, cancel or draft path — and
+  every trigger those writes fire — now has `search_path = public, pg_temp`.
+  The three 0056 functions are restated with qualified names. `CREATE` on
+  `public` is revoked from the API roles.
+  **Not reachable through PostgREST**, which can't issue `CREATE`, but it was
+  wrong regardless. The other 44 `SECURITY DEFINER` functions (of 74)
+  (chat, style, AI…) still use `public` alone. That is a follow-up, not part
+  of this change.
+- **Direct writes.** For `anon` and `authenticated`, `guard_live_stock` now
+  also refuses writing `state`, inserting a non-draft version, and writing
+  stock into a live product's draft (`STOCK_IS_LIVE`). That last one turns an
+  old admin tab's silent stock edit into a visible error. The API roles also
+  lose insert, update and delete on `stock_movements`.
+- **Request ids.** A new `stock_requests` claim table binds each id to its
+  product, operation and payload digest. An identical retry returns the first
+  answer. Any difference raises `REQUEST_ID_REUSED`. A refused attempt doesn't
+  spend its id, and concurrent duplicates serialise on the primary key.
+  `save_product_sizes` also binds each size to its row `id` and product.
+- **Tests.** The harness now grants what Supabase grants by default, plus
+  `CREATE` on `public` as a worst case. Results:
+
+  | Suite | Result | Notes |
+  |---|---|---|
+  | `stock-security.test.ts` | 81 | New. Before/after shadow controls, whole flow with every table shadowed, EXECUTE matrix, refused callers, direct writes, request-id binding |
+  | `stock-integrity.test.ts` | 126 | |
+  | `stock-concurrency.test.ts` | 68 | New scenario H, duplicate and reused request ids. Six clean runs |
+  | `inventory.test.ts` | 35 | |
+
+- **AI suite guards.** The migration-number guards in `ai-eval`,
+  `ai-eval-live` and `ai-grounding` ("0058 still not taken", "no migration
+  0060") pinned numbers other work has since legitimately taken. They are
+  replaced by what they stood for: 0058 is the settlement migration, and no
+  migration after 0059 touches an `ai_`, `chat_` or `eval_` object. A
+  self-check confirms the detector flags 0059, and a throwaway 0061 probe was
+  caught. All three suites pass.
+- **History audit.** Now covers unsized publications, sized form-overwrite
+  candidates, and sizes whose count disagrees with their movements. Every row
+  carries a confidence (conclusive, candidate, needs review, inconclusive).
+  The log start is explicit: 0038 was merged on 8 August 2026, and its
+  application time was never recorded.
+
+Deployment goes migration first, under an admin write freeze. The procedure is
+in the PR. **Neither step is authorised yet.**

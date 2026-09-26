@@ -32,9 +32,9 @@ export interface EditedSize {
 }
 
 export type SizeChange =
-  | { label: string; stock_quantity: number; expected: number }
+  | { id: string; label: string; stock_quantity: number; expected: number }
   | { label: string; stock_quantity: number }
-  | { label: string; remove: true; expected: number };
+  | { id: string; label: string; remove: true; expected: number };
 
 const key = (label: string) => label.trim().toLowerCase();
 const count = (n: unknown) => Math.max(0, Math.floor(Number(n) || 0));
@@ -53,6 +53,10 @@ const count = (n: unknown) => Math.max(0, Math.floor(Number(n) || 0));
  *
  * A loaded size that is removed and a size of the same name added back is one
  * size edited, not a removal and a restock.
+ *
+ * Every existing size goes out with the id of the row the form loaded. The
+ * database refuses one that is not this product's, so a payload can only ever
+ * touch the sizes it was built from (migration 0060).
  */
 export function sizeChanges(loaded: LoadedSize[], edited: EditedSize[]): SizeChange[] {
   const rows = edited
@@ -83,12 +87,12 @@ export function sizeChanges(loaded: LoadedSize[], edited: EditedSize[]): SizeCha
 
   const removals: SizeChange[] = loaded
     .filter((l) => !claimedIds.has(l.id))
-    .map((l) => ({ label: l.label, remove: true as const, expected: l.stock_quantity }));
+    .map((l) => ({ id: l.id, label: l.label, remove: true as const, expected: l.stock_quantity }));
 
   const writes: SizeChange[] = rows.map((r) => {
     const was = claimed.get(key(r.label));
     return was
-      ? { label: r.label, stock_quantity: r.stock_quantity, expected: was.stock_quantity }
+      ? { id: was.id, label: r.label, stock_quantity: r.stock_quantity, expected: was.stock_quantity }
       : { label: r.label, stock_quantity: r.stock_quantity };
   });
 
@@ -135,6 +139,19 @@ export function stockErrorMessage(raw: string): { message: string; live: number 
   }
   if (/SIZED_PRODUCT/.test(raw)) {
     return { message: "This product has sizes — change its stock size by size in the product form.", live: null };
+  }
+  m = /SIZE_MISMATCH:(.+)/.exec(raw);
+  if (m) {
+    return { message: `Size ${m[1].trim()} no longer matches what this form loaded. Nothing in the sizes was saved — reopen the product.`, live: null };
+  }
+  if (/REQUEST_ID_REUSED/.test(raw)) {
+    return { message: "That save could not be matched to the change it claimed to be. Nothing was changed — try again.", live: null };
+  }
+  if (/STOCK_IS_LIVE/.test(raw)) {
+    return { message: "Stock on a live product is changed on the shelf, not in a draft. This page is out of date — reload it.", live: null };
+  }
+  if (/VERSION_STATE_LOCKED/.test(raw)) {
+    return { message: "Products go live only through Publish. This page is out of date — reload it.", live: null };
   }
   if (/LIVE_STOCK_LOCKED/.test(raw)) {
     return { message: "Live stock can only be changed through the stock field. Reload and try again.", live: null };
