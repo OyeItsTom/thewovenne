@@ -2053,10 +2053,59 @@ database, and ai-eval-live, because it makes real model calls.
   path while `product_url_history` stores unprefixed paths. Old category-path
   redirects also emit an unprefixed hop (for example `/in/women/sarees/mul-cotton`
   → `/women/sarees/…` → `/in/women/sarees/…`). This is the next technical SEO
-  PR.
+  PR. **Resolved by #157** — see "Legacy product redirects — closed 26
+  September 2026" below.
 - The "More From the Loom" related-products heading, which is wrong for
   jewellery.
 - The journal eyebrow "From the loom".
 - The admin label "Why linen" for the Why Us block.
 - The ai-eval and ai-grounding stale migration-0058 guards (a known baseline
   failure).
+
+## Legacy product redirects — closed 26 September 2026
+
+**Code.** PR #157 (`533d950`) is merged. Production deployment `6678132846`
+serves `533d950` exactly.
+
+**What was wrong.** `product_url_history` (migration 0017) stores paths
+without the market prefix, and #69 moved the routes under `/in` without
+changing the table. The flat route looked up `/in/product/<slug>`, which no
+row can match, so every renamed product's old flat link 404'd. The category
+route redirected to the table's unprefixed answer, so old links took a second
+308 through middleware.
+
+**The fix.** History keys are built unprefixed by `flatProductHistoryPath()`
+and `categoryProductHistoryPath()` (`lib/redirects.ts`). `resolveMovedPath()`
+keeps the self-redirect guard (compared unprefixed) and the reachable-product
+check, refuses non-local destinations, and adds the `/in` prefix once with
+`cPath`. Redirects remain 308. No product, URL-history, inventory, payment,
+shipping, middleware or migration change.
+
+**Tests.** `scripts/seo-redirects.test.ts`: 11 failures before the fix, 36/36
+after. seo-canonical, seo-indexing, seo-metadata, seo-descriptions and
+seo-structured-data are unchanged, and tsc, lint and `next build` pass.
+
+**Live, 26 September 2026 (production GETs, each hop followed by hand and
+matched by `curl -L`):**
+- `/in/product/violet-w-blue-border` → 308 →
+  `/in/women/sarees/violet-mul-cotton-saree-with-blue-and-pure-zari` → 200.
+- `/in/women/sarees/mul-cotton` → 308 →
+  `/in/women/sarees/parrot-green-mul-cotton-saree` → 200.
+- `/in/product/mul-cotton` → 308 → the parrot green page → 200.
+- Unprefixed old URLs keep the middleware's initial redirect: two hops
+  (middleware, then history) → 200.
+- Unknown, wrong-category, wrong-case and encoded-slash paths → 404. Invalid
+  encodings → 400. No external, wrong-product or looping redirect.
+- Both canonical pages: 200, self-canonical, indexable, Product and
+  BreadcrumbList intact, ₹1599 InStock. The sitemap lists the canonicals and
+  no old URLs.
+
+**Worth knowing.** Observed locally only, not reproduced in production:
+`next start` (14.2.5) serves a cached ISR redirect as a 308 with no `Location`
+header (the target is only in the body), so `curl -L` stops. On Vercel,
+repeated cache HITs kept the correct `Location`. Verify redirect chains on a
+deployment, not on a local build.
+
+**Not verified.** Only three historical mappings were tested end to end; the
+complete `product_url_history` table was not audited. Still open: a renamed
+product whose category has no published parent 404s at its old URL.
