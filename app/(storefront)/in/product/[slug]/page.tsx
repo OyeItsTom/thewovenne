@@ -10,7 +10,7 @@ import { getProductSizes } from "@/lib/sizes";
 import { productHref } from "@/lib/urls";
 import { productMetaDescription } from "@/lib/metadata";
 import ProductDetail from "@/components/product/ProductDetail";
-import { openGraph } from "@/lib/seo";
+import { openGraph, productImageUrl } from "@/lib/seo";
 
 /**
  * The old flat product URL.
@@ -68,7 +68,7 @@ export async function generateMetadata({
       title: product.name,
       description,
       path: productHref(product),
-      images: [product.image_url],
+      images: [product.image_url ? productImageUrl(product.image_url, "openGraph") : null],
     }),
   };
 }
