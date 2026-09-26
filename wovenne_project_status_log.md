@@ -2109,3 +2109,89 @@ deployment, not on a local build.
 **Not verified.** Only three historical mappings were tested end to end; the
 complete `product_url_history` table was not audited. Still open: a renamed
 product whose category has no published parent 404s at its old URL.
+
+## SEO-6A: indexable product images and written-only care — closed 26 September 2026
+
+**Code.** PR #159 (`40a1a94`, `25bb48f`) merged as `12cac8f`. Production
+deployment `6679337489` succeeded for `12cac8f`; every live product page
+serves the new markup.
+
+**Why.** Supabase Storage sends `X-Robots-Tag: none` on every public object
+unless it was uploaded with an `x-robots-tag` header (supabase/storage
+`src/storage/renderer/renderer.ts`, default `'none'` since PR #776, Nov 2025;
+overridable per object only, stored in `storage.objects.metadata.xRobotsTag`).
+Product JSON-LD `image` and product og:image named those raw URLs, and Google's
+merchant-listing guidance requires product image URLs to be crawlable and
+indexable. Separately, none of the live fabric labels ("Cotton", "Handloom 120
+count mul cotton", "Tissue Cotton") was a key in `CARE_BY_FABRIC`, so 29 of 33
+products showed generic `DEFAULT_CARE` — ironing instructions on jewellery and
+"Handcrafted — slight variations are natural, not flaws" — under a "Made to
+last" eyebrow on all 33.
+
+**What changed.**
+- `productImageUrl()` (`lib/seo.ts`) names the same photograph through the
+  existing `/_next/image` optimizer on www: JSON-LD 1920px/q75 (exactly the PDP
+  frame's own `src`), og:image 1200px/q75. Only https URLs on the exact
+  configured Supabase host, public route, `product-images` bucket, `products/`
+  folder are transformed; everything else is returned unchanged. No proxy, no
+  storage, `next.config.mjs` or robots change. Stored URLs and the gallery are
+  untouched.
+- Care (`lib/care.ts`, `MaterialCare`): only a product's written care note is
+  shown; no note, no Material & Care section. `DEFAULT_CARE` removed;
+  `CARE_BY_FABRIC` kept as dormant data `careFor()` never reads. "Made to last"
+  removed. Related-products eyebrow "More From the Loom" → "More to Discover".
+
+**Tests.** New `seo-images` 73/73 (43 failures against the previous code) and
+`product-care` 39/39 (31 failures against the previous code). Unchanged and
+passing: seo-metadata 125, seo-descriptions 45, seo-canonical 74, seo-indexing
+60, seo-structured-data 114, seo-redirects 36, content-truthfulness 121,
+product-mapping 59, image-optimization 54. tsc and lint clean; local
+`next build` passed (without `.env.local`, so no data rendering); Vercel
+Preview and Production builds succeeded. The Preview itself was behind Vercel
+SSO and was not inspected.
+
+**Live, 26 September 2026** (production HTML, before/after snapshots of all 33
+product URLs in the sitemap, all 200):
+- JSON-LD images: all 33 pages name `www.thewovenne.com/_next/image?…&w=1920&q=75`;
+  the decoded `url` equals the previous raw URL, same count and order, cover
+  first. og:image is the 1200 variant of the same cover on every page.
+- Unchanged on all 33: every other Product/Offer field (name, url, price,
+  availability, material, description, brand, seller), BreadcrumbList, title,
+  meta description, canonical, og:title, og:url and robots.
+- 57 image fetches (19 URLs from 4 products — red saree, Tennis Choker (older
+  PNG), Couple Ring, sold-out Lime green thick border — each as a browser, a
+  WebP-accepting browser and Googlebot-Image): all 200, `image/*`, **no
+  X-Robots-Tag**, `public, max-age=2678400`. Current photos 1920×2560
+  (og 1200×1600); Couple Ring 1920×1440; the older Tennis Choker PNG 1448×1086
+  (not upscaled; og 1200×900).
+- Content: "Made to last" 33 → 0 pages; the generic variations line 29 → 0;
+  Material & Care sections 33 → 4 (the four written notes, text identical);
+  jewellery ironing instructions 2 → 0; "More From the Loom" 30 → 0 and "More
+  to Discover" 0 → 30 (the three products with no related items show neither).
+  The one remaining "handcrafted" is the Floral Embroidered Kasavu saree's own
+  written description, unchanged, for the owner's product-fact review.
+
+**Not verified.** Google's Rich Results Test was not run (no browser access
+from the session). Whether Google indexes the images is a Search Console
+question and will take time.
+
+**Still open — deliberately separate.**
+- Google Rich Results Test on representative textile and jewellery products.
+- Search Console: whether Google indexes the `/_next/image` product images
+  (owner verification; will take time).
+- **Raw Supabase originals still return `X-Robots-Tag: none`.** `/_next/image`
+  is an INTERIM URL for markup; it is not an approved permanent URL for a
+  Merchant Center or OpenAI product feed. SEO-6B (per-object `x-robots-tag` on
+  upload, then an approved decision on existing objects; also the malformed
+  `cache-control: 31536000` on masters) must precede any feed.
+- Older product PNGs are below the 1500px Merchant Center recommendation.
+- A permanent product-feed image strategy (after SEO-6B).
+- Image-optimizer host-pattern hardening: `remotePatterns` allows any
+  `*.supabase.co` host (pre-existing).
+- Owner review of product-specific factual claims: the four written care notes
+  were preserved as written, not verified, and product descriptions (e.g. the
+  Floral Embroidered Kasavu saree's "handcrafted detail") are unreviewed.
+- SEO-6C: sitemap product `lastModified` from `product_versions.published_at`,
+  after the stock-integrity fix merges (it rewrites the functions that set it).
+- Product-fact verification (descriptions, colour, composition, care notes) and
+  Merchant Center activation wait for stock integrity.
