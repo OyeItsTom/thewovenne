@@ -91,7 +91,7 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
         query: {
           type: "string",
           description:
-            "What to look for, in the customer's own words: 'linen shirt', 'red saree', 'something for a wedding'. Every word must match somewhere, so keep it to the meaningful terms.",
+            "What to look for, in the customer's own words: 'mul cotton saree', 'red saree', 'something for a wedding'. Every word must match somewhere, so keep it to the meaningful terms.",
         },
       },
       required: ["query"],
