@@ -1,4 +1,4 @@
-import { customerUrl, PRODUCTION_ORIGIN } from "./seo";
+import { customerUrl, PRODUCTION_ORIGIN, SITE_NAME } from "./seo";
 import { cPath } from "./country";
 
 /**
@@ -19,9 +19,20 @@ import { cPath } from "./country";
  *
  * Deliberately absent, each for a stated reason (see K in the SEO-3 notes):
  *   gtin, mpn        — no such data exists anywhere in the model
- *   sku              — exists, but is derived from the slug (0038's
- *                      sku_from_slug) and is admin-only; it would restate the
- *                      URL as an identifier and tell Google nothing
+ *   sku              — exists as its own stored column and is INTERNAL. The old
+ *                      note here said it was "derived from the slug", which is
+ *                      only how it is SEEDED: 0038's comment on the column is
+ *                      explicit that it is independent afterwards, precisely so
+ *                      that renaming a piece cannot silently repoint an import
+ *                      matching on it. So "it just restates the URL" stopped
+ *                      being the reason. The reason is that it is an operations
+ *                      identifier — the admin product editor, the manual-order
+ *                      picker, the CSV exports and the bulk importer — and no
+ *                      page a customer opens shows it. PRODUCT_SELECT leaves it
+ *                      out of the storefront query for that exact reason.
+ *                      Structured data restates what the site says; an
+ *                      identifier the storefront never says is not ours to
+ *                      publish as product information
  *   itemCondition    — no field records it; true as it almost certainly is,
  *                      "new" is not a fact this codebase holds
  *   ProductGroup     — one URL per product, size chosen client-side, no
@@ -34,7 +45,8 @@ import { cPath } from "./country";
  *                      policies would point at do not exist yet
  */
 
-export const BRAND_NAME = "THE WOVENNE";
+/** One spelling of the brand, shared with the metadata helpers. See lib/seo. */
+export const BRAND_NAME = SITE_NAME;
 
 /** The canonical entity URL: the site's own root, not a market inside it. */
 export const SITE_URL = `${PRODUCTION_ORIGIN}/`;
@@ -112,6 +124,12 @@ export interface ProductNodeInput {
   /** From getRating(). Marked up only when total > 0. */
   rating: { average: number | null; total: number };
   /**
+   * products.fabric, EXACTLY as stored — "Pure Cotton", "Handloom Cotton",
+   * whatever the admin typed and the page prints. Null or absent for anything
+   * with no fabric row, which is every piece of jewellery.
+   */
+  fabric?: string | null;
+  /**
    * When an active discount ends. The discounted price genuinely stops being
    * available then, which is what priceValidUntil means. Null the rest of the
    * time, and then no date is claimed.
@@ -122,13 +140,22 @@ export interface ProductNodeInput {
 /**
  * One product, one offer.
  *
- * DESCRIPTION IS THE PRODUCT'S OWN OR NOTHING. generateMetadata falls back to
- * "Authentic handloom linen from Kerala." for a product nobody has written up,
- * which is fine for a meta description — it is a summary of the shop — and
- * wrong here, where `description` is a statement about THIS piece. A third of
- * the catalogue would otherwise carry one identical sentence as its own
- * description, and one of those products is a copper and cubic-zirconia
- * necklace.
+ * DESCRIPTION IS THE PRODUCT'S OWN OR NOTHING. lib/metadata composes a
+ * stand-in sentence for a product nobody has written up, which is right for a
+ * META description — that tag summarises a PAGE — and wrong here, where
+ * `description` is a statement about THIS piece. `input.description ?? undefined`
+ * is load-bearing and must stay: a third of the catalogue would otherwise carry
+ * a generated sentence as its own schema description. productMetaDescription()
+ * states the same boundary from the other side, and neither function calls the
+ * other.
+ *
+ * MATERIAL IS THE FABRIC ROW OR NOTHING, and it is the one property added since
+ * SEO-3. It restates a value the product page already prints beside the price,
+ * word for word — not a tidied, expanded or inferred version of it. It is NOT
+ * read off a product's name: "Kochi Linen Shirt" with an empty fabric column
+ * gets no material, because what that product is made of is not something this
+ * codebase knows. Jewellery has no fabric and so has no material, rather than
+ * being described as cloth.
  *
  * AVAILABILITY IS BINARY, and comes from the same stockState() call the page
  * renders from. A sized product is InStock when at least one size has stock,
@@ -149,6 +176,9 @@ export function productNode(input: ProductNodeInput) {
     // photograph.
     image: input.images.length > 0 ? input.images : undefined,
     description: input.description ?? undefined,
+    // Trimmed so a whitespace-only cell is absent rather than an empty string:
+    // prune() would drop "" anyway, and saying so here makes it deliberate.
+    material: input.fabric?.trim() || undefined,
     brand: { "@type": "Brand", name: BRAND_NAME },
     offers: {
       "@type": "Offer",

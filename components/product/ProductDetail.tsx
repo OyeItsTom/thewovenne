@@ -94,6 +94,9 @@ export default async function ProductDetail({
           href: productHref(product),
           images,
           description: product.description,
+          // The same column MaterialCare and the fabric line below render, so
+          // the markup and the page cannot name two different materials.
+          fabric: product.fabric,
           price,
           soldOut: stock.soldOut,
           rating,
