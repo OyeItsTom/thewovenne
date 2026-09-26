@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
+import { sizeChanges, stockErrorMessage, type LoadedSize } from "./inventory";
 
 /**
  * Per-product sizes and their stock.
@@ -86,54 +87,38 @@ export interface SizeDraft {
 }
 
 /**
- * Replace a product's sizes with `sizes`, in order.
+ * Save what the admin changed about a product's sizes.
  *
  * Writes immediately — these rows are outside draft/publish, because stock
- * cannot wait for a Publish. Delete-then-upsert rather than diffing: the row
- * count is tiny and this cannot leave a stale size behind.
+ * cannot wait for a Publish. `loaded` is what the form showed when it opened:
+ * each size goes out with the count the admin saw, and the database refuses the
+ * whole save if any count the admin CHANGED has moved on the shelf since
+ * (migration 0060). A count the admin did not touch is never written back, so
+ * an open form cannot restock a size that sold while it was open.
  *
- * Returns an error message, or null on success.
+ * Nothing changed → no call at all. Returns an error message, or null.
  */
 export async function saveProductSizes(
   client: SupabaseClient,
   productId: string,
+  loaded: LoadedSize[],
   sizes: SizeDraft[]
 ): Promise<string | null> {
-  const clean = sizes
-    .map((s) => ({
-      label: s.label.trim(),
-      stock_quantity: Math.max(0, Math.floor(Number(s.stock_quantity) || 0)),
-    }))
-    .filter((s) => s.label.length > 0);
-
-  // Duplicate labels would violate the unique index and lose a row silently.
-  const seen = new Set<string>();
-  for (const s of clean) {
-    const key = s.label.toLowerCase();
-    if (seen.has(key)) return `"${s.label}" is listed twice.`;
-    seen.add(key);
+  let changes;
+  try {
+    changes = sizeChanges(loaded, sizes);
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
   }
+  if (changes.length === 0) return null;
 
-  // One database call, in one transaction, rather than DELETE-then-INSERT from
-  // here. Two reasons, and the second is the serious one:
-  //
-  // 1. Only the database can see what the stock WAS, so only it can work out
-  //    what changed and write the movement rows. A hand correction is exactly
-  //    the entry you want in the log when the counts disagree with the shelf.
-  //
-  // 2. The old sequence deleted every size row and then inserted the new set.
-  //    An insert that failed after the delete succeeded left the product with
-  //    NO SIZES AND NO STOCK, and nothing to restore it from.
+  // One database call, in one transaction: only the database can see what the
+  // stock IS, and a save is either applied whole or refused whole.
   const { error } = await client.rpc("save_product_sizes", {
     p_product_id: productId,
-    p_sizes: clean,
+    p_sizes: changes,
+    p_request_id: crypto.randomUUID(),
   });
 
-  if (!error) return null;
-
-  // The function raises this rather than letting the unique index produce a
-  // message with an index name in it.
-  const duplicate = /DUPLICATE_SIZE:(.+)/.exec(error.message);
-  if (duplicate) return `"${duplicate[1].trim()}" is listed twice.`;
-  return error.message;
+  return error ? stockErrorMessage(error.message).message : null;
 }
