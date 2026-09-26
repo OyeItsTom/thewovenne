@@ -51,7 +51,7 @@ function shell(body: string, siteUrl: string): string {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;">
         <tr><td style="padding-bottom:28px;">
           <div style="font-size:20px;letter-spacing:2px;color:${INK};">THE WOVENNE</div>
-          <div style="font-size:12px;color:${MUTED};margin-top:4px;">Woven in India. Worn for life.</div>
+          <div style="font-size:12px;color:${MUTED};margin-top:4px;">Chosen piece by piece.</div>
         </td></tr>
         ${body}
         <tr><td style="border-top:1px solid #eee;padding-top:20px;font-size:11px;line-height:1.6;color:${MUTED};">

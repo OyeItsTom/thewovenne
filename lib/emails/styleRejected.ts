@@ -74,7 +74,7 @@ export function styleRejectedHtml(d: StyleRejectedData): string {
             <tr>
               <td style="padding-bottom:28px;">
                 <div style="font-size:22px;letter-spacing:2px;color:${INK};">THE WOVENNE</div>
-                <div style="font-size:12px;color:${MUTED};margin-top:4px;">Woven in India. Worn for life.</div>
+                <div style="font-size:12px;color:${MUTED};margin-top:4px;">Chosen piece by piece.</div>
               </td>
             </tr>
             <tr>

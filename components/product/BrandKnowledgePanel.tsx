@@ -28,7 +28,7 @@ export default function BrandKnowledgePanel({
   return (
     <section className="mt-24 border-t border-ink/10 pt-16" aria-labelledby="heritage">
       <div className="text-center">
-        <span className="font-script text-2xl text-terracotta">Woven in India</span>
+        <span className="font-script text-2xl text-terracotta">Chosen piece by piece.</span>
         <h2 id="heritage" className="mt-2 font-heading text-3xl text-ink sm:text-4xl">
           The story of this piece
         </h2>
