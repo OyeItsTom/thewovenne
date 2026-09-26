@@ -14,17 +14,34 @@ import { getBrowserSupabase } from "./supabase";
  */
 export type AdminCheck = "admin" | "not-admin" | "unknown";
 
-export async function checkAdmin(): Promise<AdminCheck> {
+async function ask(fn: "is_admin" | "is_staff"): Promise<AdminCheck> {
   // One retry, because the common failure here is transient: a token being
   // refreshed, a cold start, a dropped connection. Two failures in a row is
   // more likely to be real.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { data, error } = await getBrowserSupabase().rpc("is_admin");
+    const { data, error } = await getBrowserSupabase().rpc(fn);
     if (!error) return data === true ? "admin" : "not-admin";
-    console.error(`checkAdmin (attempt ${attempt + 1}):`, error.message);
+    console.error(`${fn} (attempt ${attempt + 1}):`, error.message);
     if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
   }
   return "unknown";
+}
+
+/**
+ * Admin AUTHORITY: staff and a two-factor-verified session (is_admin, 0062).
+ * For screens that are only reachable after the second factor.
+ */
+export async function checkAdmin(): Promise<AdminCheck> {
+  return ask("is_admin");
+}
+
+/**
+ * Staff IDENTITY, whatever the session's authentication level (is_staff, 0061).
+ * For the login step, which runs BEFORE the second factor: asking is_admin()
+ * there would turn every member of staff away as "not an admin".
+ */
+export async function checkStaff(): Promise<AdminCheck> {
+  return ask("is_staff");
 }
 
 /**

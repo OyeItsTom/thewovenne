@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Lock, Eye, EyeOff } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
-import { checkAdmin } from "@/lib/auth";
+import { checkStaff } from "@/lib/auth";
 import Button from "@/components/ui/Button";
 
 export default function AdminLoginPage() {
@@ -41,10 +41,12 @@ export default function AdminLoginPage() {
       return;
     }
 
-    // Authenticating is not the same as being an admin — customers sign in to
-    // the same Supabase project. Reject non-admins here instead of handing
-    // them a dashboard that RLS would render empty.
-    const admin = await checkAdmin();
+    // Authenticating is not the same as being staff — customers sign in to the
+    // same Supabase project. Reject non-staff here instead of handing them a
+    // dashboard that RLS would render empty. This is the IDENTITY question
+    // (is_staff): the session has only a password so far, and admin authority
+    // (is_admin) needs the second factor, which comes next.
+    const admin = await checkStaff();
 
     // Only sign out on a DEFINITE no. Signing out when the check merely failed
     // threw away a valid session over a network blip — which is what made a

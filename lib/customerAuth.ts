@@ -143,8 +143,11 @@ export async function logIn(email: string, password: string): Promise<AuthResult
     // The session is ended immediately and the message is the SAME as a wrong
     // password. Saying "that's an admin account" would confirm which addresses
     // are staff to anyone who tried a few.
-    const { data: isAdmin } = await supabase.rpc("is_admin");
-    if (isAdmin === true) {
+    // is_staff, not is_admin: this session has only a password, and is_admin
+    // needs a two-factor-verified one (0062), so it would never recognise staff
+    // here. The question is who the account is, not what it may do.
+    const { data: isStaff } = await supabase.rpc("is_staff");
+    if (isStaff === true) {
       await supabase.auth.signOut({ scope: "local" });
       return {
         ok: false,
