@@ -3,22 +3,32 @@ import Image from "next/image";
 import Link from "next/link";
 import { getPublishedPosts } from "@/lib/storefront";
 import WovenSeam from "@/components/weave/WovenSeam";
-import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { openGraph } from "@/lib/seo";
 import { cPath } from "@/lib/country";
 
 export const revalidate = 60;
 
+const TITLE = "The Journal | THE WOVENNE";
+/*
+ * UNCHANGED WORDING, deliberately. This describes the journal's articles, not
+ * the catalogue, and the weavers those articles are about are the ones the
+ * page's own standfirst names two lines below. Rewording the tag while leaving
+ * the visible copy alone would make the two disagree, and editorial copy was
+ * explicitly out of this change's scope. The index still says "website"; a
+ * POST says "article" — see the [slug] route.
+ */
+const DESCRIPTION =
+  "Stories from our Kerala weavers, care guides, and notes from the loom.";
+
 export const metadata: Metadata = {
-  title: "The Journal | THE WOVENNE",
-  description:
-    "Stories from our Kerala weavers, care guides, and notes from the loom.",
+  title: TITLE,
+  description: DESCRIPTION,
   alternates: { canonical: cPath("/journal") },
-  openGraph: {
-    title: "The Journal | THE WOVENNE",
-    description:
-      "Stories from our Kerala weavers, care guides, and notes from the loom.",
-    images: [DEFAULT_OG_IMAGE],
-  },
+  openGraph: openGraph({
+    title: TITLE,
+    description: DESCRIPTION,
+    path: cPath("/journal"),
+  }),
 };
 
 export default async function JournalPage() {
