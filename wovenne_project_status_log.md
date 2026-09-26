@@ -2385,3 +2385,44 @@ in the PR. **Neither step is authorised yet.**
   ~1.2 s and the preflight 37 ms, locally.
 - **Unchanged.** Function fingerprints are identical to the Stage 3 table.
   Nothing has been run against production.
+
+### Production preflight — complete, 26 September 2026 (read-only, run by the owner)
+
+`scripts/stock-0060-preflight.sql` against production gave **25 PASS, 1 REVIEW,
+0 BLOCKER**. The one REVIEW was **F03**: the body of `public.is_admin()` didn't
+hash to the repository's text.
+
+**F03 closed: formatting only.** The evidence, all from read-only queries:
+
+- **Attributes identical to the repository:** owner `postgres`, `sql`,
+  `SECURITY DEFINER`, `STABLE`, `search_path=public`.
+- **Same SQL, byte for byte, once whitespace is removed.** Computed inside
+  production: `regexp_replace(prosrc, '\s', '', 'g')` equals the repository's
+  whitespace-free text (`same_sql_ignoring_all_whitespace = true`), and there
+  are no unusual characters (`unusual_characters = null`). Body length 95 and
+  md5 `af565933219366fb8c1866de13bc2da8` were reproduced by the owner from the
+  raw hex. The decoded body is
+  `select coalesce((select p.is_admin from public.profiles p where p.id = auth.uid()), false);`,
+  laid out differently.
+- **Why the whitespace-insensitive hash still differed:**
+  - It was `md5(regexp_replace(btrim(prosrc), '\s+', ' ', 'g'))`, and
+    `btrim()` with no argument strips spaces, not newlines.
+  - Collapsing also can't create or remove whitespace between tokens:
+    production has `coalesce((select`, the repository `coalesce(` then a
+    newline then `(select`.
+  - Production's normalised text,
+    `' select coalesce((select p.is_admin from public.profiles p where p.id = auth.uid()), false); '`,
+    hashes to exactly the `3533c47ebb1e1d08756cf3ba045fadb1` production
+    reported. That explains the difference completely.
+- **Git holds only one version** of this function (29–30 July), so production's
+  layout came from hand-pasting — consistent with `f6a8567` recording that
+  production was "built from hand-pasted fragments".
+- **0060 compatibility: unaffected.** 0060 only runs
+  `ALTER FUNCTION public.is_admin() SET search_path = public, pg_temp` and never
+  replaces the body. Tested locally with production's body, as a non-superuser:
+  0060 applied, the body was preserved, the search path was hardened, admins
+  were allowed, signed-in customers were refused, and anon was denied.
+
+`is_admin()` is deliberately **not** being changed to match the repository's
+hash. With F03 closed, the preflight is complete, with no BLOCKER and no open
+REVIEW. Next is the read-only history audit.
