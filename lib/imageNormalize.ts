@@ -40,10 +40,69 @@ export const MAX_INPUT_PIXELS = 80_000_000;
 /** Smaller than this is not a product photograph; it is an icon or a mistake. */
 export const MIN_EDGE = 200;
 
-/** A year. Safe only because master names are content-addressed — see masterKey. */
+/**
+ * A year, in seconds. Safe only because master names are content-addressed —
+ * see masterKey. This is the NUMBER, which is what the storage SDK's
+ * `cacheControl` option wants; it is not a header value. See
+ * MASTER_CACHE_CONTROL_HEADER.
+ */
 export const MASTER_CACHE_CONTROL = "31536000";
 /** Staging exists for seconds and is deleted. Nothing should hold on to it. */
 export const STAGING_CACHE_CONTROL = "60";
+
+/**
+ * THE HEADER, WHICH IS NOT THE SAME THING AS THE NUMBER.
+ *
+ * The SDK turns `cacheControl: "31536000"` into `max-age=31536000` itself. A raw
+ * REST upload does no such thing: Supabase stores whatever `cache-control`
+ * header arrives, verbatim (supabase/storage src/storage/uploader.ts), and serves
+ * it back. The backfill and C6 scripts sent the bare number, so 128 masters are
+ * served `cache-control: 31536000` — no directive name, which Next's optimizer
+ * parses as max-age 0 and a browser ignores.
+ */
+export const MASTER_CACHE_CONTROL_HEADER = `max-age=${MASTER_CACHE_CONTROL}`;
+
+/**
+ * Supabase sends `X-Robots-Tag: none` on every public object unless the object
+ * was uploaded with an `x-robots-tag` header (renderer.ts defaults to 'none').
+ * Product photographs are meant to be found. Verified on the hosted service on
+ * 26 September 2026: an upload with this header is served `all` on GET.
+ *
+ * PRODUCT MASTERS ONLY. Staging, customers' style photographs and the journal
+ * keep the default and are not ours to open up here.
+ */
+export const MASTER_ROBOTS_TAG = "all";
+
+/**
+ * The exact headers every master upload sends, whichever client sends it.
+ *
+ * The route passes these through the SDK's `headers` option, which storage-js
+ * applies last, case-insensitively — so they override the SDK's own
+ * cache-control rather than duplicating it, and the SDK path and the raw REST
+ * scripts put identical values on the wire. An x-robots-tag supplied on an
+ * UPDATE is also the only way to keep it: an update without one resets the
+ * stored override (observed on the hosted service).
+ */
+export function masterUploadHeaders(): Record<"cache-control" | "x-robots-tag", string> {
+  return {
+    "cache-control": MASTER_CACHE_CONTROL_HEADER,
+    "x-robots-tag": MASTER_ROBOTS_TAG,
+  };
+}
+
+/**
+ * The SDK upload options for a master. `upsert: false` is the immutability rule:
+ * a content-addressed name that already exists is a duplicate, never a
+ * replacement.
+ */
+export function masterUploadOptions(contentType: string) {
+  return {
+    cacheControl: MASTER_CACHE_CONTROL,
+    upsert: false,
+    contentType,
+    headers: masterUploadHeaders(),
+  };
+}
 
 export const STAGING_PREFIX = "staging";
 export const MASTER_PREFIX = "products";

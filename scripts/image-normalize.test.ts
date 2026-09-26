@@ -29,6 +29,7 @@ import {
   assertUsableSource,
   masterEncoding,
   masterKey,
+  masterUploadOptions,
   needsResize,
   sniffFormat,
   stagingKey,
@@ -92,7 +93,7 @@ async function main() {
     ["jpg", "jpeg", "png", "webp", "avif", "gif"].every((e) => stagingKey(id, e).startsWith("staging/")));
   check("the route never concatenates a caller path", !/body\.(path|key|url)/.test(route));
   check("the route never fetches a caller-supplied URL",
-    !/fetch\(\s*body|fetch\(\s*[a-zA-Z]*[uU]rl\b/.test(route) || route.includes("verifyReadable(publicUrl)"));
+    !/fetch\(\s*body|fetch\(\s*[a-zA-Z]*[uU]rl\b/.test(route) || route.includes("verifyMasterDelivery(publicUrl,"));
   check("only stagingId and ext are accepted from the caller",
     route.includes("stagingId?: string") && route.includes("ext?: string"));
 
@@ -165,7 +166,8 @@ async function main() {
   check("masters live under products/", masterKey(hashA, "jpg").startsWith("products/"));
   refuses("a bogus hash cannot name a master", () => masterKey("../evil", "jpg"), "bad_hash");
   check("the route derives the key from the SOURCE bytes", route.includes('createHash("sha256").update(source)'));
-  check("upsert stays false", route.includes("upsert: false"));
+  check("upsert stays false", masterUploadOptions("image/jpeg").upsert === false
+    && route.includes("masterUploadOptions(encoding.contentType)"));
   check("and a duplicate is treated as success, not an error", route.includes("!isDuplicate(uploadError)"));
 
   console.log("\n=== format: JPEG for photographs, lossless only for real alpha ===");
@@ -318,7 +320,7 @@ async function main() {
   console.log("\n=== transaction order (source contract) ===");
   const iVerifyOut = route.indexOf("VERIFY THE OUTPUT BEFORE ANYTHING IS WRITTEN");
   const iUpload = route.indexOf(".upload(masterPath");
-  const iVerifyMaster = route.indexOf("verifyReadable(publicUrl)");
+  const iVerifyMaster = route.indexOf("verifyMasterDelivery(publicUrl,");
   const iRemove = route.indexOf(".remove([staged])");
   check("the encoded output is verified before it is uploaded", iVerifyOut > 0 && iVerifyOut < iUpload);
   check("the master is uploaded before it is verified", iUpload < iVerifyMaster);
@@ -338,7 +340,8 @@ async function main() {
 
   console.log("\n=== cache control ===");
   check("masters are immutable for a year", String(MASTER_CACHE_CONTROL) === "31536000");
-  check("the route uses it", route.includes("cacheControl: MASTER_CACHE_CONTROL"));
+  check("the route uses it, through the shared options", route.includes("masterUploadOptions(encoding.contentType)")
+    && masterUploadOptions("image/jpeg").cacheControl === MASTER_CACHE_CONTROL);
   check("staging is NOT given the same long life", String(STAGING_CACHE_CONTROL) !== String(MASTER_CACHE_CONTROL));
   check("staging expires in a minute", String(STAGING_CACHE_CONTROL) === "60");
   check("the browser stages with the short value", storage.includes("cacheControl: STAGING_CACHE_CONTROL"));
