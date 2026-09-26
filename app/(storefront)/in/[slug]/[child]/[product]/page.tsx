@@ -7,7 +7,7 @@ import {
   getRelatedProducts,
   getVisibleCategoryTree,
 } from "@/lib/storefront";
-import { resolveOldPath } from "@/lib/redirects";
+import { categoryProductHistoryPath, resolveOldPath } from "@/lib/redirects";
 import { getProductSizes } from "@/lib/sizes";
 import { productHref } from "@/lib/urls";
 import { productMetaDescription } from "@/lib/metadata";
@@ -101,7 +101,7 @@ export default async function ProductPage({
   // links working instead of quietly 404ing.
   if (!product) {
     const moved = await resolveOldPath(
-      `/${params.slug}/${params.child}/${params.product}`
+      categoryProductHistoryPath(params.slug, params.child, params.product)
     );
     if (moved) permanentRedirect(moved);
     notFound();
