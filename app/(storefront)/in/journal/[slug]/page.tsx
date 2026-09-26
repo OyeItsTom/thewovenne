@@ -3,8 +3,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getPostBySlug, getPublishedPosts } from "@/lib/storefront";
-import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { openGraph } from "@/lib/seo";
 import { journalHref } from "@/lib/urls";
+import { metaDescription } from "@/lib/metadata";
 
 export const revalidate = 60;
 
@@ -20,7 +21,14 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const post = await getPostBySlug(params.slug);
   if (!post) return { title: "Story not found | THE WOVENNE" };
-  const description = post.body?.slice(0, 155) ?? undefined;
+  /*
+   * A JOURNAL BODY IS PARAGRAPHS. `post.body?.slice(0, 155)` pasted the raw
+   * blank lines between them straight into the tag and, far more often than
+   * not, ended halfway through a word. metaDescription() collapses the
+   * whitespace and cuts at the last space before the limit. THE ARTICLE ITSELF
+   * IS UNTOUCHED — this reads it and stores nothing.
+   */
+  const description = metaDescription(post.body);
   return {
     title: `${post.title} | THE WOVENNE Journal`,
     description,
@@ -28,11 +36,15 @@ export async function generateMetadata({
     // with no canonical at all, and its 404 takes the not-found boundary's
     // noindex metadata instead of this.
     alternates: { canonical: journalHref(post.slug) },
-    openGraph: {
+    // "article" — the one route on the site where Next's OpenGraph union has
+    // the type that is actually true.
+    openGraph: openGraph({
+      type: "article",
       title: post.title,
       description,
-      images: [post.image_url ?? DEFAULT_OG_IMAGE],
-    },
+      path: journalHref(post.slug),
+      images: [post.image_url],
+    }),
   };
 }
 

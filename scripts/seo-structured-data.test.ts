@@ -145,6 +145,61 @@ ok(
   !JSON.stringify(productNode({ ...base, description: null })).includes("Authentic handloom linen")
 );
 
+console.log("\n=== MATERIAL IS THE FABRIC ROW OR NOTHING ===");
+
+check(
+  "the stored fabric is restated exactly",
+  productNode({ ...base, fabric: "Handloom Cotton" }).material,
+  "Handloom Cotton",
+  "word for word — not tidied, expanded or title-cased"
+);
+check(
+  "an unusual value is carried through untouched",
+  productNode({ ...base, fabric: "Kora Cotton / Zari" }).material,
+  "Kora Cotton / Zari"
+);
+check(
+  "no fabric, no material key",
+  "material" in pruned(productNode({ ...base, fabric: null })),
+  false,
+  "jewellery lives here"
+);
+check(
+  "an absent fabric field is the same as a null one",
+  "material" in pruned(productNode({ ...base })),
+  false
+);
+check(
+  "an empty string is omitted rather than emitted empty",
+  "material" in pruned(productNode({ ...base, fabric: "" })),
+  false
+);
+check(
+  "so is a whitespace-only cell",
+  "material" in pruned(productNode({ ...base, fabric: "   " })),
+  false
+);
+ok(
+  "a jewellery piece carries no material at all",
+  !JSON.stringify(prune(productNode({
+    ...base,
+    name: "Copper & Cubic Zirconia Necklace",
+    description: null,
+    fabric: null,
+  }))).includes("material"),
+  "nothing in the model says what it is made of, so nothing is said"
+);
+ok(
+  "material is never inferred from a product name",
+  productNode({ ...base, name: "Kochi Linen Shirt", fabric: null }).material === undefined,
+  "the name is marketing; the fabric column is the fact"
+);
+check(
+  "and colour is still not marked up",
+  JSON.stringify(productNode({ ...base, fabric: "Cotton" })).includes("\"color\""),
+  false
+);
+
 console.log("\n=== RATINGS ONLY WHERE THERE ARE REVIEWS ===");
 
 check("no reviews, no aggregateRating", aggregateRatingNode(NO_REVIEWS), undefined);
@@ -164,10 +219,34 @@ ok("a reviewed product does", "aggregateRating" in pruned(productNode({ ...base,
 
 console.log("\n=== IDENTIFIERS AND SHAPES DELIBERATELY ABSENT ===");
 
-const reviewed = JSON.stringify(productNode({ ...base, rating: REVIEWED }));
+const reviewed = JSON.stringify(productNode({ ...base, rating: REVIEWED, fabric: "Cotton" }));
 for (const forbidden of ["gtin", "gtin8", "gtin13", "mpn", "sku", "ProductGroup", "hasVariant", "AggregateOffer", "itemCondition"]) {
   ok(`no ${forbidden}`, !reviewed.includes(forbidden));
 }
+ok(
+  "sku stays out even on a product that has every other property filled",
+  !reviewed.toLowerCase().includes("sku"),
+  "it exists and is stored, but it is an admin identifier and no page shows it"
+);
+ok(
+  "and the file gives the current reason, not the stale one",
+  (() => {
+    const src = fs.readFileSync("lib/structuredData.ts", "utf8");
+    // The old note asserted sku was "derived from the slug" full stop, and used
+    // that as the argument for omitting it. Migration 0038's own column comment
+    // says it is seeded from the slug and INDEPENDENT thereafter, so the
+    // argument had to change even though the decision did not.
+    // Comment prose wraps across lines with " * " gutters, so the note is
+    // flattened before matching — otherwise the assertion passes or fails on
+    // where a line happened to break.
+    const flat = src.replace(/\n\s*\*/g, " ").replace(/\s+/g, " ");
+    const claimsDerived = /sku — exists, but is derived from the slug/.test(flat);
+    const givesInternalReason =
+      /operations identifier/.test(flat) && /PRODUCT_SELECT/.test(flat);
+    return !claimsDerived && givesInternalReason;
+  })(),
+  "the reason for omitting sku is that no customer-facing page shows it"
+);
 check("offers is a single Offer, not an array", Array.isArray(node.offers), false);
 
 console.log("\n=== priceValidUntil ===");

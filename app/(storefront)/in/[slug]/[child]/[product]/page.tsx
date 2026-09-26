@@ -10,9 +10,10 @@ import {
 import { resolveOldPath } from "@/lib/redirects";
 import { getProductSizes } from "@/lib/sizes";
 import { productHref } from "@/lib/urls";
+import { productMetaDescription } from "@/lib/metadata";
 import { cPath } from "@/lib/country";
 import ProductDetail from "@/components/product/ProductDetail";
-import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { openGraph } from "@/lib/seo";
 
 /**
  * The canonical product URL — /women/sarees/kerala-kasavu.
@@ -47,9 +48,28 @@ export async function generateMetadata({
   const product = await getProductBySlug(params.product);
   if (!product) return { title: "Product not found | THE WOVENNE" };
 
-  const description =
-    product.description?.slice(0, 155) ??
-    "Authentic handloom linen from Kerala.";
+  /*
+   * THE FALLBACK IS COMPOSED, NOT CANNED. This read
+   * `product.description?.slice(0, 155) ?? "Authentic handloom linen from
+   * Kerala."`, which did two wrong things at once: it cut real descriptions
+   * mid-word and left their paragraph breaks in the tag, and it told a third of
+   * the catalogue — jewellery included — that it was linen from Kerala.
+   *
+   * productMetaDescription() truncates on a word boundary and, where nothing is
+   * written, builds a sentence from values THIS page already shows: the name,
+   * the fabric row, the sub-category. See lib/metadata for what it may not use.
+   *
+   * IT STOPS HERE. The Product node's own `description` stays
+   * `product.description ?? undefined` — a meta description summarises a page,
+   * a schema description states a fact about a piece, and the two must not
+   * share a fallback. See lib/structuredData.
+   */
+  const description = productMetaDescription({
+    name: product.name,
+    description: product.description,
+    categoryName: product.category,
+    fabric: product.fabric,
+  });
 
   return {
     title: `${product.name} | THE WOVENNE`,
@@ -57,11 +77,15 @@ export async function generateMetadata({
     // Points at the product's real path, so even if it is reachable elsewhere
     // search engines are told which URL counts.
     alternates: { canonical: productHref(product) },
-    openGraph: {
+    // "website", not "product": Next 14.2.5's OpenGraph union has no product
+    // type and its generator throws on one. The Product facts a search engine
+    // reads come from the JSON-LD node this page already emits. See lib/seo.
+    openGraph: openGraph({
       title: product.name,
       description,
-      images: [product.image_url ?? DEFAULT_OG_IMAGE],
-    },
+      path: productHref(product),
+      images: [product.image_url],
+    }),
   };
 }
 

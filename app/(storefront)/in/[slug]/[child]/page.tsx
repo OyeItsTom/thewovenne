@@ -2,14 +2,22 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
+  getNavCategoryTree,
   getVisibleCategoryTree,
   getProductsByCategoryIds,
 } from "@/lib/storefront";
 import CategoryFilters from "@/components/shop/CategoryFilters";
 import { getSizesForProducts } from "@/lib/sizes";
-import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { openGraph } from "@/lib/seo";
 import { cPath } from "@/lib/country";
 import { categoryHref } from "@/lib/urls";
+import {
+  categoryDescription,
+  categoryTitle,
+  emptyCategoryRobots,
+  stockedChildrenOf,
+  stockedSelf,
+} from "@/lib/metadata";
 import JsonLd from "@/components/seo/JsonLd";
 import { breadcrumbNode } from "@/lib/structuredData";
 
@@ -49,11 +57,40 @@ export async function generateMetadata({
   const { parent, child } = await resolve(params.slug, params.child);
   if (!parent || !child) return {};
 
-  const title = `${child.name} for ${parent.name} | THE WOVENNE`;
-  const description = `Handloom linen ${child.name.toLowerCase()} — woven in Kerala, sent direct from the loom.`;
+  /*
+   * TITLE AND DESCRIPTION ARE BUILT, NOT TEMPLATED. What was here put "Handloom
+   * linen {child} — woven in Kerala" on every sub-category including the
+   * jewellery ones, and titled them "{child} for {parent}" whatever the parent
+   * was — which reads correctly as "Rings for Jewellery" and means nothing. Both
+   * decisions now live in lib/metadata, where they can be read and tested
+   * without a database.
+   *
+   * ONE EXTRA READ, AND IT DECIDES ONE THING: whether this page may be indexed
+   * while it is empty. Ten of the fourteen visible sub-categories are in that
+   * state today; every one of the three parent sections holds something, so no
+   * section landing page is affected.
+   *
+   * Through getNavCategoryTree() rather than re-fetching this child's products,
+   * which is the same authority the parent section and the header use — one
+   * small read of category_id instead of a second full product fetch beside the
+   * one the page body already does. stockedChildrenOf() separates "nothing is
+   * filed here" from "the catalogue could not be read"; only the first may
+   * produce a noindex. See lib/metadata.
+   */
+  const stocked = stockedSelf(
+    stockedChildrenOf(await getNavCategoryTree(), parent.slug),
+    child.slug
+  );
+  const input = {
+    parent: { slug: parent.slug, name: parent.name },
+    child: { slug: child.slug, name: child.name },
+  };
+  const title = categoryTitle(input);
+  const description = categoryDescription(input);
   return {
     title,
     description,
+    robots: emptyCategoryRobots(stocked),
     // THROUGH categoryHref, WHICH CARRIES THE MARKET PREFIX. Written by hand
     // this read `/${parent.slug}/${child.slug}` and metadataBase resolved it to
     // https://www.thewovenne.com/women/sarees — a URL that only 308s back to
@@ -62,7 +99,11 @@ export async function generateMetadata({
     // which URL counts, and it was naming an address that never serves a page.
     // The product routes have always used a helper for exactly this reason.
     alternates: { canonical: categoryHref(parent.slug, child.slug) },
-    openGraph: { title, description, images: [DEFAULT_OG_IMAGE] },
+    openGraph: openGraph({
+      title,
+      description,
+      path: categoryHref(parent.slug, child.slug),
+    }),
   };
 }
 

@@ -10,6 +10,7 @@ import { getContent } from "@/lib/storefront";
 import JsonLd from "@/components/seo/JsonLd";
 import { organizationNode } from "@/lib/structuredData";
 import { cPath } from "@/lib/country";
+import { openGraph } from "@/lib/seo";
 import type { Metadata } from "next";
 
 
@@ -32,25 +33,42 @@ import type { Metadata } from "next";
  */
 export const revalidate = 60;
 
+const TITLE = "Handloom Cotton Sarees, Clothing & Jewellery | THE WOVENNE";
+// No "Woven in India": this sentence names jewellery too, and a trailing origin
+// claim would attach to the whole list. See the note in app/layout.tsx.
+const DESCRIPTION =
+  "Shop handloom cotton sarees, clothing and jewellery from THE WOVENNE. Priced in ₹, shipped across India.";
+
 /**
- * ONLY A CANONICAL. Title, description and the Open Graph block still come from
- * the root layout — Next merges metadata field by field down the chain, and
- * nothing here names them, so nothing here replaces them. Declaring an
- * openGraph key would swap the layout's out wholesale (see lib/seo), which is
- * exactly the trap this stays clear of.
+ * THE HOME PAGE SPEAKS FOR ITSELF NOW.
  *
- * WHY THE HOME PAGE NEEDS ONE AT ALL. It had none, and self-canonicalising was
- * nearly harmless: "/" permanently redirects here, so there was no second
- * address serving this page. Query strings are the gap. Every link out of an
+ * It used to carry only a canonical, and inherit its title and description from
+ * the root layout. That was a deliberate choice and it stopped being the right
+ * one when the inherited description turned out to describe a different shop:
+ * "Authentic handloom Indian linen ... for the UK", on a storefront that sells
+ * cotton into India. The single most-linked page on the site was advertising
+ * two facts that were not true, and no amount of correctness elsewhere reaches
+ * a page that has no words of its own.
+ *
+ * ITS OWN openGraph BLOCK IS SAFE — now. Declaring one used to mean silently
+ * discarding the layout's type, siteName and image, which is why this file
+ * avoided the key entirely. openGraph() carries all four, so the trap is closed
+ * at the helper rather than by every route remembering it. See lib/seo.
+ *
+ * WHY THE CANONICAL EXISTS AT ALL, unchanged: "/" permanently redirects here,
+ * so there was no second address serving this page — but every link out of an
  * Instagram post or a marketing email arrives as /in?utm_source=..., each one a
- * distinct URL returning 200 with identical content and, until now, pointing at
- * itself. This consolidates them onto the plain path — the same reason
+ * distinct URL returning 200 with identical content and, until this, pointing
+ * at itself. This consolidates them onto the plain path, the same reason
  * /in/shop names its unfiltered self rather than each filter combination.
  *
  * Through cPath, so it says /in rather than a bare "/" that would only 308.
  */
 export const metadata: Metadata = {
+  title: TITLE,
+  description: DESCRIPTION,
   alternates: { canonical: cPath("/") },
+  openGraph: openGraph({ title: TITLE, description: DESCRIPTION, path: cPath("/") }),
 };
 
 export default async function Home() {

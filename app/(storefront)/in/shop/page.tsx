@@ -7,7 +7,7 @@ import {
 } from "@/lib/storefront";
 import { parseCatalogueParams, type RawSearchParams } from "@/lib/catalogueParams";
 import ShopFilters from "@/components/shop/ShopFilters";
-import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { openGraph } from "@/lib/seo";
 import { cPath } from "@/lib/country";
 
 /*
@@ -20,10 +20,24 @@ import { cPath } from "@/lib/country";
  */
 export const revalidate = 60;
 
+const TITLE = "Shop All | THE WOVENNE";
+/*
+ * WHAT IT SAID, AND WHY NONE OF IT COULD STAY: "Authentic handloom linen from
+ * Kerala — shirts, kurtas, sarees, and home." There is no linen in the
+ * catalogue, Kerala is not the documented origin of what is in it, and three of
+ * the four product kinds named — shirts, kurtas, home — are sections with
+ * nothing filed under them. A description listing stock the shop does not have
+ * is the one kind of snippet that costs more than it earns: it wins the click
+ * and loses the visit.
+ *
+ * What replaces it names only what /in/shop actually lists today.
+ */
+const DESCRIPTION =
+  "Every piece at THE WOVENNE in one place — handloom cotton sarees, clothing and jewellery. Priced in ₹, shipped across India.";
+
 export const metadata: Metadata = {
-  title: "Shop All | THE WOVENNE",
-  description:
-    "Authentic handloom linen from Kerala — shirts, kurtas, sarees, and home. Woven in India, priced in ₹.",
+  title: TITLE,
+  description: DESCRIPTION,
   /*
    * THE UNFILTERED CATALOGUE, FOR EVERY FILTERED VIEW OF IT.
    *
@@ -40,12 +54,7 @@ export const metadata: Metadata = {
    * Only what Google is told to index changes.
    */
   alternates: { canonical: cPath("/shop") },
-  openGraph: {
-    title: "Shop All | THE WOVENNE",
-    description:
-      "Authentic handloom linen from Kerala — shirts, kurtas, sarees, and home.",
-    images: [DEFAULT_OG_IMAGE],
-  },
+  openGraph: openGraph({ title: TITLE, description: DESCRIPTION, path: cPath("/shop") }),
 };
 
 export default async function ShopPage({
