@@ -1952,3 +1952,43 @@ the candidates for admin-side ingestion.
 Nothing here changes application code, tests, schema, migrations, product data,
 environment variables or either open pull request. It is a documentation update
 only.
+
+## Deferred: a product draft can overwrite newer stock — found in SEO-5E, 26 September 2026
+
+**Defect.** Publishing a product draft can overwrite newer published stock. For
+an unsized product, stock lives on the version row. `ensure_product_draft`
+copies `stock_quantity` into the draft when it is opened; a sale
+(`0058` settlement) decrements the **published** row only; and `publish_one` /
+`publish_all` (`0018`) copy the draft's `stock_quantity` onto `products` and
+promote the draft. A draft opened for a description edit therefore carries the
+stock figure from the moment it was opened. Sized products are not affected in
+the same way: `0056` derives version stock from `product_sizes` on every write.
+
+**Risk.** Overselling — worst on the quantity-1 pieces that are most of the
+catalogue. A piece that sells while an unrelated draft waits comes back as in
+stock when the draft is published. Review & Publish shows "Stock" in the diff
+when it has drifted, which is the only guard today.
+
+**Consequence already taken.** SEO-5E opened no product drafts. The four
+audited whitespace fixes (Tennis Choker Necklace name + description; Couple
+Ring, Floral Embroidered Handloom Cotton Kasavu Saree and Pink Border Handloom
+Mul Cotton Saree descriptions) wait for this fix. `scripts/seo-5e-drafts.mjs`
+has no product path, and `scripts/content-truthfulness.test.ts` pins that.
+
+**Required invariant.** Publishing descriptive product changes must not
+overwrite inventory changes made after the draft was opened. The fix must keep
+stock integrity atomic — stock decided at publish time from the live row, not
+from the draft's snapshot.
+
+**Acceptance test (future).**
+
+1. Published stock = 1.
+2. Open a name-only draft.
+3. Simulate a valid sale: published stock becomes 0.
+4. Publish the descriptive draft.
+5. Published stock must still be 0.
+
+Also covered: concurrent stock updates during publish; sized products; a
+deliberate stock increase made in a draft (must it win, and how is that
+expressed); a publish that fails part-way (stock unchanged); and the stock and
+order history (`stock_movements`, manual stock log) preserved and consistent.
