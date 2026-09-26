@@ -33,6 +33,7 @@ import {
   WHY_US_TITLE,
   WHY_US_CARDS,
   LOOKBOOK_HREF,
+  lookbookPath,
   ABOUT,
 } from "./seo-5e-drafts.mjs";
 
@@ -202,22 +203,69 @@ check("why us: linen title becomes the approved one", planWhyUs({ title: "Why li
 check("why us: any other title becomes the approved one too", planWhyUs({ title: "Why us", cards: [] }).next.title, "Why Us");
 check("why us: cards replaced", planWhyUs({ title: "Why linen", cards: [{ title: "Kinder to the earth", text: "Flax" }] }).next.cards, WHY_US_CARDS);
 
+// The link exactly as production stores it (read from the live homepage after
+// #154), and the section around it as the lookbook editor shapes it.
+const LIVE_LOOKBOOK_HREF = "https://www.thewovenne.com/in/women/sarees/mul-cotton";
 const look = {
   sections: [
     { id: "a", enabled: true, layout: "split-2", images: [
-      { image_url: "u1", image_url_mobile: "", href: "/mul-cotton", alt: "Linen" },
+      { image_url: "u1", image_url_mobile: "u1m", href: LIVE_LOOKBOOK_HREF, alt: "" },
       { image_url: "u2", image_url_mobile: "", href: "/in/shop", alt: "Shop" },
     ] },
   ],
 };
-const lookNext = planLookbook(look).next as typeof look;
-check("lookbook: /mul-cotton repointed, relative", lookNext.sections[0].images[0].href, LOOKBOOK_HREF);
+type Look = typeof look;
+const withHref = (href: string): Look => ({
+  sections: [{ ...look.sections[0], images: [{ ...look.sections[0].images[0], href }, look.sections[0].images[1]] }],
+});
+const lookNext = planLookbook(look).next as Look;
+check("lookbook: the live absolute URL is recognised and repointed", lookNext.sections[0].images[0].href, LOOKBOOK_HREF);
+check("lookbook: the destination is exactly the approved relative path", LOOKBOOK_HREF, "/women/sarees/parrot-green-mul-cotton-saree");
 check("lookbook: relative so adminHref adds /in", LOOKBOOK_HREF.startsWith("/in/"), false);
 check("lookbook: approved alt", lookNext.sections[0].images[0].alt, "Parrot green handloom mul cotton saree");
+check("lookbook: the image's other fields untouched",
+  { ...lookNext.sections[0].images[0], href: null, alt: null }, { ...look.sections[0].images[0], href: null, alt: null });
 check("lookbook: other images untouched", lookNext.sections[0].images[1], look.sections[0].images[1]);
-check("lookbook: /in-prefixed old path is found too",
-  (planLookbook({ sections: [{ ...look.sections[0], images: [{ ...look.sections[0].images[0], href: "/in/mul-cotton/" }] }] }).next as typeof look).sections[0].images[0].href, LOOKBOOK_HREF);
-throws("lookbook: refuses when the link is not there", () => planLookbook({ sections: [] }));
+check("lookbook: section id, layout and enabled untouched",
+  { ...lookNext.sections[0], images: null }, { ...look.sections[0], images: null });
+check("lookbook: the input is not mutated", look.sections[0].images[0].href, LIVE_LOOKBOOK_HREF);
+
+console.log("\n=== lookbook: equivalent spellings of the SAME link are accepted ===");
+for (const href of [
+  "/in/women/sarees/mul-cotton",
+  "/women/sarees/mul-cotton",
+  "/in/women/sarees/mul-cotton/",
+  "https://www.thewovenne.com/women/sarees/mul-cotton",
+  "  https://www.thewovenne.com/in/women/sarees/mul-cotton  ",
+]) {
+  check(`accepted: ${JSON.stringify(href)}`, (planLookbook(withHref(href)).next as Look).sections[0].images[0].href, LOOKBOOK_HREF);
+}
+check("normalised path of the live URL", lookbookPath(LIVE_LOOKBOOK_HREF), "/women/sarees/mul-cotton");
+
+console.log("\n=== lookbook: anything else is a refusal, not a guess ===");
+for (const href of [
+  "https://evil.example/in/women/sarees/mul-cotton",
+  "https://www.thewovenne.com.evil.example/in/women/sarees/mul-cotton",
+  "https://www.thewovenne.com@evil.example/in/women/sarees/mul-cotton",
+  "//evil.example/in/women/sarees/mul-cotton",
+  "/\\evil.example/in/women/sarees/mul-cotton",
+  "http://www.thewovenne.com/in/women/sarees/mul-cotton",
+  "https://thewovenne.vercel.app/in/women/sarees/mul-cotton",
+  "https://www.thewovenne.com/in/women/sarees/mul-cotton?ref=x",
+  "https://www.thewovenne.com/in/women/sarees/mul-cotton#top",
+  "https://www.thewovenne.com/in/women/sarees/pink-border-handloom-mul-cotton-saree",
+  "/in/women/sarees/mul-cotton-saree",
+  "/in/men/shirts/mul-cotton",
+  "/mul-cotton",
+  "/in/women/sarees/parrot-green-mul-cotton-saree",
+  "javascript:alert(1)",
+  "",
+]) {
+  throws(`refused: ${JSON.stringify(href)}`, () => planLookbook(withHref(href)));
+}
+throws("refuses when the link is not there", () => planLookbook({ sections: [] }));
+throws("refuses two images carrying the link", () =>
+  planLookbook({ sections: [{ ...look.sections[0], images: [look.sections[0].images[0], look.sections[0].images[0]] }] }));
 
 check("shipping: only the note changes",
   planShipping({ flat_rate_inr: 129, free_above_inr: 3000, regional_rates: [], note: "Free in Kerala" }).next,
