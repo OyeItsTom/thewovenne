@@ -76,8 +76,17 @@ export const SHIPPING_NOTE =
 export const FOOTER_DESCRIPTION =
   "Chosen piece by piece. A considered selection of clothing, sarees and jewellery, shipped across India.";
 
-/** product_url_history maps /mul-cotton to this product; relative so adminHref adds /in. */
-export const LOOKBOOK_OLD_PATH = "/mul-cotton";
+/**
+ * The lookbook image's link, as production actually stores it (verified on the
+ * live homepage after #154): the ABSOLUTE https://www.thewovenne.com/in/women/
+ * sarees/mul-cotton, which redirects to the parrot-green saree. The audit had
+ * recorded it as a relative /mul-cotton, which matched nothing, so the planner
+ * refused and the whole run rolled back.
+ *
+ * The replacement is relative on purpose so adminHref adds /in.
+ */
+export const SITE_ORIGIN = "https://www.thewovenne.com";
+export const LOOKBOOK_OLD_PATH = "/women/sarees/mul-cotton";
 export const LOOKBOOK_HREF = "/women/sarees/parrot-green-mul-cotton-saree";
 export const LOOKBOOK_ALT = "Parrot green handloom mul cotton saree";
 
@@ -122,11 +131,25 @@ export function planWhyUs(current) {
   };
 }
 
-const bareInternalPath = (href) =>
-  String(href ?? "")
-    .trim()
-    .replace(/^\/in(?=\/)/, "")
-    .replace(/\/+$/, "");
+/**
+ * A stored link reduced to its market-free path on this site, or null.
+ *
+ * Only a site-relative path or this exact production origin qualifies: any
+ * other host, a protocol-relative "//host", a lookalike such as
+ * www.thewovenne.com.example, or a link carrying a query or fragment returns
+ * null and so matches nothing — an unexpected link is a refusal, never a guess.
+ * The /in market prefix and a trailing slash are dropped, so the absolute and
+ * relative spellings of one link compare equal.
+ */
+export function lookbookPath(href) {
+  const raw = String(href ?? "").trim();
+  const relative = raw.startsWith("/") && !raw.startsWith("//");
+  if (!relative && !raw.startsWith(`${SITE_ORIGIN}/`)) return null;
+  let url;
+  try { url = new URL(raw, SITE_ORIGIN); } catch { return null; }
+  if (url.origin !== SITE_ORIGIN || url.search || url.hash) return null;
+  return url.pathname.replace(/^\/in(?=\/)/, "").replace(/\/+$/, "");
+}
 
 export function planLookbook(current) {
   const sections = Array.isArray(current.sections) ? current.sections : [];
@@ -136,7 +159,7 @@ export function planLookbook(current) {
     sections: sections.map((section, si) => ({
       ...section,
       images: (section.images ?? []).map((image, ii) => {
-        if (bareInternalPath(image.href) !== LOOKBOOK_OLD_PATH) return image;
+        if (lookbookPath(image.href) !== LOOKBOOK_OLD_PATH) return image;
         hits.push({ si, ii, before: image });
         return { ...image, href: LOOKBOOK_HREF, alt: LOOKBOOK_ALT };
       }),
