@@ -1,3 +1,4 @@
+import type { MasterDelivery } from "./imageDelivery";
 import { getBrowserSupabase } from "./supabase";
 import { MAX_INPUT_BYTES, STAGING_CACHE_CONTROL } from "./imageNormalize";
 
@@ -79,6 +80,15 @@ export interface NormalizedImage {
   width: number;
   height: number;
   bytes: number;
+  /** The master already existed under its content-addressed name. */
+  duplicate?: boolean;
+  /**
+   * How the public URL is actually served. "warning" means readable and not
+   * shown to be different bytes, but not indexable, not byte-verified, or with
+   * an unexpected Cache-Control — see lib/imageDelivery. Not shown in the admin
+   * yet; the route logs it.
+   */
+  delivery?: MasterDelivery;
 }
 
 export async function uploadProductImage(file: File): Promise<NormalizedImage> {

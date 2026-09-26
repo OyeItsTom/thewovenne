@@ -23,7 +23,6 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import sharp from "sharp";
 import {
   JPEG_MASTER,
-  MASTER_CACHE_CONTROL,
   MAX_INPUT_PIXELS,
   NORMALIZER_VERSION,
   assertAcceptedFormat,
@@ -31,6 +30,7 @@ import {
   assertUsableSource,
   masterEncoding,
   masterKey,
+  masterUploadHeaders,
   targetSize,
 } from "../lib/imageNormalize";
 import { ImageReferenceGraph, classifyObject, type TableRows } from "../lib/imageReferences";
@@ -376,7 +376,9 @@ async function migrateOne(batchId: string, entry: ManifestEntry, graph: ImageRef
     const masterUrl = publicUrl(key);
     const upload = await fetch(`${env("NEXT_PUBLIC_SUPABASE_URL")}/storage/v1/object/${BUCKET}/${key}`, {
       method: "POST",
-      headers: { ...restHeaders(), "Content-Type": encoding.contentType, "cache-control": MASTER_CACHE_CONTROL, "x-upsert": "false" },
+      // The same headers the admin route sends: a real `max-age=`, not the bare
+      // number, and X-Robots-Tag: all (lib/imageNormalize.masterUploadHeaders).
+      headers: { ...restHeaders(), "Content-Type": encoding.contentType, ...masterUploadHeaders(), "x-upsert": "false" },
       body: new Uint8Array(master),
     });
     const duplicate = upload.status === 409 || (!upload.ok && /exists|duplicate/i.test(await upload.clone().text()));
