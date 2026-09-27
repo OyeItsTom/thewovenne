@@ -425,8 +425,10 @@ async function routeBehaviour() {
   // ── authentication ──
   store.clear();
   const idA = await stage(await photo(1));
+  // is_admin() answers false for a customer AND, since 0062, for staff whose
+  // session has not passed the second factor.
   const denied = await run(idA, { isAdmin: false });
-  check("a non-admin gets the same 404 as before", denied.status === 404);
+  check("a non-admin, or staff without MFA, gets the same 404 as before", denied.status === 404);
   check("and not one storage request was made", calls.every((c) => c.method === "RPC"));
   check("the staged original is untouched", store.has(`staging/${idA}.jpg`));
 
@@ -578,6 +580,11 @@ function contracts() {
   check("every failed check returns before that remove",
     code.indexOf("if (!served.ok)") > 0 && code.indexOf("if (!served.ok)") < code.indexOf(".remove([staged])"));
   check("the admin check still comes first", code.indexOf('rpc("is_admin")') < code.indexOf("request.json()"));
+  // 0062: is_admin() requires a two-factor (aal2) session; is_staff() does not.
+  // The gate must stay on authority, never on identity alone.
+  check("the gate is is_admin (MFA-enforced), not is_staff", code.includes('rpc("is_admin")') && !code.includes("is_staff"));
+  check("every storage call runs as the admin's own session, never the service role",
+    code.includes("createRSCClient()") && !/service_?role|createServiceClient|SUPABASE_SERVICE/i.test(code));
 
   for (const file of ["scripts/backfill-execute.ts", "scripts/c6-normalize-execute.ts"]) {
     const src = readFileSync(file, "utf8");
