@@ -48,10 +48,14 @@ create table if not exists auth.users (
   raw_app_meta_data jsonb default '{}'::jsonb,
   created_at timestamptz default now()
 );
+-- As Supabase defines them: the single-claim setting first, then the claims
+-- object PostgREST sets for every request.
 create or replace function auth.uid() returns uuid language sql stable as
-  $f$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $f$;
+  $f$ select coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''),
+                      (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'))::uuid $f$;
 create or replace function auth.role() returns text language sql stable as
-  $f$ select coalesce(nullif(current_setting('request.jwt.claim.role', true), ''), 'anon') $f$;
+  $f$ select coalesce(nullif(current_setting('request.jwt.claim.role', true), ''),
+                      (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role'))::text $f$;
 create or replace function auth.email() returns text language sql stable as
   $f$ select nullif(current_setting('request.jwt.claim.email', true), '') $f$;
 create or replace function auth.jwt() returns jsonb language sql stable as
@@ -178,17 +182,36 @@ export async function startEngine(): Promise<Engine | null> {
 
 export async function asRoot(c: Client) {
   await c.query("reset role");
-  await c.query("select set_config('request.jwt.claim.sub', '', false)");
+  await c.query("select set_config('request.jwt.claim.sub', '', false), set_config('request.jwt.claims', '', false)");
 }
 
-export async function asAdmin(c: Client, adminId: string) {
+/**
+ * A signed-in user's request as PostgREST presents it: role authenticated, the
+ * user id, and the token's claims — including the authentication assurance
+ * level Supabase Auth issues ('aal1' after a password, 'aal2' after a verified
+ * second factor).
+ */
+export async function asUser(c: Client, userId: string, aal: "aal1" | "aal2" | null) {
   await c.query("set role authenticated");
-  await c.query("select set_config('request.jwt.claim.sub', $1, false)", [adminId]);
+  const claims = aal === null ? { sub: userId, role: "authenticated" } : { sub: userId, role: "authenticated", aal };
+  await c.query("select set_config('request.jwt.claim.sub', $1, false), set_config('request.jwt.claims', $2, false)",
+    [userId, JSON.stringify(claims)]);
+}
+
+/** An admin as the admin actually works: two-factor-verified (aal2). */
+export async function asAdmin(c: Client, adminId: string) {
+  await asUser(c, adminId, "aal2");
+}
+
+/** A staff account that has entered only its password (aal1). */
+export async function asStaffPasswordOnly(c: Client, adminId: string) {
+  await asUser(c, adminId, "aal1");
 }
 
 export async function asService(c: Client) {
   await c.query("set role service_role");
-  await c.query("select set_config('request.jwt.claim.sub', '', false)");
+  await c.query("select set_config('request.jwt.claim.sub', '', false), set_config('request.jwt.claims', $1, false)",
+    [JSON.stringify({ role: "service_role" })]);
 }
 
 /** An auth user promoted to admin, the way 0008 promotes one. */

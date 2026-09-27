@@ -51,8 +51,9 @@ export async function getCheckoutIdentity(
   // would print a staff name and address into the order form. Admin emails are
   // already refused at the customer login form, so an order placed from a
   // staff session should carry whatever the person actually types.
-  const { data: isAdmin } = await supabase.rpc("is_admin");
-  if (isAdmin === true) return GUEST;
+  // is_staff: a staff session at any authentication level (0061/0062).
+  const { data: isStaff } = await supabase.rpc("is_staff");
+  if (isStaff === true) return GUEST;
 
   // The wider select is tried first and falls back to the columns that have
   // always existed. This is deploy-ordering insurance, not defensive habit: if
