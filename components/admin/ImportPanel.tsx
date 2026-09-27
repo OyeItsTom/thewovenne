@@ -20,6 +20,9 @@ export default function ImportPanel() {
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<ImportPreview | null>(null);
   const [committed, setCommitted] = useState<number | null>(null);
+  // Stock changes the database refused because the shelf moved after the
+  // preview. Listed, never retried silently.
+  const [stockRefused, setStockRefused] = useState<{ sku: string; message: string }[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -29,6 +32,7 @@ export default function ImportPanel() {
     setFile(null);
     setResult(null);
     setCommitted(null);
+    setStockRefused([]);
     setError(null);
     if (inputRef.current) inputRef.current.value = "";
   }
@@ -67,11 +71,26 @@ export default function ImportPanel() {
       form.set("mode", mode);
       form.set("kind", kind.id);
       form.set("file", file);
+      // The stock each row showed in the preview the admin is approving. The
+      // server re-reads everything else from the file; this is only what a
+      // live stock change is checked against, so it can refuse a write but
+      // never change one (migration 0060).
+      if (mode === "commit" && result) {
+        const seen: Record<string, number> = {};
+        for (const r of result.rows) {
+          const v = r.values.__stock_seen;
+          if (typeof v === "number" && r.values.sku) seen[String(r.values.sku)] = v;
+        }
+        form.set("expected_stock", JSON.stringify(seen));
+      }
       const res = await fetch("/api/admin/import", { method: "POST", body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "That file could not be read.");
       setResult(data as ImportPreview);
-      if (mode === "commit") setCommitted(data.applied ?? 0);
+      if (mode === "commit") {
+        setCommitted(data.applied ?? 0);
+        setStockRefused(data.stockRefused ?? []);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
@@ -184,7 +203,24 @@ export default function ImportPanel() {
               {kind.id === "products" &&
                 " Check Review & Publish to put the changes live."}
             </p>
-          ) : (
+          ) : null}
+          {committed !== null && stockRefused.length > 0 ? (
+            <div className="rounded-lg bg-terracotta/10 px-4 py-3 text-sm text-terracotta-dark">
+              <p className="font-medium">
+                Stock was not changed for {stockRefused.length} product
+                {stockRefused.length === 1 ? "" : "s"}. Nothing was overwritten;
+                everything else in those rows was imported:
+              </p>
+              <ul className="mt-2 list-disc pl-5">
+                {stockRefused.map((r) => (
+                  <li key={r.sku}>
+                    {r.sku}: {r.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {committed !== null ? null : (
             <>
               <h3 className="font-heading text-xl text-ink">
                 What this would do

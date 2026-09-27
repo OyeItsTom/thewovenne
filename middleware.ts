@@ -10,7 +10,13 @@ const SUPABASE_ANON_KEY =
 type AdminVerdict = "admin" | "not-admin" | "unknown";
 
 /**
- * Ask the database whether this session is an admin.
+ * Ask the database whether this account is STAFF (is_staff, 0061).
+ *
+ * Deliberately not is_admin(): that means "may this session act as an admin",
+ * which requires a two-factor-verified session (0062). Routing has to recognise
+ * staff BEFORE the second factor — to send them to /admin/mfa, and to keep them
+ * out of the customer area — so it asks the identity question. Authority is
+ * still decided by is_admin() wherever data is read or written.
  *
  * Retried once: the common failure is transient — a token being refreshed, a
  * cold start, a dropped connection — and one blip should not look the same as a
@@ -20,9 +26,9 @@ async function checkIsAdmin(
   supabase: ReturnType<typeof createServerClient>
 ): Promise<AdminVerdict> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { data, error } = await supabase.rpc("is_admin");
+    const { data, error } = await supabase.rpc("is_staff");
     if (!error) return data === true ? "admin" : "not-admin";
-    console.error(`middleware is_admin (attempt ${attempt + 1}):`, error.message);
+    console.error(`middleware is_staff (attempt ${attempt + 1}):`, error.message);
     if (attempt === 0) await new Promise((r) => setTimeout(r, 300));
   }
   return "unknown";

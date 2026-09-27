@@ -234,6 +234,17 @@ async function fetchProducts(supabase: Client): Promise<Row[]> {
     .order("name");
   if (error) throw new Error(error.message);
 
+  // products.stock_quantity is a mirror refreshed at publish and by stock edits,
+  // not by sales or cancellations. The count a sale takes from — and the one the
+  // shop shows — is the published version's (migration 0060), so export that.
+  const { data: live } = await supabase
+    .from("product_versions")
+    .select("product_id, stock_quantity")
+    .eq("state", "published");
+  const liveStock = new Map(
+    ((live ?? []) as unknown as Row[]).map((v) => [String(v.product_id), v.stock_quantity])
+  );
+
   const { data: sizes } = await supabase
     .from("product_sizes")
     .select("product_id, label, stock_quantity")
@@ -259,7 +270,7 @@ async function fetchProducts(supabase: Client): Promise<Row[]> {
       // a piece nobody has costed is the same overstatement the P&L warns about.
       margin_inr: cost === null ? null : price - cost,
       margin_pct: cost === null || price <= 0 ? null : ((price - cost) / price) * 100,
-      stock_quantity: p.stock_quantity,
+      stock_quantity: liveStock.get(String(p.id)) ?? p.stock_quantity,
       sizes: bySize.get(String(p.id))?.join(", ") ?? null,
       fabric: p.fabric,
       colour: p.colour,

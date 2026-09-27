@@ -8,6 +8,7 @@ import {
   type ParsedRow,
 } from "@/lib/imports";
 import { isExpenseCategory } from "@/lib/expenses";
+import { setProductStock } from "@/lib/inventory";
 
 /**
  * Excel import: template, validate, commit.
@@ -25,6 +26,15 @@ import { isExpenseCategory } from "@/lib/expenses";
  * writing straight to live products would skip review, versioning and the audit
  * trail in one step. Imported changes appear in Review & Publish like any other
  * edit.
+ *
+ * EXCEPT STOCK ON AN EXISTING PRODUCT. Stock is live inventory, not content, and
+ * publishing never changes it (migration 0060), so an update file's Stock
+ * column is applied live through set_product_stock — and only where the shelf
+ * still holds the figure the PREVIEW showed. That figure is the one thing the
+ * commit takes from the browser rather than the file: it can only make a write
+ * refuse, never change what is written. A row whose stock moved in between is
+ * reported back, not overwritten. A new product's Stock is its opening stock
+ * and stays on the draft.
  *
  * The caller's own session throughout — RLS decides what can be read and
  * written, and the admin RPCs need a real admin to run at all.
@@ -66,8 +76,9 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      const applied = await commit(supabase, kind, resolved);
-      return NextResponse.json({ applied, ...preview(kind, resolved) });
+      const expectedStock = parseExpectedStock(form.get("expected_stock"));
+      const { applied, stockRefused } = await commit(supabase, kind, resolved, expectedStock);
+      return NextResponse.json({ applied, stockRefused, ...preview(kind, resolved) });
     }
   } catch (e) {
     console.error("import failed:", e);
@@ -81,6 +92,26 @@ export async function POST(request: NextRequest) {
 }
 
 type Client = ReturnType<typeof createRSCClient>;
+
+/** SKU → the live stock the preview showed. Anything unreadable is ignored. */
+function parseExpectedStock(raw: FormDataEntryValue | null): Record<string, number> {
+  if (typeof raw !== "string" || raw === "") return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([, v]) => typeof v === "number" && Number.isInteger(v))
+        .map(([k, v]) => [k.toUpperCase(), v as number])
+    );
+  } catch {
+    return {};
+  }
+}
+
+export interface StockRefusal {
+  sku: string;
+  message: string;
+}
 
 function preview(kind: ImportKind, rows: ParsedRow[]) {
   return {
@@ -370,8 +401,33 @@ async function resolveProductUpdates(supabase: Client, rows: ParsedRow[]): Promi
     .from("products")
     .select("id, sku, name, price_inr, cost_price_inr, stock_quantity")
     .in("sku", skus);
+  const found = (data ?? []) as unknown as Record<string, unknown>[];
+  const ids = found.map((p) => String(p.id));
+
+  // The shelf, not products.stock_quantity — that column is a mirror no sale
+  // updates. Published where there is one; a never-published product has only
+  // its draft's opening stock.
+  const { data: versions } = await supabase
+    .from("product_versions")
+    .select("product_id, state, stock_quantity")
+    .in("product_id", ids)
+    .in("state", ["published", "draft"]);
+  const shelf = new Map<string, number>();
+  for (const v of (versions ?? []) as unknown as Record<string, unknown>[]) {
+    const id = String(v.product_id);
+    if (v.state === "published" || !shelf.has(id)) shelf.set(id, Number(v.stock_quantity));
+  }
+  const { data: sizeRows } = await supabase
+    .from("product_sizes")
+    .select("product_id")
+    .in("product_id", ids);
+  const sized = new Set(((sizeRows ?? []) as unknown as Record<string, unknown>[]).map((r) => String(r.product_id)));
+
   const existing = new Map(
-    ((data ?? []) as unknown as Record<string, unknown>[]).map((p) => [String(p.sku), p])
+    found.map((p): [string, Record<string, unknown>] => [
+      String(p.sku),
+      { ...p, stock_quantity: shelf.get(String(p.id)) ?? null },
+    ])
   );
 
   const seen = new Set<string>();
@@ -393,7 +449,15 @@ async function resolveProductUpdates(supabase: Client, rows: ParsedRow[]): Promi
       continue;
     }
 
+    if (row.values.stock_quantity !== null && sized.has(String(match.id))) {
+      row.errors.push(`${match.name} has sizes — change its stock size by size in the product form`);
+      continue;
+    }
+
     row.action = "update";
+    // Shown in the preview and sent back at commit as the figure the stock
+    // change is checked against.
+    row.values.__stock_seen = match.stock_quantity === null ? null : Number(match.stock_quantity);
     const changes: string[] = [];
     for (const [key, label] of [
       ["cost_price_inr", "cost"],
@@ -466,7 +530,24 @@ function resolveExpenses(rows: ParsedRow[]): ParsedRow[] {
   return rows;
 }
 
-async function commit(supabase: Client, kind: ImportKind, rows: ParsedRow[]): Promise<number> {
+async function commit(
+  supabase: Client,
+  kind: ImportKind,
+  rows: ParsedRow[],
+  expectedStock: Record<string, number>
+): Promise<{ applied: number; stockRefused: StockRefusal[] }> {
+  const stockRefused: StockRefusal[] = [];
+  const applied = await write(supabase, kind, rows, expectedStock, stockRefused);
+  return { applied, stockRefused };
+}
+
+async function write(
+  supabase: Client,
+  kind: ImportKind,
+  rows: ParsedRow[],
+  expectedStock: Record<string, number>,
+  stockRefused: StockRefusal[]
+): Promise<number> {
   const doing = rows.filter((r) => r.action !== "skip");
   if (kind.id === "expenses") {
     const { error } = await supabase.from("expenses").insert(
@@ -502,13 +583,29 @@ async function commit(supabase: Client, kind: ImportKind, rows: ParsedRow[]): Pr
   if (kind.id === "products_new" || kind.id === "products_update") {
     let applied = 0;
     for (const r of doing) {
-      // Every product write goes through the draft machinery, exactly as the
-      // product form does. Nothing here touches a published row.
+      // Only the fields the file actually filled in. A blank cell leaves the
+      // draft's existing value alone — see lib/imports.ts. Stock rides the
+      // draft only as a NEW product's opening stock; on an existing product it
+      // is live and goes through set_product_stock below.
+      const draftFields = r.action === "create"
+        ? ["name", "price_inr", "cost_price_inr", "stock_quantity", "hsn_code", "fabric", "colour"]
+        : ["name", "price_inr", "cost_price_inr", "hsn_code", "fabric", "colour"];
+      const patch: Record<string, unknown> = {};
+      for (const key of draftFields) {
+        if (r.values[key] !== null && r.values[key] !== undefined) patch[key] = r.values[key];
+      }
+
+      // Every draft write goes through the draft machinery, exactly as the
+      // product form does. Nothing here writes a published row directly.
+      let productId: string | null = null;
       let versionId: string | null = null;
       if (r.action === "create") {
         const { data, error } = await supabase.rpc("create_product_draft");
         if (error) throw new Error(error.message);
         versionId = data as string;
+        patch.sku = r.values.sku;
+        patch.slug = r.values.__slug;
+        patch.category_id = r.values.__category_id;
       } else {
         const { data: product } = await supabase
           .from("products")
@@ -516,34 +613,47 @@ async function commit(supabase: Client, kind: ImportKind, rows: ParsedRow[]): Pr
           .eq("sku", r.values.sku)
           .maybeSingle();
         if (!product) continue;
-        const { data, error } = await supabase.rpc("ensure_product_draft", {
-          p_product_id: (product as { id: string }).id,
-        });
+        productId = (product as { id: string }).id;
+        // A stock-only row opens no draft: there is nothing descriptive to review.
+        if (Object.keys(patch).length > 0) {
+          const { data, error } = await supabase.rpc("ensure_product_draft", {
+            p_product_id: productId,
+          });
+          if (error) throw new Error(error.message);
+          versionId = data as string;
+        }
+      }
+
+      let wrote = false;
+      if (versionId && Object.keys(patch).length > 0) {
+        const { data, error } = await supabase
+          .from("product_versions")
+          .update(patch)
+          .eq("id", versionId)
+          .select("id");
         if (error) throw new Error(error.message);
-        versionId = data as string;
+        wrote = (data?.length ?? 0) > 0;
       }
-      if (!versionId) continue;
 
-      // Only the fields the file actually filled in. A blank cell leaves the
-      // draft's existing value alone — see lib/imports.ts.
-      const patch: Record<string, unknown> = {};
-      for (const key of ["name", "price_inr", "cost_price_inr", "stock_quantity", "hsn_code", "fabric", "colour"]) {
-        if (r.values[key] !== null && r.values[key] !== undefined) patch[key] = r.values[key];
+      const target = r.values.stock_quantity;
+      if (r.action === "update" && productId && target !== null && target !== undefined) {
+        const sku = String(r.values.sku);
+        const seen = expectedStock[sku.toUpperCase()];
+        if (seen === undefined) {
+          stockRefused.push({
+            sku,
+            message: "Stock not changed: this import did not say what stock the preview showed. Check the file again, then import.",
+          });
+        } else if (Number(target) !== seen) {
+          const result = await setProductStock(supabase, productId, seen, Number(target), {
+            note: "Imported from a spreadsheet",
+          });
+          if (result.ok) wrote = true;
+          else stockRefused.push({ sku, message: result.message });
+        }
       }
-      if (r.action === "create") {
-        patch.sku = r.values.sku;
-        patch.slug = r.values.__slug;
-        patch.category_id = r.values.__category_id;
-      }
-      if (Object.keys(patch).length === 0) continue;
 
-      const { data, error } = await supabase
-        .from("product_versions")
-        .update(patch)
-        .eq("id", versionId)
-        .select("id");
-      if (error) throw new Error(error.message);
-      applied += data?.length ?? 0;
+      if (wrote) applied += 1;
     }
     return applied;
   }

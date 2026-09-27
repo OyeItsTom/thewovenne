@@ -75,12 +75,12 @@ export const IMPORT_KINDS: ImportKind[] = [
     blurb: "Change prices, costs and stock on products you already have",
     matchOn: "SKU",
     safety:
-      "Matched on SKU, which must already exist — this template never creates anything. Export Products first to get a file with the real SKUs in it. Changes land as DRAFTS and appear in Review & Publish.",
+      "Matched on SKU, which must already exist — this template never creates anything. Export Products first to get a file with the real SKUs in it. Price, cost and the rest land as DRAFTS and appear in Review & Publish. Stock is live inventory: it changes on import, and only where the shelf still holds the figure the preview showed — a product that sold in between is left alone and listed.",
     fields: [
       { key: "sku", header: "SKU", type: "text", required: true, example: "KASAVU-SAREE-01", hint: "Must match an existing product" },
       { key: "price_inr", header: "Selling price", type: "money", required: false, example: "4500" },
       { key: "cost_price_inr", header: "Cost price", type: "money", required: false, example: "1900" },
-      { key: "stock_quantity", header: "Stock", type: "number", required: false, example: "8" },
+      { key: "stock_quantity", header: "Stock", type: "number", required: false, example: "8", hint: "Live, not a draft — unsized products only" },
       { key: "fabric", header: "Material", type: "text", required: false, example: "Handloom Cotton", options: { source: "fabrics", mode: "suggest" } },
       { key: "colour", header: "Colour", type: "text", required: false, example: "Off-white", options: { source: "colours", mode: "suggest" } },
       { key: "hsn_code", header: "HSN code", type: "text", required: false, example: "" },

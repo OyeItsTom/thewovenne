@@ -7,6 +7,7 @@ import type { Product } from "@/lib/types";
 import { cn, formatINR } from "@/lib/utils";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { markPendingDelete, productDraftId, settleDraft } from "@/lib/drafts";
+import { setProductStock } from "@/lib/inventory";
 import StockEditor from "./StockEditor";
 import DraftBadge from "./DraftBadge";
 
@@ -27,9 +28,8 @@ export default function ProductTable({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Stock and the active toggle are edits like any other: they go to the draft
-  // and stay off the site until publish. Stock especially — see the note below
-  // the table.
+  // The active toggle is an edit like any other: it goes to the draft and stays
+  // off the site until publish. Stock is not — see adjustStock below.
   const updateProduct = async (product: Product, patch: Partial<Product>) => {
     setError(null);
     const client = getBrowserSupabase();
@@ -60,6 +60,27 @@ export default function ProductTable({
     // The row already reflects the draft-merged view, so patch it locally
     // rather than re-reading.
     onUpdate({ ...product, ...patch });
+  };
+
+  // Stock is live inventory, not content (migration 0060): it changes now, not
+  // at publish, and only if the shelf still holds the number this row showed.
+  // If it has moved — a sale, a cancellation, another admin — nothing changes,
+  // and the row is brought up to date so the next attempt starts from the truth.
+  const adjustStock = async (product: Product, value: number) => {
+    setError(null);
+    const result = await setProductStock(
+      getBrowserSupabase(),
+      product.id,
+      product.stock_quantity,
+      value,
+      { note: "Edited in the product table" }
+    );
+    if (!result.ok) {
+      setError(`${product.name}: ${result.message}`);
+      if (result.live !== null) onUpdate({ ...product, stock_quantity: result.live });
+      return;
+    }
+    onUpdate({ ...product, stock_quantity: result.quantity });
   };
 
   // Deletion is staged like everything else: the product stays live until the
@@ -154,9 +175,7 @@ export default function ProductTable({
                   <div className="flex items-center gap-2">
                     <StockEditor
                       value={product.stock_quantity}
-                      onSave={(value) =>
-                        updateProduct(product, { stock_quantity: value })
-                      }
+                      onSave={(value) => adjustStock(product, value)}
                     />
                     {product.stock_quantity === 0 ? (
                       <span className="rounded-full bg-ink/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ink/60">
@@ -230,9 +249,10 @@ Delete at next publish?
       </div>
 
       <p className="max-w-prose text-xs text-ink/50">
-        Everything here is a draft until you publish — including stock. If you
-        reduce stock after an offline sale, the shop keeps showing the old
-        number until you publish, so publish stock changes promptly.
+        Everything here is a draft until you publish — except stock. Stock is
+        live: a change saves straight to the shop, and only if the count shown
+        is still the count on the shelf, so an order placed meanwhile is never
+        overwritten. Publishing never changes stock.
       </p>
     </div>
   );

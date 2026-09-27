@@ -18,6 +18,7 @@ import { youtubeId } from "@/lib/youtube";
 import { getAllCategories } from "@/lib/categories";
 import { getDraftProductImages } from "@/lib/products";
 import { newProductDraft, productDraftId, settleDraft } from "@/lib/drafts";
+import { setProductStock, type LoadedSize } from "@/lib/inventory";
 import { uploadProductImage } from "@/lib/storage";
 import {
   getProductSizes,
@@ -139,6 +140,10 @@ export default function ProductModal({
   // directly, and the UI says so, because an admin who expects Publish to gate
   // a stock change would oversell.
   const [sizes, setSizes] = useState<SizeDraft[]>([]);
+  // What the form showed when it opened. Every live stock change is sent WITH
+  // the figure the admin was looking at, and refused if the shelf has moved on
+  // since (migration 0060) — so an open form cannot overwrite a sale.
+  const [loadedSizes, setLoadedSizes] = useState<LoadedSize[]>([]);
 
   // Shows the admin the actual outcome before saving, using the same function
   // the storefront renders with, so the preview cannot disagree with the site.
@@ -192,11 +197,13 @@ export default function ProductModal({
     if (!isOpen) return;
     if (!product?.id) {
       setSizes([]);
+      setLoadedSizes([]);
       return;
     }
-    void getProductSizes(product.id, getBrowserSupabase()).then((rows) =>
-      setSizes(rows.map((r) => ({ id: r.id, label: r.label, stock_quantity: r.stock_quantity })))
-    );
+    void getProductSizes(product.id, getBrowserSupabase()).then((rows) => {
+      setLoadedSizes(rows.map((r) => ({ id: r.id, label: r.label, stock_quantity: r.stock_quantity })));
+      setSizes(rows.map((r) => ({ id: r.id, label: r.label, stock_quantity: r.stock_quantity })));
+    });
   }, [isOpen, product?.id]);
 
   const discountPreview = (() => {
@@ -419,7 +426,6 @@ export default function ProductModal({
       category_id: subCategoryId,
       fabric: form.fabric || null,
       colour: form.colour || null,
-      stock_quantity: Number(form.stock_quantity) || 0,
       // Cover image stays denormalised on the product so listings, cart and the
       // concierge keep reading one column instead of joining the gallery.
       image_url: images[0] ?? null,
@@ -450,9 +456,16 @@ export default function ProductModal({
       return;
     }
 
+    // Stock is NOT part of an existing product's draft: a draft is content, and
+    // publishing it never changes what is on the shelf (0060). A new product's
+    // figure is its opening stock, which goes live when it is first published.
     const { data, error: saveError } = await client
       .from("product_versions")
-      .update(isEdit ? payload : { ...payload, is_active: true })
+      .update(
+        isEdit
+          ? payload
+          : { ...payload, is_active: true, stock_quantity: Number(form.stock_quantity) || 0 }
+      )
       .eq("id", versionId)
       .select("product_id, name, slug, description, price_inr, cost_price_inr, sku, video_youtube_id, heritage_note, craft_note, care_note, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at")
       .single();
@@ -476,23 +489,64 @@ export default function ProductModal({
       savedProductId,
       images
     );
-    setSaving(false);
 
     if (galleryError) {
+      setSaving(false);
       setError(
         `Product saved, but its photos didn't: ${galleryError}. Reopen and try the photos again.`
       );
       return;
     }
 
+    // ── Live stock, after the draft ──────────────
+    // Two separate operations, not one: the description above went to the
+    // draft; stock below goes live now. If stock is refused, the draft is still
+    // saved and the message says exactly that — neither pretends to be atomic
+    // with the other.
+    //
     // Sizes are keyed to the product identity, so this needs the saved id —
     // which is why it runs here rather than beside the scalar update.
-    const sizeError = await saveProductSizes(client, savedProductId, sizes);
+    const sizeError = await saveProductSizes(client, savedProductId, loadedSizes, sizes);
     if (sizeError) {
       setSaving(false);
-      setError(`Product saved, but its sizes didn't: ${sizeError}`);
+      setError(
+        `Your other changes are saved as a draft, but the sizes were not changed: ${sizeError}`
+      );
       return;
     }
+
+    // A new product's figure is its opening stock; an existing one's is re-read
+    // below, because the shelf may have moved while this form was open.
+    let liveStock = Number(form.stock_quantity) || 0;
+
+    const typedStock = Number(form.stock_quantity) || 0;
+    if (isEdit && sizes.length === 0 && typedStock !== product!.stock_quantity) {
+      const result = await setProductStock(
+        client,
+        savedProductId,
+        product!.stock_quantity,
+        typedStock,
+        { note: "Edited in the product form" }
+      );
+      if (!result.ok) {
+        setSaving(false);
+        setError(
+          `Your other changes are saved as a draft, but the stock was not changed: ${result.message}`
+        );
+        return;
+      }
+      liveStock = result.quantity;
+    }
+    if (isEdit) {
+      const { data: shelf } = await client
+        .from("product_versions")
+        .select("stock_quantity")
+        .eq("product_id", savedProductId)
+        .eq("state", "published")
+        .maybeSingle();
+      if (shelf) liveStock = Number((shelf as { stock_quantity: number }).stock_quantity);
+    }
+    setSaving(false);
 
     // Only now is the save complete — scalars AND photos. Before this point
     // "did anything change?" has no answer, because a photo-only edit leaves
@@ -507,6 +561,8 @@ export default function ProductModal({
       {
         ...(row as unknown as Product),
         id: row.product_id,
+        // The shelf, not the draft's copy of it.
+        stock_quantity: liveStock,
         category: cat?.name ?? null,
         category_slug: cat?.slug ?? null,
       },
@@ -731,14 +787,24 @@ export default function ProductModal({
               </span>
             </label>
           ) : (
-            <Field
-              label="Stock Quantity"
-              type="number"
-              min="0"
-              required
-              value={form.stock_quantity}
-              onChange={update("stock_quantity")}
-            />
+            <div>
+              <Field
+                label={isEdit ? "Stock on the shelf" : "Opening stock"}
+                type="number"
+                min="0"
+                required
+                value={form.stock_quantity}
+                onChange={update("stock_quantity")}
+              />
+              {/* Said plainly: this is the one field in the form that is not a
+                  draft. Stock is live inventory, and Publish never changes it
+                  (migration 0060). */}
+              <span className="mt-1 block text-xs text-ink/55">
+                {isEdit
+                  ? `Live inventory, not part of the draft: a change here goes live when you press Save, not at Publish. It is checked against the ${product!.stock_quantity} shown when you opened this, so a sale in the meantime is never overwritten.`
+                  : "Goes live when the product is first published. After that, stock is changed here or in the table and saves immediately."}
+              </span>
+            </div>
           )}
         </div>
 
@@ -758,7 +824,9 @@ export default function ProductModal({
           <p className="mt-2 rounded-lg bg-linen/60 px-3 py-2 text-xs text-ink/70">
             Sizes and their stock save <strong>immediately</strong> — they
             don&apos;t wait for Publish. Stock has to match what&apos;s really on
-            the shelf, and an order can&apos;t wait for a publish either.
+            the shelf, and an order can&apos;t wait for a publish either. Only the
+            counts you change are saved, and only if nothing has sold or changed
+            since you opened this.
           </p>
 
           {sizes.length > 0 && (

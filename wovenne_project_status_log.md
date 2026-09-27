@@ -2195,3 +2195,234 @@ question and will take time.
   after the stock-integrity fix merges (it rewrites the functions that set it).
 - Product-fact verification (descriptions, colour, composition, care notes) and
   Merchant Center activation wait for stock integrity.
+
+## Product stock integrity — Stage 2 implemented, NOT merged or applied, 26 September 2026
+
+Fixes the deferred defect above, plus the second one Stage 1 found. Branch
+`fix/draft-stock-integrity` (from `main` 24c215b). **Migration 0060 has not been
+applied to any real database, and nothing is merged or deployed.**
+
+**What was wrong.** (1) Publishing promoted the draft row wholesale, so a draft's
+copy of an unsized product's stock became the live figure, bringing sold pieces
+back. (2) The product form saved every size's *loaded* count straight back
+through `save_product_sizes`, live. A description edit on a sized product
+therefore restocked any size that sold while the form was open, and could log
+nothing for it.
+
+**The rule now.** Stock is operational state, not content.
+- Publishing carries the **live** stock forward. A brand-new product keeps its
+  opening stock.
+- Deliberate changes go live immediately, checked against the figure the admin
+  saw: `set_product_stock` for unsized products (expected value plus a request
+  id), and `save_product_sizes` for sized ones (per-size `expected`; untouched
+  counts are never written).
+- `stock_quantity` is in `version_noise()`, so a stale draft figure is not a
+  pending change.
+
+**Lock protocol.** Locks are always taken in this order:
+1. The `orders` row. `FOR KEY SHARE` for sales and releases; `cancel_order`
+   keeps its own `FOR UPDATE`.
+2. The `products` rows, sorted by id. `FOR UPDATE` for publishing, because it
+   may rewrite the unique slug. `FOR NO KEY UPDATE` for every stock writer.
+3. Then the version, size and movement rows.
+
+Every lock is taken at its final strength, so there are no lock upgrades. The
+audit's first draft would have deadlocked sale against cancel on the orders
+row, so sales now take the order lock first.
+
+**Also in 0060.**
+- `release_stock` writes a movement only when a row actually changed.
+  `cancel_order` reports any lines it could not return.
+- The `guard_live_stock` trigger stops a PostgREST role writing an unsized
+  product's live stock directly.
+- Direct `product_sizes` writes are revoked from `authenticated`.
+- The old 3-argument `save_product_sizes` is dropped, so an old browser tab
+  reaches the checks and gets `EXPECTED_REQUIRED`.
+
+**Tests.** They run on a real, throwaway PostgreSQL through `scripts/pg-world.ts`:
+embedded-postgres, the full migration chain unmodified, and a Supabase shim. It
+never uses `.env.local`.
+- `stock-integrity.test.ts`: 118 assertions. Includes a control run on 0001–0059
+  that reproduces the bug, and runs `stock-history-audit.sql`.
+- `stock-concurrency.test.ts`: 60 assertions. Forced overlaps A–G, each confirmed
+  as a real lock wait through `pg_blocking_pids`, with before-0060 controls that
+  reproduce the false SOLD_OUT, the resurrection, the phantom return and the
+  sized overwrite. Also a randomised 4-connection run checking
+  live = opening + movements.
+- `inventory.test.ts`: 32 offline assertions.
+
+Run them with `PG_HARNESS_DIR=<dir containing node_modules/embedded-postgres>`.
+
+**Known, not fixed here.**
+- Two admins forking a draft of the same product at the same instant: the
+  second gets a unique-violation error. Changes nothing; seen in the randomised
+  run.
+- `ensure_product_draft` racing a publish can fork from the version being
+  archived, which is descriptive staleness only.
+- 0040's `log_admin_action` dropped 0014's grouping by product id, so
+  product-version audit rows are keyed by version id.
+- The AI suites' "no migration 0060" gate (`ai-eval`, `ai-eval-live`,
+  `ai-grounding`) now fails alongside their existing "0058 still not taken"
+  failure on `main`. Left unmodified for the owner to decide.
+
+**Before production.** The owner reviews the PR, then runs
+`scripts/stock-history-audit.sql` read-only, then applies 0060. Deploy the app
+straight after the migration, and don't edit stock in the admin during that
+window. Verify the function fingerprints recorded in the PR.
+
+### Stage 3 — security review, 26 September 2026
+
+Review corrections are folded into 0060 (still unapplied), branch
+`fix/draft-stock-integrity`:
+
+- **Temp-table shadowing — fixed.** A `SECURITY DEFINER` function with
+  `search_path = public` resolves tables in the caller's `pg_temp` first.
+  Reproduced on the real engine: a caller's temporary `product_sizes` made
+  0056's trigger write 99 onto live stock, and an empty one made a paid sale
+  skip its size. Every function on a stock, publish, cancel or draft path — and
+  every trigger those writes fire — now has `search_path = public, pg_temp`.
+  The three 0056 functions are restated with qualified names. `CREATE` on
+  `public` is revoked from the API roles.
+  **Not reachable through PostgREST**, which can't issue `CREATE`, but it was
+  wrong regardless. The other 44 `SECURITY DEFINER` functions (of 74)
+  (chat, style, AI…) still use `public` alone. That is a follow-up, not part
+  of this change.
+- **Direct writes.** For `anon` and `authenticated`, `guard_live_stock` now
+  also refuses writing `state`, inserting a non-draft version, and writing
+  stock into a live product's draft (`STOCK_IS_LIVE`). That last one turns an
+  old admin tab's silent stock edit into a visible error. The API roles also
+  lose insert, update and delete on `stock_movements`.
+- **Request ids.** A new `stock_requests` claim table binds each id to its
+  product, operation and payload digest. An identical retry returns the first
+  answer. Any difference raises `REQUEST_ID_REUSED`. A refused attempt doesn't
+  spend its id, and concurrent duplicates serialise on the primary key.
+  `save_product_sizes` also binds each size to its row `id` and product.
+- **Tests.** The harness now grants what Supabase grants by default, plus
+  `CREATE` on `public` as a worst case. Results:
+
+  | Suite | Result | Notes |
+  |---|---|---|
+  | `stock-security.test.ts` | 81 | New. Before/after shadow controls, whole flow with every table shadowed, EXECUTE matrix, refused callers, direct writes, request-id binding |
+  | `stock-integrity.test.ts` | 126 | |
+  | `stock-concurrency.test.ts` | 68 | New scenario H, duplicate and reused request ids. Six clean runs |
+  | `inventory.test.ts` | 35 | |
+
+- **AI suite guards.** The migration-number guards in `ai-eval`,
+  `ai-eval-live` and `ai-grounding` ("0058 still not taken", "no migration
+  0060") pinned numbers other work has since legitimately taken. They are
+  replaced by what they stood for: 0058 is the settlement migration, and no
+  migration after 0059 touches an `ai_`, `chat_` or `eval_` object. A
+  self-check confirms the detector flags 0059, and a throwaway 0061 probe was
+  caught. All three suites pass.
+- **History audit.** Now covers unsized publications, sized form-overwrite
+  candidates, and sizes whose count disagrees with their movements. Every row
+  carries a confidence (conclusive, candidate, needs review, inconclusive).
+  The log start is explicit: 0038 was merged on 8 August 2026, and its
+  application time was never recorded.
+
+Deployment goes migration first, under an admin write freeze. The procedure is
+in the PR. **Neither step is authorised yet.**
+
+### Stage 4 — integration and readiness, 26 September 2026
+
+- **Integration.** `main` (SEO-6A, `12cac8f`) merged into the branch as
+  `9748851` with no conflicts. The PR diff is still only the stock files.
+  PR #161 (the SEO-6A closure docs, `eb046ca`) merged during this stage and
+  conflicted here, because both appended to this log. `main` was merged in
+  again, keeping the SEO-6A section whole and placing the stock sections
+  after it.
+- **Migration.** 0060 now starts with `set local lock_timeout = '10s'`. If it
+  can't get its locks it fails cleanly instead of queueing checkout queries
+  behind it.
+- **History audit.** It no longer assumes the log began on 8 August, which was
+  never verified. By default the log starts at its earliest movement, so
+  anything before that reads `inconclusive`. `confirmed_log_start` is an
+  explicit owner override. Admin ids were removed from the output.
+- **Tests.**
+  - `stock-integrity`: 138. Adds a static check that the audit is one
+    read-only statement, and a section that runs `main`'s exact admin writes
+    against 0060. Every stock-moving one fails out loud, the Publish button
+    carries live stock, and the shelf never moves.
+  - `stock-security`: 81.
+  - `stock-concurrency`: 68, three more clean runs.
+  - `inventory`: 35.
+  - 62 offline suites pass on the integrated tree, including SEO-6A's
+    `seo-images` and `product-care`.
+  - TypeScript, lint and build are clean. The intermittent Tailwind "invalid
+    theme value" warning also appears on a plain `origin/main` build, so it is
+    pre-existing.
+- **Write freeze.** An operational agreement, backed by the database
+  fail-closed behaviour tested above. No app-level lock is needed. The one
+  ordering that would be unsafe is merging (deploying) before 0060 is applied.
+- **Separate work package, not in #160.** 44 older `SECURITY DEFINER`
+  functions use `search_path = public`. None uses dynamic `EXECUTE` or creates
+  temp tables, and exploiting them needs a session that can run `CREATE TEMP
+  TABLE`, which PostgREST never provides. Harden them in their own PR.
+
+### Stage 5 — production preflight prepared, 26 September 2026 (nothing run on production)
+
+- **The migration role is not a superuser.** `run-migration.mjs` connects as
+  `postgres` on the direct database host. On Supabase that role is **not** a
+  superuser, but every earlier test applied 0060 as one. A non-superuser's
+  `REVOKE` silently skips grants made by other roles. So 0060 now **checks its
+  own security outcome before committing** (section 12) and refuses to apply
+  anything if a revoke or hardening step didn't land. It also pins
+  `search_path = public, pg_temp` for its own transaction.
+  `stock-security.test.ts` (91) applies it as a non-superuser owner, and it
+  succeeds and works end to end. When a grant it can't revoke was made by
+  another role, it refuses and rolls back; when it doesn't own a function it
+  replaces, it fails cleanly.
+- **Preflight.** `scripts/stock-0060-preflight.sql` is one read-only `SELECT`
+  of about 30 checks. Each returns PASS, REVIEW or BLOCKER: version, ledger,
+  absent 0060 objects, the signatures, owners and bodies (md5 against
+  0001–0059) of every function 0060 touches, grants and their grantors,
+  `public` schema ownership and CREATE, table ownership, columns, RLS and
+  triggers. `stock-preflight.test.ts` (24) proves each bad state produces its
+  verdict, and that a ready database — including one owned by a non-superuser
+  — is all PASS.
+- **Performance.** At about 50× the expected production size (10,010
+  versions, 20,000 movements, 30,000 audit rows), the history audit took
+  ~1.2 s and the preflight 37 ms, locally.
+- **Unchanged.** Function fingerprints are identical to the Stage 3 table.
+  Nothing has been run against production.
+
+### Production preflight — complete, 26 September 2026 (read-only, run by the owner)
+
+`scripts/stock-0060-preflight.sql` against production gave **25 PASS, 1 REVIEW,
+0 BLOCKER**. The one REVIEW was **F03**: the body of `public.is_admin()` didn't
+hash to the repository's text.
+
+**F03 closed: formatting only.** The evidence, all from read-only queries:
+
+- **Attributes identical to the repository:** owner `postgres`, `sql`,
+  `SECURITY DEFINER`, `STABLE`, `search_path=public`.
+- **Same SQL, byte for byte, once whitespace is removed.** Computed inside
+  production: `regexp_replace(prosrc, '\s', '', 'g')` equals the repository's
+  whitespace-free text (`same_sql_ignoring_all_whitespace = true`), and there
+  are no unusual characters (`unusual_characters = null`). Body length 95 and
+  md5 `af565933219366fb8c1866de13bc2da8` were reproduced by the owner from the
+  raw hex. The decoded body is
+  `select coalesce((select p.is_admin from public.profiles p where p.id = auth.uid()), false);`,
+  laid out differently.
+- **Why the whitespace-insensitive hash still differed:**
+  - It was `md5(regexp_replace(btrim(prosrc), '\s+', ' ', 'g'))`, and
+    `btrim()` with no argument strips spaces, not newlines.
+  - Collapsing also can't create or remove whitespace between tokens:
+    production has `coalesce((select`, the repository `coalesce(` then a
+    newline then `(select`.
+  - Production's normalised text,
+    `' select coalesce((select p.is_admin from public.profiles p where p.id = auth.uid()), false); '`,
+    hashes to exactly the `3533c47ebb1e1d08756cf3ba045fadb1` production
+    reported. That explains the difference completely.
+- **Git holds only one version** of this function (29–30 July), so production's
+  layout came from hand-pasting — consistent with `f6a8567` recording that
+  production was "built from hand-pasted fragments".
+- **0060 compatibility: unaffected.** 0060 only runs
+  `ALTER FUNCTION public.is_admin() SET search_path = public, pg_temp` and never
+  replaces the body. Tested locally with production's body, as a non-superuser:
+  0060 applied, the body was preserved, the search path was hardened, admins
+  were allowed, signed-in customers were refused, and anon was denied.
+
+`is_admin()` is deliberately **not** being changed to match the repository's
+hash. With F03 closed, the preflight is complete, with no BLOCKER and no open
+REVIEW. Next is the read-only history audit.
