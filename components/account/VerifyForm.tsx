@@ -9,6 +9,7 @@ import AuthShell from "./AuthShell";
 import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
 import { verifySignupCode, resendSignupCode, AFTER_LOGIN } from "@/lib/customerAuth";
+import { VERIFY_COPY, VERIFY_RESET_HREF, verifyLoginHref } from "@/lib/signupVerifyCopy";
 
 /**
  * A typed code rather than a clicked link, for signup only.
@@ -20,6 +21,11 @@ import { verifySignupCode, resendSignupCode, AFTER_LOGIN } from "@/lib/customerA
  *
  * Password reset uses a link instead: that token establishes a session when
  * clicked, and the user is usually on a different device by then anyway.
+ *
+ * This page cannot know whether a code was sent: Supabase answers a signup for
+ * an already-registered address as if it were new, and sends nothing. So it
+ * never claims one was, and it always offers the way back to logging in. See
+ * lib/signupVerifyCopy for the wording rules.
  */
 export default function VerifyForm({
   email,
@@ -88,7 +94,7 @@ export default function VerifyForm({
     <AuthShell
       eyebrow="One more step"
       title="Check your email"
-      intro={`We've sent a code to ${email}. Enter it below to finish.`}
+      intro={VERIFY_COPY.intro(email)}
       footer={
         <>
           Wrong address?{" "}
@@ -102,7 +108,7 @@ export default function VerifyForm({
         {error && <AuthMessage tone="error">{error}</AuthMessage>}
         {sent && (
           <AuthMessage tone="success">
-            A new code is on its way. It can take a minute to arrive.
+            {VERIFY_COPY.resent}
           </AuthMessage>
         )}
 
@@ -114,7 +120,7 @@ export default function VerifyForm({
           placeholder="123456"
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          hint="Six digits, from the email we just sent."
+          hint={VERIFY_COPY.codeHint}
         />
 
         <Button type="submit" size="lg" className="w-full" disabled={busy}>
@@ -136,6 +142,18 @@ export default function VerifyForm({
           Send another code
         </button>
       </form>
+
+      <div className="mt-8 border-t border-ink/10 pt-6 text-sm text-ink/70">
+        <p>{VERIFY_COPY.existingAccount}</p>
+        <p className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
+          <Link href={verifyLoginHref(from)} className="text-terracotta hover:underline">
+            Log in
+          </Link>
+          <Link href={VERIFY_RESET_HREF} className="text-terracotta hover:underline">
+            Reset your password
+          </Link>
+        </p>
+      </div>
     </AuthShell>
   );
 }
