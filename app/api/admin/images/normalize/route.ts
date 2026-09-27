@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import sharp from "sharp";
+import { verifyMasterDelivery } from "@/lib/imageDelivery";
 import { createRSCClient } from "@/lib/supabaseRSC";
 import {
   ImageRejected,
@@ -13,6 +14,7 @@ import {
   assertUsableSource,
   masterEncoding,
   masterKey,
+  masterUploadOptions,
   stagingKey,
   targetSize,
 } from "@/lib/imageNormalize";
@@ -95,6 +97,8 @@ export async function POST(request: NextRequest) {
 
   let masterPath: string;
   let bytesOut: number;
+  let masterMd5: string;
+  let duplicate: boolean;
   let width: number;
   let height: number;
 
@@ -161,6 +165,9 @@ export async function POST(request: NextRequest) {
     const hash = createHash("sha256").update(source).digest("hex");
     masterPath = masterKey(hash, encoding.ext);
     bytesOut = master.byteLength;
+    // What the delivery check compares the served ETag against. See
+    // lib/imageDelivery for when an ETag is, and is not, an MD5.
+    masterMd5 = createHash("md5").update(master).digest("hex");
     width = check.width;
     height = check.height;
 
@@ -168,22 +175,26 @@ export async function POST(request: NextRequest) {
      * upsert:false, and "already exists" is SUCCESS. The key is derived from the
      * source's hash and the pipeline version, so a retry — a double click, a
      * dropped response, a re-submitted form — resolves to the same object. The
-     * duplicate is the idempotency working, not a collision to work around.
+     * duplicate is the idempotency working, not a collision to work around —
+     * but only once the delivery check below has shown the existing object is
+     * these bytes. A name is not proof.
+     *
+     * The options carry X-Robots-Tag: all and a real `max-age=` Cache-Control,
+     * the same headers the raw REST scripts send (lib/imageNormalize).
      */
     const { error: uploadError } = await supabase.storage
       .from(BUCKET)
-      .upload(masterPath, master, {
-        cacheControl: MASTER_CACHE_CONTROL,
-        upsert: false,
-        contentType: encoding.contentType,
-      });
+      .upload(masterPath, master, masterUploadOptions(encoding.contentType));
 
+    // A. UPLOAD FAILED.
     if (uploadError && !isDuplicate(uploadError)) {
       return NextResponse.json(
         { error: "That photograph could not be saved. Please try again." },
         { status: 502 }
       );
     }
+    // B. AN EXISTING DUPLICATE — judged below like any other master.
+    duplicate = Boolean(uploadError);
   } catch (error) {
     // NOTHING HAS BEEN DELETED. The staged original is still there, which is the
     // point: a failure here must leave the only copy of the photograph intact so
@@ -191,13 +202,60 @@ export async function POST(request: NextRequest) {
     return reject(error, "processing_failed");
   }
 
-  // The master must be readable before anything is allowed to point at it.
+  /*
+   * The master must be readable, and be THESE bytes, before anything is allowed
+   * to point at it. One ranged GET of the public URL — never HEAD, which the
+   * hosted service answers from somewhere other than the stored object.
+   *
+   * NOTHING HERE DELETES THE MASTER, whatever the answer. A master that fails
+   * this check stays where it is (an unreferenced object is the orphan tooling's
+   * job, and deleting a content-addressed object another product may already use
+   * would be far worse) and the staged original stays too, so nothing is lost.
+   */
   const publicUrl = supabase.storage.from(BUCKET).getPublicUrl(masterPath).data.publicUrl;
-  const verified = await verifyReadable(publicUrl);
-  if (!verified) {
+  const served = await verifyMasterDelivery(publicUrl, {
+    byteLength: bytesOut,
+    md5: masterMd5,
+    maxAge: Number(MASTER_CACHE_CONTROL),
+  });
+
+  if (!served.ok) {
+    console.error(
+      `[image-normalize] delivery-failed ${served.failure} master=${masterPath} duplicate=${duplicate} status=${served.httpStatus ?? "none"} — ${served.detail}`
+    );
+    // C. UNREADABLE.
+    if (served.failure === "unreadable") {
+      return NextResponse.json(
+        { error: "That photograph could not be verified. Please try again." },
+        { status: 502 }
+      );
+    }
+    // DEMONSTRABLY DIFFERENT BYTES. For a duplicate this is the case the name
+    // would otherwise have hidden: never accept it as the same photograph.
     return NextResponse.json(
-      { error: "That photograph could not be verified. Please try again." },
-      { status: 502 }
+      {
+        error: duplicate
+          ? "This photograph was added before, but the stored copy does not match it, so it was not used. Please report this rather than retrying."
+          : "That photograph could not be verified. Please try again.",
+      },
+      { status: duplicate ? 409 : 502 }
+    );
+  }
+
+  /*
+   * D. IDENTITY UNVERIFIED, E. NOT INDEXABLE, or a wrong Cache-Control. The
+   * photograph is readable and not shown to be different bytes, so the upload
+   * stands — the storefront's own markup names it through /_next/image, which
+   * does not carry the storage headers — but it is NOT reported as verified.
+   * `delivery` says exactly what is wrong, and the log line is what an operator
+   * searches for. A duplicate of a master made before this fix lands here as
+   * not_indexable: it cannot be corrected in place (a same-key overwrite leaves
+   * the CDN serving the old headers), which is SEO-6B's separate decision.
+   */
+  const { delivery } = served;
+  if (delivery.status !== "verified") {
+    console.warn(
+      `[image-normalize] delivery-warning ${delivery.warnings.join(",")} master=${masterPath} duplicate=${duplicate} x-robots-tag=${delivery.robotsTag ?? "absent"} cache-control=${delivery.cacheControl ?? "absent"}`
     );
   }
 
@@ -233,6 +291,8 @@ export async function POST(request: NextRequest) {
     bytes: bytesOut,
     stagedRemoved,
     version: NORMALIZER_VERSION,
+    duplicate,
+    delivery,
   });
 }
 
@@ -258,15 +318,6 @@ function isDuplicate(error: { message?: string; statusCode?: string }): boolean 
     message.includes("already exists") ||
     message.includes("duplicate")
   );
-}
-
-async function verifyReadable(url: string): Promise<boolean> {
-  try {
-    const response = await fetch(url, { method: "HEAD", cache: "no-store" });
-    return response.ok;
-  } catch {
-    return false;
-  }
 }
 
 function reject(error: unknown, fallback: string) {

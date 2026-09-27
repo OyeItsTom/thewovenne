@@ -62,11 +62,11 @@ import {
 } from "../lib/imageC6";
 import {
   JPEG_MASTER,
-  MASTER_CACHE_CONTROL,
   MAX_INPUT_PIXELS,
   NORMALIZER_VERSION,
   masterEncoding,
   masterKey,
+  masterUploadHeaders,
   targetSize,
 } from "../lib/imageNormalize";
 import { ImageReferenceGraph, type TableRows } from "../lib/imageReferences";
@@ -360,7 +360,9 @@ async function main() {
             apikey: env("SUPABASE_SERVICE_ROLE_KEY"),
             Authorization: `Bearer ${env("SUPABASE_SERVICE_ROLE_KEY")}`,
             "Content-Type": encoding.contentType,
-            "cache-control": MASTER_CACHE_CONTROL,
+            // A real `max-age=`, not the bare number, and X-Robots-Tag: all —
+            // the headers the admin route sends (masterUploadHeaders).
+            ...masterUploadHeaders(),
             "x-upsert": "false",
           },
           body: new Uint8Array(master) });
