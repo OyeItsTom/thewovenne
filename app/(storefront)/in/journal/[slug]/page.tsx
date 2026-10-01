@@ -3,7 +3,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getPostBySlug, getPublishedPosts } from "@/lib/storefront";
-import { openGraph } from "@/lib/seo";
+import { journalImageUrl, openGraph } from "@/lib/seo";
 import { journalHref } from "@/lib/urls";
 import { metaDescription } from "@/lib/metadata";
 
@@ -43,7 +43,8 @@ export async function generateMetadata({
       title: post.title,
       description,
       path: journalHref(post.slug),
-      images: [post.image_url],
+      // The optimizer's copy, not the raw original: see journalImageUrl.
+      images: [post.image_url ? journalImageUrl(post.image_url) : null],
     }),
   };
 }

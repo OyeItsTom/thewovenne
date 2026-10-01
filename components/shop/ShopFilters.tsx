@@ -121,7 +121,7 @@ export default function ShopFilters({
               </button>
             </div>
           ) : (
-            <ProductGrid products={products} />
+            <ProductGrid products={products} headingLevel={2} />
           )}
         </div>
       </div>

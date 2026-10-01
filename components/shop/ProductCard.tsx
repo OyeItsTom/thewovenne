@@ -48,10 +48,19 @@ const CARD_SIZES =
 export default function ProductCard({
   product,
   discoveryHint = false,
+  headingLevel = 3,
 }: {
   product: ProductListing;
   discoveryHint?: boolean;
+  /**
+   * The name's heading level, from where the card sits. A listing page's grid
+   * hangs straight off its h1, so its cards are h2. Under a section that has
+   * its own h2 ("You May Also Like", the home rails) they stay h3. The look
+   * comes from the classes and does not change.
+   */
+  headingLevel?: 2 | 3;
 }) {
+  const Title = headingLevel === 2 ? "h2" : "h3";
   const { ref, revealed } = useReveal<HTMLDivElement>();
   const images = product.images?.length
     ? product.images
@@ -332,9 +341,9 @@ export default function ProductCard({
 
       <div className="h-[76px] px-1 pb-1 pt-2 sm:h-auto sm:px-0 sm:pt-3">
         <Link href={productHref(product)} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">
-          <h3 className="line-clamp-2 min-h-9 font-body text-sm font-normal leading-[18px] tracking-[0.01em] text-ink sm:min-h-0 sm:text-base sm:leading-5">
+          <Title className="line-clamp-2 min-h-9 font-body text-sm font-normal leading-[18px] tracking-[0.01em] text-ink sm:min-h-0 sm:text-base sm:leading-5">
             {product.name}
-          </h3>
+          </Title>
         </Link>
         <div className="mt-1 flex min-w-0 items-baseline justify-between gap-2">
           <span className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap font-body text-sm font-medium text-ink">

@@ -83,9 +83,9 @@ export default function DeliveryEstimator({
 
   return (
     <div className="border-t border-ink/10 pt-5">
-      <h3 className="font-heading text-sm uppercase tracking-wider text-ink/60">
+      <h2 className="font-heading text-sm uppercase tracking-wider text-ink/60">
         Delivery
-      </h3>
+      </h2>
 
       <form onSubmit={check} className="mt-3 flex gap-2">
         <label className="sr-only" htmlFor="delivery-postal">

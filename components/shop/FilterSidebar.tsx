@@ -1,6 +1,7 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
+import type { ReactNode } from "react";
 import { X } from "lucide-react";
 import { cn, formatINR } from "@/lib/utils";
 import { NO_FILTERS, type CatalogueFilters } from "@/lib/catalogueParams";
@@ -63,9 +64,15 @@ export default function FilterSidebar({
     filters.size ||
     filters.maxPrice;
 
-  const content = (
+  /*
+   * The same controls in two places, at two heading levels. The desktop
+   * sidebar sits straight under the page's h1, so its groups are h2. The
+   * drawer has its own h2, "Filters", so there they are h3.
+   */
+  const content = (level: HeadingLevel) => (
     <div className="space-y-8">
       <CategoryFilter
+        level={level}
         groups={options.categoryGroups}
         selected={filters.category}
         onSelect={(v) =>
@@ -74,6 +81,7 @@ export default function FilterSidebar({
       />
       {options.sizes.length > 0 && (
         <FilterGroup
+          level={level}
           title="Size"
           options={options.sizes}
           selected={filters.size}
@@ -81,19 +89,21 @@ export default function FilterSidebar({
         />
       )}
       <FilterGroup
+        level={level}
         title="Fabric"
         options={options.fabrics}
         selected={filters.fabric}
         onSelect={(v) => update({ fabric: filters.fabric === v ? null : v })}
       />
       <FilterGroup
+        level={level}
         title="Colour"
         options={options.colours}
         selected={filters.colour}
         onSelect={(v) => update({ colour: filters.colour === v ? null : v })}
       />
       <div>
-        <h3 className="font-heading text-lg text-ink">Price</h3>
+        <GroupHeading level={level}>Price</GroupHeading>
         <div className="mt-3 flex flex-wrap gap-2">
           {PRICE_STEPS.map((price) => (
             <button
@@ -127,7 +137,7 @@ export default function FilterSidebar({
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden w-64 flex-shrink-0 lg:block">{content}</aside>
+      <aside className="hidden w-64 flex-shrink-0 lg:block">{content(2)}</aside>
 
       {/* Mobile slide-in drawer.
 
@@ -162,7 +172,7 @@ export default function FilterSidebar({
                   <X className="h-5 w-5" />
                 </button>
               </div>
-              <div className="mt-6">{content}</div>
+              <div className="mt-6">{content(3)}</div>
           </motion.div>
         </div>
       )}
@@ -170,11 +180,20 @@ export default function FilterSidebar({
   );
 }
 
+type HeadingLevel = 2 | 3;
+
+function GroupHeading({ level, children }: { level: HeadingLevel; children: ReactNode }) {
+  const Tag = level === 2 ? "h2" : "h3";
+  return <Tag className="font-heading text-lg text-ink">{children}</Tag>;
+}
+
 function CategoryFilter({
+  level,
   groups,
   selected,
   onSelect,
 }: {
+  level: HeadingLevel;
   groups: CategoryFilterGroup[];
   selected: string | null;
   onSelect: (slug: string) => void;
@@ -183,7 +202,7 @@ function CategoryFilter({
 
   return (
     <div>
-      <h3 className="font-heading text-lg text-ink">Category</h3>
+      <GroupHeading level={level}>Category</GroupHeading>
       <div className="mt-3 space-y-4">
         {groups.map((group) => (
           <div key={group.name}>
@@ -214,11 +233,13 @@ function CategoryFilter({
 }
 
 function FilterGroup({
+  level,
   title,
   options,
   selected,
   onSelect,
 }: {
+  level: HeadingLevel;
   title: string;
   options: string[];
   selected: string | null;
@@ -228,7 +249,7 @@ function FilterGroup({
 
   return (
     <div>
-      <h3 className="font-heading text-lg text-ink">{title}</h3>
+      <GroupHeading level={level}>{title}</GroupHeading>
       <div className="mt-3 flex flex-wrap gap-2">
         {options.map((opt) => (
           <button

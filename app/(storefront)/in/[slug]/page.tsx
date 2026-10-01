@@ -172,7 +172,7 @@ export default async function SlugPage({
               This collection is still on the loom. Please check back soon.
             </p>
           ) : (
-            <ProductGrid products={products} />
+            <ProductGrid products={products} headingLevel={2} />
           )}
         </div>
       </div>
