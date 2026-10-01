@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import ImageWeaveOverlay from "@/components/weave/ImageWeaveOverlay";
 import ImageViewer from "./ImageViewer";
 import { cardImageOffset, decideCardGesture } from "@/lib/cardSwipe";
+import { productImageAlt } from "@/lib/seo";
 
 /**
  * The gallery.
@@ -189,7 +190,11 @@ export default function ImageGallery({
             <Image
               key={src + i}
               src={src}
-              alt={i === active ? alt : ""}
+              // Every frame carries its own alt, so the server HTML describes
+              // the whole set rather than the cover alone. The frames off to
+              // the side stay aria-hidden: a screen reader hears the one that
+              // is showing, and the live region below says where it is.
+              alt={productImageAlt(alt, i, images.length)}
               aria-hidden={i !== active}
               fill
               // Only the cover is priority: it is the page's LCP. Its immediate
@@ -294,7 +299,7 @@ export default function ImageGallery({
             >
               <Image
                 src={src}
-                alt={`${alt} thumbnail ${i + 1}`}
+                alt={productImageAlt(alt, i, images.length)}
                 fill
                 sizes="120px"
                 className="object-cover"
