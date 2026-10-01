@@ -85,6 +85,7 @@ export async function generateMetadata({
       description,
       path: productHref(product),
       images: [product.image_url ? productImageUrl(product.image_url, "openGraph") : null],
+      imageAlt: product.name,
     }),
   };
 }

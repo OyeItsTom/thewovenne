@@ -230,6 +230,12 @@ export function openGraph<T extends "website" | "article" = "website">(input: {
   path?: string;
   /** Cover first. Falls back to the shared mark when a page has no image. */
   images?: (string | null | undefined)[];
+  /**
+   * og:image:alt (and, through Next's Open Graph → Twitter fill,
+   * twitter:image:alt) for the page's OWN images. Never attached to the shared
+   * mark: a product's name is not a description of the brand's logo.
+   */
+  imageAlt?: string;
   type?: T;
 }): {
   type: T;
@@ -237,9 +243,11 @@ export function openGraph<T extends "website" | "article" = "website">(input: {
   title: string;
   description?: string;
   url?: string;
-  images: string[];
+  images: (string | { url: string; alt: string })[];
 } {
-  const images = (input.images ?? []).filter((src): src is string => Boolean(src));
+  const supplied = (input.images ?? []).filter((src): src is string => Boolean(src));
+  const alt = input.imageAlt?.trim();
+  const images = alt ? supplied.map((url) => ({ url, alt })) : supplied;
   return {
     type: (input.type ?? "website") as T,
     siteName: SITE_NAME,
@@ -255,4 +263,17 @@ export function openGraph<T extends "website" | "article" = "website">(input: {
     url: input.path ? customerUrl(input.path) : undefined,
     images: images.length > 0 ? images : [DEFAULT_OG_IMAGE],
   };
+}
+
+/**
+ * The alt text for one photograph in a product's gallery.
+ *
+ * The cover is the product's name, exactly as before. Every later photograph is
+ * "{name} — image {i} of {n}": true of every image we hold, because the name
+ * and the position are the only things we know about it. There is no per-image
+ * alt in product_images, and guessing a colour, an angle or a detail from the
+ * file would put a claim on the page that nobody checked.
+ */
+export function productImageAlt(name: string, index: number, total: number): string {
+  return index === 0 ? name : `${name} — image ${index + 1} of ${total}`;
 }
