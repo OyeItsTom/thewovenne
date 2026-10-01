@@ -86,6 +86,14 @@ export type ProductImageVariant = keyof typeof PRODUCT_IMAGE_VARIANTS;
 const PRODUCT_IMAGE_PATH =
   /^\/storage\/v1\/object\/public\/product-images\/products\/[A-Za-z0-9][A-Za-z0-9_-]*\.(?:jpe?g|png|webp)$/;
 
+/**
+ * A journal article's cover: the same bucket and the same rules, under
+ * journal/ instead. Kept as its own pattern so that neither helper can
+ * rewrite the other's folder.
+ */
+const JOURNAL_IMAGE_PATH =
+  /^\/storage\/v1\/object\/public\/product-images\/journal\/[A-Za-z0-9][A-Za-z0-9_-]*\.(?:jpe?g|png|webp)$/;
+
 function configuredStorageHost(supabaseUrl: string | undefined): string | null {
   try {
     const parsed = new URL((supabaseUrl ?? "").trim());
@@ -145,6 +153,32 @@ export function productImageUrl(
   variant: ProductImageVariant,
   supabaseUrl: string | undefined = process.env.NEXT_PUBLIC_SUPABASE_URL
 ): string {
+  return optimizedStorageImageUrl(src, variant, PRODUCT_IMAGE_PATH, supabaseUrl);
+}
+
+/**
+ * A journal article's cover image, for its share card.
+ *
+ * The same defect, and the same fix, as productImageUrl above: the originals
+ * under journal/ are served with `X-Robots-Tag: none`, while the page's own
+ * <img> has always loaded them from /_next/image, which carries no such
+ * header. og:image now names that URL at the approved openGraph size. Nothing
+ * outside journal/ on this project's storage host is rewritten, and the stored
+ * original is untouched.
+ */
+export function journalImageUrl(
+  src: string,
+  supabaseUrl: string | undefined = process.env.NEXT_PUBLIC_SUPABASE_URL
+): string {
+  return optimizedStorageImageUrl(src, "openGraph", JOURNAL_IMAGE_PATH, supabaseUrl);
+}
+
+function optimizedStorageImageUrl(
+  src: string,
+  variant: ProductImageVariant,
+  path: RegExp,
+  supabaseUrl: string | undefined
+): string {
   if (!Object.prototype.hasOwnProperty.call(PRODUCT_IMAGE_VARIANTS, variant)) {
     throw new Error(`Unapproved product image variant: ${String(variant)}`);
   }
@@ -167,7 +201,7 @@ export function productImageUrl(
     parsed.password === "" &&
     parsed.search === "" &&
     parsed.hash === "" &&
-    PRODUCT_IMAGE_PATH.test(parsed.pathname);
+    path.test(parsed.pathname);
   if (!recognised) return src;
 
   return `${PRODUCTION_ORIGIN}/_next/image?url=${encodeURIComponent(src)}&w=${width}&q=${quality}`;

@@ -56,9 +56,9 @@ export default function AddToCart({
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="font-heading text-sm uppercase tracking-wider text-ink/60">
+        <h2 className="font-heading text-sm uppercase tracking-wider text-ink/60">
           Quantity
-        </h3>
+        </h2>
         <div className="mt-3 flex w-fit items-center gap-4 rounded-full border border-ink/15 px-2">
           <button
             onClick={() => setQuantity((q) => Math.max(1, q - 1))}

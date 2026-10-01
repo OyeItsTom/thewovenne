@@ -4,8 +4,11 @@ import ProductCard from "./ProductCard";
 
 export default function ProductGrid({
   products,
+  headingLevel,
 }: {
   products: ProductListing[] | null;
+  /** Passed to every card. See ProductCard. */
+  headingLevel?: 2 | 3;
 }) {
   if (products === null) {
     return (
@@ -32,6 +35,7 @@ export default function ProductGrid({
           key={product.id}
           product={product}
           discoveryHint={productIndex === 0}
+          headingLevel={headingLevel}
         />
       ))}
     </div>

@@ -24,9 +24,9 @@ export default function SizeSelector({
 
   return (
     <div>
-      <h3 className="font-heading text-sm uppercase tracking-wider text-ink/60">
+      <h2 className="font-heading text-sm uppercase tracking-wider text-ink/60">
         Size
-      </h3>
+      </h2>
       <div className="mt-3 flex flex-wrap gap-2">
         {sizes.map((size) => {
           const soldOut = size.stock_quantity <= 0;

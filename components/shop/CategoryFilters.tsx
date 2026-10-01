@@ -62,7 +62,7 @@ export default function CategoryFilters({
 
   // A filter panel offering nothing is worse than no panel.
   if (nothingToFilter) {
-    return <ProductGrid products={products} />;
+    return <ProductGrid products={products} headingLevel={2} />;
   }
 
   return (
@@ -100,7 +100,7 @@ export default function CategoryFilters({
             <p className="mb-6 text-xs uppercase tracking-wider text-ink/50">
               {filtered.length} of {products.length}
             </p>
-            <ProductGrid products={filtered} />
+            <ProductGrid products={filtered} headingLevel={2} />
           </>
         )}
       </div>
