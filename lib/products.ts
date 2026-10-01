@@ -24,7 +24,9 @@ export const PRODUCT_SELECT =
   //
   // Embedded through product_images.product_version_id, so it is this version's
   // gallery: a draft's photos stay with the draft.
-  "product_images(url, sort_order)";
+  "product_images(url, sort_order), " +
+  // The PRODUCT's creation date, for ordering only. See NEWEST_PRODUCT_FIRST.
+  "products(created_at)";
 
 /**
  * The smaller row shape a discovery card actually needs.
@@ -36,7 +38,7 @@ export const PRODUCT_SELECT =
 export const PRODUCT_LISTING_SELECT =
   "product_id, name, slug, price_inr, category_id, stock_quantity, image_url, " +
   "is_active, created_at, discount_type, discount_value, discount_starts_at, " +
-  "discount_ends_at, product_images(url, sort_order)";
+  "discount_ends_at, product_images(url, sort_order), products(created_at)";
 
 /**
  * Base query for every storefront listing.
@@ -64,6 +66,29 @@ function storefrontListingQuery(ctx: ReadCtx) {
     )
     .in("state", statesFor(ctx));
 }
+
+/**
+ * Customer-facing order: newest PRODUCT first.
+ *
+ * NOT product_versions.created_at. That column is when a VERSION was made, and
+ * every edit makes one: ensure_product_draft forks a draft stamped now(), and
+ * publishing promotes it. Ordering by it moved a piece to the top of the shop
+ * and the home rail for a description fix — a necklace added in August read as
+ * the newest arrival in October.
+ *
+ * products.created_at is the identity row's, written once when the product was
+ * created and never touched by publishing. PostgREST orders a parent by a
+ * to-one embed (`order=products(created_at).desc`), which is why both selects
+ * above embed it. A left embed, not !inner: a product whose identity row RLS
+ * hides is not dropped from the listing, it sorts last. product_id breaks ties
+ * so the order is stable.
+ *
+ * The version's created_at is still mapped onto the product as before — the
+ * sitemap reports it as lastModified, where "when this content last changed" is
+ * the right answer.
+ */
+const NEWEST_PRODUCT_FIRST = "products(created_at)";
+const BY_NEWEST_PRODUCT = { ascending: false, nullsFirst: false } as const;
 
 /** Collapse to one row per product and map. A no-op outside preview. */
 function finish(data: unknown, cats: Map<string, Category>): Product[] {
@@ -93,6 +118,8 @@ export type ProductVersionRow = {
   discount_starts_at: string | null;
   discount_ends_at: string | null;
   video_youtube_id: string | null;
+  /** The identity row's creation date, embedded for ordering. See NEWEST_PRODUCT_FIRST. */
+  products?: { created_at: string } | null;
   /** Embedded gallery. Absent on queries that do not ask for it. */
   product_images?: { url: string | null; sort_order: number | null }[] | null;
 };
@@ -434,7 +461,8 @@ export async function getFeaturedProducts(
     // them. A piece that sold out is the best evidence the shop has that people
     // buy here — it keeps its photographs and its reviews, and says "sold out"
     // rather than vanishing and taking its social proof with it.
-    .order("created_at", { ascending: false })
+    .order(NEWEST_PRODUCT_FIRST, BY_NEWEST_PRODUCT)
+    .order("product_id", { ascending: true })
     .limit(limit);
 
   if (error) {
@@ -451,7 +479,8 @@ export async function getAllProducts(ctx: ReadCtx = ANON_CTX): Promise<Product[]
   const { data, error } = await storefrontQuery(ctx)
     .eq("is_active", true)
     .in("category_id", visibleIds)
-    .order("created_at", { ascending: false });
+    .order(NEWEST_PRODUCT_FIRST, BY_NEWEST_PRODUCT)
+    .order("product_id", { ascending: true });
 
   if (error) {
     console.error("getAllProducts:", error.message);
@@ -594,7 +623,7 @@ export async function getCatalogue(
     // Preview correctness comes before query narrowing: collapse to the effective
     // draft/published row first, then apply every visibility/filter rule.
     const { data, error } = await storefrontQuery(ctx)
-      .order("created_at", { ascending: false })
+      .order(NEWEST_PRODUCT_FIRST, BY_NEWEST_PRODUCT)
       .order("product_id", { ascending: true });
     if (error) {
       console.error("getCatalogue preview:", error.message);
@@ -643,7 +672,7 @@ export async function getCatalogue(
   }
 
   query = query
-    .order("created_at", { ascending: false })
+    .order(NEWEST_PRODUCT_FIRST, BY_NEWEST_PRODUCT)
     .order("product_id", { ascending: true });
   if (opts.limit !== undefined) {
     const from = opts.offset ?? 0;
@@ -748,7 +777,8 @@ export async function getProductsByCollection(
     .eq("is_active", true)
     .eq("collection", collection)
     .in("category_id", visibleIds)
-    .order("created_at", { ascending: false });
+    .order(NEWEST_PRODUCT_FIRST, BY_NEWEST_PRODUCT)
+    .order("product_id", { ascending: true });
 
   if (error) {
     console.error("getProductsByCollection:", error.message);
@@ -829,7 +859,8 @@ export async function getProductsByCategoryIds(
   const { data, error } = await storefrontQuery(ctx)
     .eq("is_active", true)
     .in("category_id", scoped)
-    .order("created_at", { ascending: false });
+    .order(NEWEST_PRODUCT_FIRST, BY_NEWEST_PRODUCT)
+    .order("product_id", { ascending: true });
 
   if (error) {
     console.error("getProductsByCategoryIds:", error.message);

@@ -26,6 +26,7 @@ function product(product_id: string, patch: Row = {}): Row {
     slug: product_id, description: "not sent by the public listing", price_inr: 2000,
     category_id: "sarees", fabric: " Cotton ", colour: "Gold", stock_quantity: 2,
     image_url: `${product_id}-cover.jpg`, is_active: true, created_at: "2026-01-01T00:00:00Z",
+    products: { created_at: "2026-01-01T00:00:00Z" },
     collection: null, video_youtube_id: "abcdefghijk", discount_type: null,
     discount_value: null, discount_starts_at: null, discount_ends_at: null,
     product_images: [{ url: `${product_id}-cover.jpg`, sort_order: 0 }, { url: `${product_id}-detail.jpg`, sort_order: 1 }],
@@ -70,7 +71,10 @@ class Query implements PromiseLike<{ data: Row[]; error: null }> {
         if (op.kind === "gt") rows = rows.filter((r) => r[op.column!] > op.value);
         if (op.kind === "lte") rows = rows.filter((r) => r[op.column!] <= op.value);
         if (op.kind === "order") rows.sort((a, b) => {
-          const cmp = String(a[op.column!]).localeCompare(String(b[op.column!]));
+          // PostgREST orders a parent by a to-one embed with "rel(col)".
+          const path = /^(\w+)\((\w+)\)$/.exec(op.column!);
+          const value = (r: Row) => (path ? r[path[1]]?.[path[2]] : r[op.column!]);
+          const cmp = String(value(a)).localeCompare(String(value(b)));
           return op.ascending ? cmp : -cmp;
         });
         if (op.kind === "range") rows = rows.slice(op.from, op.to! + 1);
