@@ -54,7 +54,8 @@ export default function ProductContentCheck({
   onUse,
   saveLabel,
 }: {
-  check: ContentCheck;
+  /** Null until there is something to check (see contentCheckStarted): a neutral prompt shows instead. */
+  check: ContentCheck | null;
   ignored: ReadonlySet<string>;
   onIgnore: (id: string) => void;
   onRestoreIgnored: () => void;
@@ -63,6 +64,23 @@ export default function ProductContentCheck({
   saveLabel: string;
 }) {
   const [showIgnored, setShowIgnored] = useState(false);
+
+  if (!check) {
+    return (
+      <section
+        aria-labelledby="content-check-title"
+        className="space-y-1 rounded-xl border border-ink/10 bg-linen/30 p-4"
+      >
+        <h3 id="content-check-title" className="font-heading text-lg text-ink">
+          Product content check
+        </h3>
+        <p className="text-sm text-ink/60" role="status">
+          Enter a product name to start the content check.
+        </p>
+      </section>
+    );
+  }
+
   const visible = check.findings.filter((f) => showIgnored || !ignored.has(f.id));
   const hiddenCount = check.findings.filter((f) => ignored.has(f.id)).length;
   // The headline reflects what is still showing: ignoring a warning is the

@@ -325,6 +325,8 @@ function joinList(items: string[]): string {
 interface NameCleanup {
   value: string;
   reasons: string[];
+  /** The product type is missing but there is no single safe place to put it. */
+  typeUnplaced?: string;
 }
 
 /**
@@ -398,13 +400,36 @@ export function cleanName(raw: string, categoryName: string | null): NameCleanup
     s = cased;
   }
 
+  // The product type goes where a person would say it: at the end, or — when
+  // the name ends in one "with …" phrase — just before it. "Pink Tie-Dye with
+  // Gold Border" becomes "Pink Tie-Dye Saree with Gold Border", never
+  // "…Gold Border Saree". It is ambiguous — so the type is NOT added, and
+  // checkName says so — when there is more than one "with", nothing before
+  // it, or only colours before it: in "Magenta with Green Lines Border" the
+  // magenta may be the border's, and "Magenta Saree with…" would claim a
+  // magenta body.
   const type = productTypeFor(categoryName);
+  let typeUnplaced: string | undefined;
   if (type && s && !namesProductType(s, type)) {
-    s = `${s} ${titleCase(type)}`;
-    reasons.push(`Adds the product type, “${titleCase(type)}”, from the sub-category.`);
+    const T = titleCase(type);
+    const parts = s.split(/ with /i);
+    if (parts.length === 1 && !/^with\b/i.test(s)) {
+      s = `${s} ${T}`;
+      reasons.push(`Adds the product type, “${T}”, from the sub-category.`);
+    } else if (
+      parts.length === 2 &&
+      parts[0].trim() &&
+      parts[1].trim() &&
+      words(parts[0]).some((w) => !COLOUR_SET.has(w) && w !== "and")
+    ) {
+      s = `${parts[0]} ${T} with ${parts[1]}`;
+      reasons.push(`Adds the product type, “${T}”, from the sub-category, before the “with …” part.`);
+    } else {
+      typeUnplaced = T;
+    }
   }
 
-  return { value: s, reasons: s === raw ? [] : reasons };
+  return { value: s, reasons: s === raw ? [] : reasons, typeUnplaced };
 }
 
 function checkName(input: ContentInput, out: Finding[]): string {
@@ -438,6 +463,16 @@ function checkName(input: ContentInput, out: Finding[]): string {
         : `${quote(name)} could be clearer.`,
       reasons: clean.reasons,
       suggestion: taken ? undefined : { field: "name", value: clean.value },
+    });
+  }
+
+  if (clean.typeUnplaced) {
+    out.push({
+      id: `name:type:${raw}`,
+      field: "name",
+      level: "warn",
+      evidence: "MISSING",
+      message: `The name doesn't say it is a ${clean.typeUnplaced.toLowerCase()}. Add “${clean.typeUnplaced}” where it reads naturally — it wasn't added for you, because there is no single obvious place for it.`,
     });
   }
 
@@ -746,6 +781,17 @@ export function draftDescription(name: string, fabric: string): string | null {
   if (!n || !f) return null;
   const phrase = asPhrase(n);
   const article = /^[aeiou]/i.test(phrase) ? "An" : "A";
+  // "pink tie-dye saree with gold border" reads as "A pink tie-dye saree in
+  // cotton, with a gold border." — the cloth beside the noun it describes, and
+  // an article only before a single thing (never "a green lines").
+  const parts = phrase.split(" with ");
+  if (parts.length === 2 && parts[0] && parts[1]) {
+    const [core, detail] = parts;
+    const lastWord = detail.split(" ").pop() ?? "";
+    const countable = !/s$/.test(lastWord) && !/^(?:a|an|the|\d)/.test(detail);
+    const a = countable ? (/^[aeiou]/.test(detail) ? "an " : "a ") : "";
+    return `${article} ${core} in ${fabricPhrase(f)}, with ${a}${detail}.`;
+  }
   return `${article} ${phrase} in ${fabricPhrase(f)}.`;
 }
 
@@ -868,6 +914,17 @@ function checkDescription(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry point
+
+/**
+ * Whether there is anything to check yet. An Add Product form nobody has typed
+ * into is not "missing information" — it is a form that has just opened, and
+ * greeting it with red crosses is noise. The check starts with the name: until
+ * one is entered the panel shows a neutral prompt, and once one is, every
+ * missing and conflicting field is reported as normal.
+ */
+export function contentCheckStarted(input: Pick<ContentInput, "name">): boolean {
+  return input.name.trim() !== "";
+}
 
 /**
  * Check a product form. Pure: same input, same findings, no I/O, input never

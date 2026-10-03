@@ -34,6 +34,7 @@ import { effectivePrice } from "@/lib/pricing";
 import {
   applySuggestion,
   checkProductContent,
+  contentCheckStarted,
   type ContentInput,
   type Suggestion,
 } from "@/lib/productContent";
@@ -301,7 +302,7 @@ export default function ProductModal({
   const parentCategoryName = categories.find((c) => c.id === selectedSubCategory?.parent_id)?.name ?? null;
   const contentCheck = useMemo(
     () =>
-      checkOpen
+      checkOpen && contentCheckStarted(deferredForm)
         ? checkProductContent({
             name: deferredForm.name,
             description: deferredForm.description,
@@ -1117,7 +1118,7 @@ export default function ProductModal({
           </p>
         </div>
 
-        {contentCheck ? (
+        {checkOpen ? (
           <ProductContentCheck
             check={contentCheck}
             ignored={ignoredFindings}

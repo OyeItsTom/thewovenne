@@ -12,6 +12,7 @@ import path from "node:path";
 import {
   applySuggestion,
   checkProductContent,
+  contentCheckStarted,
   cleanName,
   draftDescription,
   productTypeFor,
@@ -90,7 +91,8 @@ console.log("\n2. “Red Heart Emb” — abbreviation");
 }
 {
   const r = checkProductContent(input({ name: "Magenta w green lines border", ...SAREE }));
-  check("“w” becomes “with”", nameSuggestion(r.findings), "Magenta with Green Lines Border Saree");
+  check("“w” becomes “with”", nameSuggestion(r.findings), "Magenta with Green Lines Border");
+  check("…colour-only before “with” → type not placed (magenta may be the border's), flagged instead", r.findings.some((f) => f.id.startsWith("name:type")), true);
 }
 
 console.log("\n3. “Mini Check - Pink+Magenta” — spacing and wording");
@@ -164,7 +166,7 @@ console.log("\n6. Missing description");
 }
 {
   check("description draft keeps a proper-noun fabric", draftDescription("Violet Saree", "Chanderi Silk"), "A violet saree in Chanderi Silk.");
-  check("“An” before a vowel", draftDescription("Off-White Dhoti with Gold Zari Border", "Cotton"), "An off-white dhoti with gold zari border in cotton.");
+  check("“An” before a vowel; fabric beside the noun, “a” before the single detail", draftDescription("Off-White Dhoti with Gold Zari Border", "Cotton"), "An off-white dhoti in cotton, with a gold zari border.");
 }
 {
   const r = checkProductContent(input({ name: "Kasavu Saree with Zari Border", ...SAREE, fabric: "Cotton", colour: "Off-white" }));
@@ -340,6 +342,42 @@ for (const name of ["Lime Green Thick Border Saree", "White Border with Red Line
   const f = r.findings.find((x) => x.id.startsWith("colour:spelling"));
   check("4. new product Colour “off white” → canonical “Off-white” offered", f?.suggestion, { field: "colour", value: "Off-white" });
   check("   …and the green border does not trigger a colour review", r.findings.some((x) => x.id.startsWith("colour:review") || x.id.startsWith("colour:border")), false);
+}
+
+console.log("\nFix 1 — an untouched Add Product form is quiet");
+{
+  const blank = input({ ...SAREE });
+  check("1. untouched form → check not started (panel shows a neutral prompt)", contentCheckStarted(blank), false);
+  check("   whitespace-only name still counts as untouched", contentCheckStarted(input({ name: "   " })), false);
+  check("   …even with category, fabric or colour picked", contentCheckStarted(input({ ...SAREE, fabric: "Cotton", colour: "Red" })), false);
+  check("2. a name starts the check", contentCheckStarted(input({ name: "R" })), true);
+  const started = checkProductContent(input({ name: "Red Saree", ...SAREE }));
+  check("3. once started, missing description / fabric / colour are still reported", ["description:empty", "fabric:empty", "colour:empty"].every((id) => started.findings.some((f) => f.id.startsWith(id))), true);
+  const conflict = checkProductContent(input({ name: "Tissue Saree", ...SAREE, fabric: "Cotton", colour: "Off-white" }));
+  check("   …and conflicts still show as problems", conflict.status, "problem");
+  const panel = fs.readFileSync(path.join(__dirname, "../components/admin/ProductContentCheck.tsx"), "utf8");
+  check("   the neutral prompt is in the panel", panel.includes("Enter a product name to start the content check."), true);
+  const modal = fs.readFileSync(path.join(__dirname, "../components/admin/ProductModal.tsx"), "utf8");
+  check("   the modal only runs the check once started", /checkOpen && contentCheckStarted\(deferredForm\)/.test(modal), true);
+}
+
+console.log("\nFix 2 — the product type goes before a trailing “with …”");
+{
+  const r = checkProductContent(input({ name: "Pink tie-dye w gold border", ...SAREE, fabric: "Cotton", colour: "Pink" }));
+  check("“Pink tie-dye w gold border” → type before “with”", nameSuggestion(r.findings), "Pink Tie-Dye Saree with Gold Border");
+  check("…the reason says where it went", r.findings.some((f) => f.reasons?.some((x) => x.includes("before the “with …” part"))), true);
+  check("…and the description reads naturally", descSuggestion(r.findings), "A pink tie-dye saree in cotton, with a gold border.");
+  check("“Red heart emb with gold border”", cleanName("Red heart emb with gold border", "Sarees").value, "Red Heart Embroidered Saree with Gold Border");
+  check("no “with” → type still goes at the end", cleanName("Lime green thick border", "Sarees").value, "Lime Green Thick Border Saree");
+  check("type already present → nothing moved", cleanName("Kasavu Saree with Thick Gold Zari Border", "Sarees").value, "Kasavu Saree with Thick Gold Zari Border");
+  check("plural detail gets no “a”", draftDescription("Magenta Saree with Green Lines", "Cotton"), "A magenta saree in cotton, with green lines.");
+  const two = cleanName("Saree-less with red with gold", "Sarees");
+  check("two “with”s → ambiguous: type NOT added", [two.value.includes("Saree with") || /Saree$/.test(two.value), two.typeUnplaced], [false, "Saree"]);
+  const r2 = checkProductContent(input({ name: "Red with gold with green", ...SAREE }));
+  check("…and the admin is told, without a rewrite", [r2.findings.find((f) => f.id.startsWith("name:type"))?.evidence, r2.findings.find((f) => f.id.startsWith("name:type"))?.suggestion], ["MISSING", undefined]);
+  check("leading “with” → ambiguous: type not added", cleanName("With gold border", "Sarees").typeUnplaced, "Saree");
+  check("colours only before “with” → ambiguous: type not added", cleanName("Pink and magenta with gold border", "Sarees").typeUnplaced, "Saree");
+  check("a pattern word before “with” is enough", cleanName("Red check with gold border", "Sarees").value, "Red Check Saree with Gold Border");
 }
 
 console.log("\n8. Existing products are never touched");
