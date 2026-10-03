@@ -65,7 +65,14 @@ export interface Product {
   stock_quantity: number;
   image_url: string | null;
   is_active: boolean;
+  /** When THIS VERSION was made — re-stamped by every edit/publish. Not the product's age. */
   created_at: string;
+  /**
+   * When the PRODUCT was first created (products.created_at). Admin only — set
+   * by mapAdminProduct for the Products list's Newest/Oldest sort; never on a
+   * storefront payload. Absent or null when unknown.
+   */
+  product_created_at?: string | null;
   /** Seasonal collection slug, e.g. "onam-edit". Null when not in a campaign. */
   collection: string | null;
   discount_type: "percent" | "flat" | null;
