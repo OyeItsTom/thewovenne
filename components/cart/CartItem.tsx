@@ -33,7 +33,7 @@ export default function CartItem({ item }: { item: CartItemType }) {
           <h3 className="break-words font-heading text-base leading-tight text-ink">
             {item.name}
           </h3>
-          <p className="mt-1 text-xs uppercase tracking-wider text-ink/50">
+          <p className="mt-1 text-xs uppercase tracking-wider text-ink-muted">
             Size {item.size}
           </p>
         </div>

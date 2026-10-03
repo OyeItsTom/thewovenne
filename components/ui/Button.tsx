@@ -9,11 +9,24 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   size?: ButtonSize;
 }
 
+/**
+ * Primary is the purchase colour, so it has to be readable in every state:
+ *
+ *   resting  white on terracotta-dark  4.88:1  (was 3.64:1 on terracotta)
+ *   hover    white on terracotta-deep  6.16:1
+ *   disabled ink-muted on linen        4.62:1  — "Sold out" is information, and
+ *            the old 50% fade left it at about 1.5:1. A flat linen surface
+ *            reads as unavailable without looking broken.
+ *
+ * The other variants keep the opacity fade for disabled; their text already
+ * clears 4.5:1 at rest.
+ */
 const variantStyles: Record<ButtonVariant, string> = {
-  primary: "bg-terracotta text-cream hover:bg-terracotta-dark",
-  secondary: "bg-ink text-cream hover:bg-ink-light",
-  outline: "border border-ink text-ink hover:bg-ink hover:text-cream",
-  ghost: "text-ink hover:bg-linen",
+  primary:
+    "bg-terracotta-dark text-cream hover:bg-terracotta-deep disabled:bg-linen disabled:text-ink-muted",
+  secondary: "bg-ink text-cream hover:bg-ink-light disabled:opacity-50",
+  outline: "border border-ink text-ink hover:bg-ink hover:text-cream disabled:opacity-50",
+  ghost: "text-ink hover:bg-linen disabled:opacity-50",
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
@@ -28,7 +41,7 @@ export function buttonClassName(
   className?: string
 ) {
   return cn(
-    "inline-flex items-center justify-center gap-2 rounded-full font-body font-medium tracking-wide transition-colors duration-300 disabled:cursor-not-allowed disabled:opacity-50",
+    "inline-flex items-center justify-center gap-2 rounded-full font-body font-medium tracking-wide transition-colors duration-300 disabled:cursor-not-allowed",
     variantStyles[variant],
     sizeStyles[size],
     className

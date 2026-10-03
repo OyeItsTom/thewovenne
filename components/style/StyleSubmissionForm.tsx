@@ -360,7 +360,7 @@ export default function StyleSubmissionForm({
       <button
         type="submit"
         disabled={stage === "sending" || !hasSomething || !consent}
-        className="inline-flex items-center gap-2 rounded-full bg-terracotta px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-terracotta-dark disabled:opacity-50"
+        className="inline-flex items-center gap-2 rounded-full bg-terracotta-dark px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-terracotta-deep disabled:opacity-50"
       >
         {stage === "sending" && <Loader2 className="h-4 w-4 animate-spin" />}
         {isResubmit ? "Send this one instead" : "Share your style"}

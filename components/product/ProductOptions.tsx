@@ -119,7 +119,7 @@ export default function ProductOptions({
         /* Beside the size and above the button — the buying decision, not the
            photography. Small caps and a gold hairline, the same voice the page
            uses for the one-size note. No red, no animation, no countdown. */
-        <p className="flex items-center gap-2 text-xs uppercase tracking-[0.12em] text-ink/60">
+        <p className="flex items-center gap-2 text-xs uppercase tracking-[0.12em] text-ink-muted">
           <span aria-hidden className="h-1 w-1 rounded-full bg-gold" />
           {sizeNote}
         </p>
@@ -145,7 +145,7 @@ export default function ProductOptions({
         <button
           onClick={quickAdd}
           disabled={outOfStock}
-          className="shrink-0 rounded-full bg-terracotta px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-terracotta-dark disabled:opacity-50"
+          className="shrink-0 rounded-full bg-terracotta-dark px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-terracotta-deep disabled:cursor-not-allowed disabled:bg-linen disabled:text-ink-muted"
         >
           {outOfStock ? "Out of Stock" : `Add · ${size}`}
         </button>
