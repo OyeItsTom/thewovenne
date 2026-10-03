@@ -6,13 +6,16 @@ import {
   InputHTMLAttributes,
   TextareaHTMLAttributes,
   useCallback,
+  useDeferredValue,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import Image from "next/image";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
+import ProductContentCheck from "@/components/admin/ProductContentCheck";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { youtubeId } from "@/lib/youtube";
 import { getAllCategories } from "@/lib/categories";
@@ -28,6 +31,13 @@ import {
 } from "@/lib/sizes";
 import { slugify, uniqueSlug, formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
+import {
+  applySuggestion,
+  checkProductContent,
+  contentCheckStarted,
+  type ContentInput,
+  type Suggestion,
+} from "@/lib/productContent";
 import type { Category, Product } from "@/lib/types";
 
 const emptyForm = {
@@ -144,6 +154,13 @@ export default function ProductModal({
   // the figure the admin was looking at, and refused if the shelf has moved on
   // since (migration 0060) — so an open form cannot overwrite a sale.
   const [loadedSizes, setLoadedSizes] = useState<LoadedSize[]>([]);
+  // Product content check (lib/productContent). Read-only: the other products
+  // are only compared against, never written. Runs by itself on a new product;
+  // on an existing one it waits to be asked, so opening a product to change its
+  // stock doesn't greet the admin with a list of things to rewrite.
+  const [otherProducts, setOtherProducts] = useState<ContentInput["otherProducts"]>([]);
+  const [ignoredFindings, setIgnoredFindings] = useState<Set<string>>(new Set());
+  const [checkOpen, setCheckOpen] = useState(false);
 
   // Shows the admin the actual outcome before saving, using the same function
   // the storefront renders with, so the preview cannot disagree with the site.
@@ -232,6 +249,8 @@ export default function ProductModal({
     if (!isOpen) return;
 
     setError(null);
+    setIgnoredFindings(new Set());
+    setCheckOpen(!isEdit);
     // In edit mode the slug is already published, so it must never be silently
     // rewritten by editing the name.
     setSlugTouched(isEdit);
@@ -248,17 +267,18 @@ export default function ProductModal({
     // Slugs must be unique among published AND draft versions — a draft slug
     // is claimed even though it is not live yet, or two drafts could collide at
     // publish time.
+    //
+    // The same read feeds the content check its comparison set: names to test
+    // for duplicates, fabric and colour spellings already in use.
     getBrowserSupabase()
       .from("product_versions")
-      .select("product_id, slug")
+      .select("product_id, slug, name, fabric, colour")
       .in("state", ["published", "draft"])
-      .then(({ data }) =>
-        setTakenSlugs(
-          (data ?? [])
-            .filter((p) => p.product_id !== product?.id) // own slug isn't a collision
-            .map((p) => p.slug)
-        )
-      );
+      .then(({ data }) => {
+        const others = (data ?? []).filter((p) => p.product_id !== product?.id); // own slug isn't a collision
+        setTakenSlugs(others.map((p) => p.slug));
+        setOtherProducts(others.map((p) => ({ name: p.name, fabric: p.fabric, colour: p.colour })));
+      });
 
     if (product) {
       getDraftProductImages(product.id, getBrowserSupabase()).then((urls) =>
@@ -274,6 +294,47 @@ export default function ProductModal({
   const parents = categories.filter((c) => c.parent_id === null);
   const subCategories = categories.filter((c) => c.parent_id === parentId);
   const selectedSubCategory = categories.find((c) => c.id === subCategoryId);
+
+  // Deferred, so a fast typist never waits on the check — it catches up a
+  // frame later. Local only: no request is made as the form changes.
+  const deferredForm = useDeferredValue(form);
+  const deferredSizes = useDeferredValue(sizes);
+  const parentCategoryName = categories.find((c) => c.id === selectedSubCategory?.parent_id)?.name ?? null;
+  const contentCheck = useMemo(
+    () =>
+      checkOpen && contentCheckStarted(deferredForm)
+        ? checkProductContent({
+            name: deferredForm.name,
+            description: deferredForm.description,
+            fabric: deferredForm.fabric,
+            colour: deferredForm.colour,
+            categoryName: selectedSubCategory?.name ?? null,
+            parentCategoryName,
+            sizes: deferredSizes.map((s) => s.label),
+            otherProducts,
+            notes: [deferredForm.heritage_note, deferredForm.craft_note, deferredForm.care_note].join(" "),
+          })
+        : null,
+    [checkOpen, deferredForm, deferredSizes, selectedSubCategory?.name, parentCategoryName, otherProducts]
+  );
+
+  /**
+   * "Use suggestion": one field of the unsaved form, nothing else. No save, no
+   * publish — the Save button and Review & Publish stay the only ways anything
+   * reaches the shop. A name goes through the same rule as typing one: the slug
+   * follows it on a new product until edited by hand, and never moves on an
+   * existing product (its address is already public).
+   */
+  const acceptSuggestion = (s: Suggestion) => {
+    if (s.field === "name") {
+      setForm((f) => ({
+        ...applySuggestion(f, s),
+        slug: slugTouched ? f.slug : uniqueSlug(s.value, takenSlugs),
+      }));
+      return;
+    }
+    setForm((f) => applySuggestion(f, s));
+  };
 
   /** Mirrors getVisibleCategoryIds: a hidden parent hides its children too. */
   const isPubliclyVisible = (sub: Category) =>
@@ -1056,6 +1117,25 @@ export default function ProductModal({
             photo here leaves the file in storage; it just stops being used.
           </p>
         </div>
+
+        {checkOpen ? (
+          <ProductContentCheck
+            check={contentCheck}
+            ignored={ignoredFindings}
+            onIgnore={(id) => setIgnoredFindings((prev) => new Set(prev).add(id))}
+            onRestoreIgnored={() => setIgnoredFindings(new Set())}
+            onUse={acceptSuggestion}
+            saveLabel={isEdit ? "Save Changes" : "Add Product"}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setCheckOpen(true)}
+            className="rounded-full border border-ink/15 px-4 py-2 text-sm text-ink transition-colors hover:border-terracotta"
+          >
+            Check this product&apos;s content
+          </button>
+        )}
 
         {error && <p className="text-sm text-terracotta-dark">{error}</p>}
 
