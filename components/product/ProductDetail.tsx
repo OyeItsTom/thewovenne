@@ -165,7 +165,7 @@ export default async function ProductDetail({
         <div>
           <div className="lg:sticky lg:top-28">
           {product.category && (
-            <p className="text-xs uppercase tracking-wider text-ink/50">
+            <p className="text-xs uppercase tracking-wider text-ink-muted">
               {product.category}
             </p>
           )}
@@ -216,7 +216,7 @@ export default async function ProductDetail({
                ticking down: the fact, said once, in the same voice as the rest
                of the page. Sold out reads the same way — a piece being gone is
                information, not a failure to apologise for. */
-            <p className="mt-4 flex items-center gap-2 text-xs uppercase tracking-[0.12em] text-ink/55">
+            <p className="mt-4 flex items-center gap-2 text-xs uppercase tracking-[0.12em] text-ink-muted">
               <span aria-hidden className="h-1 w-1 rounded-full bg-gold" />
               {note}
             </p>
@@ -248,7 +248,7 @@ export default async function ProductDetail({
           {product.fabric && (
             // The fabric named where it helps a decision; how to wash it now has
             // its own section further down. One line here, not an accordion.
-            <p className="mt-6 text-xs uppercase tracking-wider text-ink/45">
+            <p className="mt-6 text-xs uppercase tracking-wider text-ink-muted">
               {product.fabric}
             </p>
           )}

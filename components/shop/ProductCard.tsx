@@ -355,7 +355,7 @@ export default function ProductCard({
             )}
           </span>
           {stock.soldOut && (
-            <span className="text-[10px] uppercase tracking-wider text-ink/55">
+            <span className="text-[10px] uppercase tracking-wider text-ink-muted">
               Sold out
             </span>
           )}

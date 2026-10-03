@@ -24,7 +24,7 @@ export default function SizeSelector({
 
   return (
     <div>
-      <h2 className="font-heading text-sm uppercase tracking-wider text-ink/60">
+      <h2 className="font-heading text-sm uppercase tracking-wider text-ink-muted">
         Size
       </h2>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -58,7 +58,7 @@ export default function SizeSelector({
       </div>
 
       {sizes.every((s) => s.stock_quantity <= 0) && (
-        <p className="mt-3 text-sm text-ink/60">
+        <p className="mt-3 text-sm text-ink-muted">
           Every size is sold out at the moment — more is on the loom.
         </p>
       )}

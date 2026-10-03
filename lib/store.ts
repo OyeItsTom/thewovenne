@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { cartAddAnnouncement } from "./cartAnnouncement";
 
 export interface CartItem {
   id: string;
@@ -48,6 +49,13 @@ interface CartState {
    * person's cart is simply handed to the next.
    */
   ownerId: string | null;
+  /**
+   * What the last Add to Cart did, as a sentence for screen readers (see
+   * lib/cartAnnouncement). View state like isOpen: never persisted, and
+   * cleared whenever the drawer closes, so opening the bag from the header
+   * later does not repeat an old announcement.
+   */
+  lastAdded: string | null;
   addItem: (item: Omit<CartItem, "quantity">, quantity?: number) => void;
   removeItem: (id: string, size: string) => void;
   updateQuantity: (id: string, size: string, quantity: number) => void;
@@ -69,7 +77,11 @@ export const useCartStore = create<CartState>()(
       items: [],
       isOpen: false,
       ownerId: null,
-      addItem: (item, quantity = 1) =>
+      lastAdded: null,
+      addItem: (item, quantity = 1) => {
+        const unitsOf = (items: CartItem[]) =>
+          items.find((i) => i.id === item.id && i.size === item.size)?.quantity ?? 0;
+        const before = unitsOf(get().items);
         set((state) => {
           const existing = state.items.find(
             (i) => i.id === item.id && i.size === item.size
@@ -99,7 +111,19 @@ export const useCartStore = create<CartState>()(
           const first = Math.min(quantity, lineCeiling(item));
           if (first <= 0) return state;
           return { items: [...state.items, { ...item, quantity: first }] };
-        }),
+        });
+        // Measured from the result rather than re-deriving the cap, so the
+        // sentence cannot disagree with what the cart now holds.
+        const after = unitsOf(get().items);
+        set({
+          lastAdded: cartAddAnnouncement({
+            name: item.name,
+            size: item.size,
+            added: after - before,
+            inBag: after > 0,
+          }),
+        });
+      },
       removeItem: (id, size) =>
         set((state) => ({
           items: state.items.filter(
@@ -128,11 +152,15 @@ export const useCartStore = create<CartState>()(
       // Sign-out, and the handover point on a shared device. Drops the items
       // AND the owner, so the next person starts as a guest with an empty cart
       // rather than inheriting the last one's.
-      resetForSignOut: () => set({ items: [], ownerId: null, isOpen: false }),
+      resetForSignOut: () =>
+        set({ items: [], ownerId: null, isOpen: false, lastAdded: null }),
       claimFor: (userId) => set({ ownerId: userId }),
       openCart: () => set({ isOpen: true }),
-      closeCart: () => set({ isOpen: false }),
-      toggleCart: () => set((state) => ({ isOpen: !state.isOpen })),
+      closeCart: () => set({ isOpen: false, lastAdded: null }),
+      // Only the header bag icon toggles. Opening it that way is not an add,
+      // so either direction drops any announcement left from an earlier one.
+      toggleCart: () =>
+        set((state) => ({ isOpen: !state.isOpen, lastAdded: null })),
       subtotal: () =>
         get().items.reduce((sum, i) => sum + i.price_inr * i.quantity, 0),
       totalItems: () => get().items.reduce((sum, i) => sum + i.quantity, 0),

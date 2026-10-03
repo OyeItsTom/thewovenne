@@ -177,7 +177,9 @@ const delivery = render(createElement(DeliveryEstimator, { market: "IN", orderVa
 check("Size is h2", outline(sizes), ["h2:Size"]);
 check("Quantity is h2", outline(quantity).filter((h) => h.endsWith("Quantity")), ["h2:Quantity"]);
 check("Delivery is h2", outline(delivery).filter((h) => h.endsWith("Delivery")), ["h2:Delivery"]);
-const purchaseClass = "font-heading text-sm uppercase tracking-wider text-ink/60";
+// ink-muted since the accessibility pass: ink/60 measured 4.30:1 at 14px, under
+// 4.5. The point of this check is that the three stay ONE family.
+const purchaseClass = "font-heading text-sm uppercase tracking-wider text-ink-muted";
 ok(
   "and all three keep the classes they had",
   [sizes, quantity, delivery].every((h) => headingClasses(h).includes(purchaseClass))

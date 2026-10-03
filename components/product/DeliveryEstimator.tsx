@@ -83,7 +83,7 @@ export default function DeliveryEstimator({
 
   return (
     <div className="border-t border-ink/10 pt-5">
-      <h2 className="font-heading text-sm uppercase tracking-wider text-ink/60">
+      <h2 className="font-heading text-sm uppercase tracking-wider text-ink-muted">
         Delivery
       </h2>
 
