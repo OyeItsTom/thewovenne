@@ -309,6 +309,10 @@ export function mapAdminProduct(
     heritage_note: row.heritage_note ?? null,
     craft_note: row.craft_note ?? null,
     care_note: row.care_note ?? null,
+    // The product's ORIGINAL creation date, already embedded for ordering
+    // (PRODUCT_SELECT's products(created_at)). created_at above is the
+    // version's, re-stamped by every edit; the Admin list sorts by age on this.
+    product_created_at: row.products?.created_at ?? null,
   };
 }
 
