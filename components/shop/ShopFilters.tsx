@@ -6,6 +6,8 @@ import type { CategoryNode, ProductListing } from "@/lib/types";
 import type { FilterOptions } from "@/components/shop/FilterSidebar";
 import CatalogueListing from "@/components/shop/CatalogueListing";
 import { availableSizes, type SizesByProduct } from "@/lib/productFilters";
+import { sizeGroupTitle } from "@/lib/catalogueFacets";
+import type { PriceSliderRange } from "@/lib/priceSlider";
 import { catalogueHref, type CatalogueFilters } from "@/lib/catalogueParams";
 
 /**
@@ -22,9 +24,10 @@ export default function ShopFilters({
   categoryTree,
   sizesByProduct = {},
   facetValues,
-  priceSteps,
+  priceRange,
   availability,
   filters,
+  sizeScope = null,
 }: {
   /** Already filtered by the database and ordered by the page. */
   products: ProductListing[];
@@ -34,10 +37,18 @@ export default function ShopFilters({
   categoryTree: CategoryNode[];
   /** Sizes for the products on show, for the Size filter. */
   sizesByProduct?: SizesByProduct;
-  /** Fabric and colour values across the WHOLE catalogue, not this result. */
+  /**
+   * Fabric facets and colours across the whole catalogue — or the chosen
+   * sub-category — not just this result.
+   */
   facetValues: { fabrics: string[]; colours: string[] };
-  /** Price ceilings that narrow the whole catalogue. */
-  priceSteps: number[];
+  /** The price slider's range over the same scope, or null if no ceiling narrows it. */
+  priceRange: PriceSliderRange | null;
+  /**
+   * The chosen sub-category's name, or null. Sizes are offered only inside
+   * one sub-category — a ring's 6 is not a size of the whole shop.
+   */
+  sizeScope?: string | null;
   /** Whether "In stock" would narrow the whole catalogue. */
   availability: boolean;
   /** The filters this page was rendered for, parsed from the URL. */
@@ -56,10 +67,12 @@ export default function ShopFilters({
     })),
     fabrics: facetValues.fabrics,
     colours: facetValues.colours,
-    // Still derived from what is on show: a size filter that offers a label
-    // nothing in view has stock in would always return an empty grid.
-    sizes: availableSizes(products, sizesByProduct),
-    priceSteps,
+    // Only inside one sub-category, and still derived from what is on show: a
+    // size filter that offers a label nothing in view has stock in would
+    // always return an empty grid.
+    sizes: sizeScope ? availableSizes(products, sizesByProduct) : [],
+    sizeTitle: sizeGroupTitle(sizeScope),
+    priceRange,
     availability,
   };
 

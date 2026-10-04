@@ -69,7 +69,9 @@ export const getCatalogue = async (
 
 const cachedFacets = unstable_cache(
   async () => products.getCatalogueFacetValues(ANON_CTX),
-  ["catalogue-facets"],
+  // v2: returns rows, not option lists (PR #175). A new key so an entry cached
+  // by the previous deployment can never be read back in the old shape.
+  ["catalogue-facets-v2"],
   { revalidate: 60, tags: ["catalogue"] }
 );
 

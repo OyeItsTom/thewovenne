@@ -5,23 +5,22 @@ import type { Product } from "@/lib/types";
 import type { FilterOptions } from "./FilterSidebar";
 import { shownPrice } from "@/lib/pricing";
 import CatalogueListing from "./CatalogueListing";
+import { availableSizes, matchesFilters, type SizesByProduct } from "@/lib/productFilters";
 import {
-  availableSizes,
-  distinctValues,
-  matchesFilters,
-  type SizesByProduct,
-} from "@/lib/productFilters";
+  colourOptions,
+  fabricOptions,
+  sizeGroupTitle,
+  singleSubCategory,
+} from "@/lib/catalogueFacets";
+import { priceSliderRange } from "@/lib/priceSlider";
 import {
   NO_FILTERS,
   catalogueHref,
   parseCatalogueParams,
+  searchParamsRecord,
   type CatalogueFilters,
 } from "@/lib/catalogueParams";
-import {
-  offersAvailability,
-  orderForDiscovery,
-  usefulPriceSteps,
-} from "@/lib/catalogueDiscovery";
+import { offersAvailability, orderForDiscovery } from "@/lib/catalogueDiscovery";
 
 /**
  * The listing on a section (/in/women) or sub-category (/in/women/sarees) page.
@@ -53,8 +52,9 @@ export default function CategoryFilters({
   const [filters, setFilters] = useState<CatalogueFilters>(NO_FILTERS);
 
   useEffect(() => {
+    // Repeated keys kept (?fabric=Cotton&fabric=Mul+Cotton) — the server's reading.
     const parsed = parseCatalogueParams(
-      Object.fromEntries(new URLSearchParams(window.location.search))
+      searchParamsRecord(new URLSearchParams(window.location.search))
     );
     // A ?category= has no meaning inside a category page; ignore it rather than
     // let it empty the grid.
@@ -70,19 +70,22 @@ export default function CategoryFilters({
     );
   };
 
-  const options: FilterOptions = useMemo(
-    () => ({
+  const options: FilterOptions = useMemo(() => {
+    // Sizes only when the page is ONE sub-category: a section page holding
+    // rings and necklaces has no single size scale to offer.
+    const only = singleSubCategory(products);
+    return {
       categoryGroups: [],
-      fabrics: distinctValues(products, (p) => p.fabric),
-      colours: distinctValues(products, (p) => p.colour),
+      fabrics: fabricOptions(products.map((p) => p.fabric)),
+      colours: colourOptions(products.map((p) => p.colour)),
       // Empty for sarees, which have no sizes — so the Size filter simply is
       // not rendered, with nothing anywhere naming that category.
-      sizes: availableSizes(products, sizesByProduct),
-      priceSteps: usefulPriceSteps(products.map((p) => shownPrice(p))),
+      sizes: only ? availableSizes(products, sizesByProduct) : [],
+      sizeTitle: sizeGroupTitle(only?.name),
+      priceRange: priceSliderRange(products.map((p) => shownPrice(p))),
       availability: offersAvailability(products),
-    }),
-    [products, sizesByProduct]
-  );
+    };
+  }, [products, sizesByProduct]);
 
   const shown = useMemo(
     () =>

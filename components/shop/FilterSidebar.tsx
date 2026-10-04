@@ -1,14 +1,16 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
-import { useId, useRef, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
-import { cn, formatINR } from "@/lib/utils";
-import { NO_FILTERS, type CatalogueFilters } from "@/lib/catalogueParams";
-import { PRICE_STEPS } from "@/lib/catalogueDiscovery";
+import { Check, Minus, Plus, X } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { NO_FILTERS, isUnfiltered, type CatalogueFilters } from "@/lib/catalogueParams";
+import { facetKey, narrowingOptions } from "@/lib/catalogueFacets";
+import { ceilingLabel, type PriceSliderRange } from "@/lib/priceSlider";
 import { slideInFromLeft } from "@/lib/motion";
 import { useDialogFocus } from "@/lib/useDialogFocus";
+import PriceSlider from "./PriceSlider";
 
 /*
  * ONE DEFINITION, NOT TWO. These are the same fields the URL carries, so the
@@ -23,41 +25,84 @@ export interface CategoryFilterGroup {
   children: { name: string; slug: string }[];
 }
 
+/**
+ * Everything a listing COULD offer. Which of it the panel actually shows is
+ * decided by panelGroups(), against the choices already made.
+ */
 export interface FilterOptions {
   /**
    * Only sub-categories that hold a product (getNavCategoryTree — the header's
    * own rule), so the panel never offers a shelf with nothing on it.
    */
   categoryGroups: CategoryFilterGroup[];
+  /** Fabric facets (lib/catalogueFacets) — Mul Cotton, not the stored sentence. */
   fabrics: string[];
   colours: string[];
   /**
-   * Sizes that at least one product on show still has stock in.
-   *
-   * Empty hides the Size filter entirely — which is how sarees end up without
-   * one without anybody hardcoding "sarees". Any future size-less category gets
-   * the same treatment for free, and renaming a category cannot break it.
+   * Sizes that at least one product on show still has stock in — and only
+   * when the listing is a single sub-category. Empty hides the group.
    */
   sizes: string[];
-  /** Price ceilings that narrow this listing (usefulPriceSteps). Defaults to every step. */
-  priceSteps?: readonly number[];
+  /** "Ring size" inside Rings; "Size" elsewhere. */
+  sizeTitle?: string;
+  /** The price slider's range, or null when no ceiling would narrow anything. */
+  priceRange?: PriceSliderRange | null;
   /** Offer "In stock" — only when some pieces are sold out and some are not. */
   availability?: boolean;
 }
 
 export const EMPTY_FILTERS: Filters = NO_FILTERS;
 
+/** What the panel shows, after every group that cannot narrow is dropped. */
+export interface PanelGroups {
+  availability: boolean;
+  fabrics: string[];
+  colours: string[];
+  price: PriceSliderRange | null;
+  categoryGroups: CategoryFilterGroup[];
+  sizes: string[];
+}
+
+/**
+ * THE ELIGIBILITY RULE, in one place. A group is shown only if choosing in it
+ * can change the result: two or more options (narrowingOptions — a lone
+ * "Cotton" on Men/Dhoti is a no-op), a price range with a stop that leaves
+ * something out, "In stock" only when some pieces are sold out. A choice
+ * already made keeps its group on show so it can be seen and undone.
+ */
+export function panelGroups(options: FilterOptions, filters: Filters = NO_FILTERS): PanelGroups {
+  const categories = options.categoryGroups.filter((g) => g.children.length > 0);
+  const subCategoryCount = categories.reduce((n, g) => n + g.children.length, 0);
+  return {
+    availability: !!options.availability || filters.inStock,
+    fabrics: narrowingOptions(options.fabrics, filters.fabric),
+    colours: narrowingOptions(options.colours, filters.colour),
+    price: options.priceRange ?? null,
+    categoryGroups: subCategoryCount >= 2 || filters.category ? categories : [],
+    sizes: narrowingOptions(options.sizes, filters.size ? [filters.size] : []),
+  };
+}
+
 /** Whether any of the panel's groups has something to offer. */
-export function hasFilterOptions(options: FilterOptions): boolean {
+export function hasFilterOptions(options: FilterOptions, filters: Filters = NO_FILTERS): boolean {
+  const g = panelGroups(options, filters);
   return (
-    !!options.availability ||
-    options.categoryGroups.some((g) => g.children.length > 0) ||
-    options.sizes.length > 0 ||
-    options.fabrics.length > 0 ||
-    options.colours.length > 0 ||
-    (options.priceSteps ?? PRICE_STEPS).length > 0
+    g.availability ||
+    g.categoryGroups.length > 0 ||
+    g.sizes.length > 0 ||
+    g.fabrics.length > 0 ||
+    g.colours.length > 0 ||
+    g.price !== null
   );
 }
+
+/** A collapsed group's one-line answer to "what have I chosen here?" */
+export function groupSummary(chosen: readonly string[]): string | null {
+  if (chosen.length === 0) return null;
+  return chosen.length === 1 ? chosen[0] : `${chosen.length} selected`;
+}
+
+type GroupId = "availability" | "fabric" | "colour" | "price" | "category" | "size";
 
 export default function FilterSidebar({
   options,
@@ -83,90 +128,164 @@ export default function FilterSidebar({
   const reduced = useReducedMotion();
   const panel = slideInFromLeft(reduced);
   const titleId = useId();
+  const sidebarTitleId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   useDialogFocus(isOpen, onClose, rootRef, panelRef);
 
+  // Which groups are open. One state for the sidebar AND the drawer, so a group
+  // opened in the drawer is still open the next time it is opened. Everything
+  // starts closed: the panel reads as a few calm lines, not a wall of options.
+  const [expanded, setExpanded] = useState<Partial<Record<GroupId, boolean>>>({});
+  const toggleGroup = (id: GroupId) => setExpanded((e) => ({ ...e, [id]: !e[id] }));
+
   const update = (patch: Partial<Filters>) => onChange({ ...filters, ...patch });
-  const toggle = (key: "category" | "size" | "fabric" | "colour", value: string) =>
+  /** Add or remove one value of a list filter. */
+  const toggleIn = (key: "fabric" | "colour", value: string) => {
+    const has = filters[key].some((v) => facetKey(v) === facetKey(value));
+    update({
+      [key]: has
+        ? filters[key].filter((v) => facetKey(v) !== facetKey(value))
+        : [...filters[key], value],
+    });
+  };
+  /** Choose a single-valued filter, or un-choose it if it was the one chosen. */
+  const toggleOne = (key: "category" | "size", value: string) =>
     update({ [key]: same(filters[key], value) ? null : value });
 
-  // A ceiling arriving from a shared link stays visible, so it can be undone
-  // here as well as from its chip.
-  const steps = [...(options.priceSteps ?? PRICE_STEPS)];
-  if (filters.maxPrice !== null && !steps.includes(filters.maxPrice)) {
-    steps.push(filters.maxPrice);
-    steps.sort((a, b) => a - b);
-  }
-
-  const hasActiveFilters =
-    filters.inStock ||
-    !!filters.category ||
-    !!filters.fabric ||
-    !!filters.colour ||
-    !!filters.size ||
-    filters.maxPrice !== null;
+  const groups = panelGroups(options, filters);
+  const hasActiveFilters = !isUnfiltered(filters);
+  const categoryName = (slug: string) =>
+    groups.categoryGroups.flatMap((g) => g.children).find((c) => c.slug === slug)?.name ?? slug;
 
   /*
-   * The same controls in two places, at two heading levels. The desktop
-   * sidebar sits straight under the page's h1, so its groups are h2. The
-   * drawer has its own h2, "Filters", so there they are h3.
+   * The same controls in two places: the desktop sidebar and the phone drawer.
+   * Both put an h2 "Filters" above h3 groups, so the outline is identical
+   * wherever the panel is read.
+   *
+   * ORDER: what can be bought, then the cloth — the shop's strongest axis —
+   * then colour and price, then where it is filed, then sizes, which only
+   * exist inside one kind of thing.
    */
-  const content = (level: HeadingLevel) => (
-    <div className="space-y-8">
-      {options.availability && (
-        <OptionGroup level={level} title="Availability">
-          <Option
-            selected={filters.inStock}
-            onClick={() => update({ inStock: !filters.inStock })}
-          >
-            In stock
-          </Option>
-        </OptionGroup>
-      )}
-      <CategoryFilter
-        level={level}
-        groups={options.categoryGroups}
-        selected={filters.category}
-        onSelect={(v) => toggle("category", v)}
-      />
-      {options.sizes.length > 0 && (
-        <FilterGroup
-          level={level}
-          title="Size"
-          options={options.sizes}
-          selected={filters.size}
-          onSelect={(v) => toggle("size", v)}
-        />
-      )}
-      <FilterGroup
-        level={level}
-        title="Fabric"
-        options={options.fabrics}
-        selected={filters.fabric}
-        onSelect={(v) => toggle("fabric", v)}
-      />
-      <FilterGroup
-        level={level}
-        title="Colour"
-        options={options.colours}
-        selected={filters.colour}
-        onSelect={(v) => toggle("colour", v)}
-      />
-      {steps.length > 0 && (
-        <OptionGroup level={level} title="Price">
-          {steps.map((price) => (
-            <Option
-              key={price}
-              selected={filters.maxPrice === price}
-              onClick={() =>
-                update({ maxPrice: filters.maxPrice === price ? null : price })
-              }
+  const content = (
+    <div className="border-t border-ink/10">
+      {groups.availability && (
+        <Group
+          title="Availability"
+          summary={filters.inStock ? "In stock" : null}
+          open={!!expanded.availability}
+          onToggle={() => toggleGroup("availability")}
+        >
+          <OptionList>
+            <CheckOption
+              checked={filters.inStock}
+              onChange={() => update({ inStock: !filters.inStock })}
             >
-              Under {formatINR(price)}
-            </Option>
-          ))}
-        </OptionGroup>
+              In stock
+            </CheckOption>
+          </OptionList>
+        </Group>
+      )}
+      {groups.fabrics.length > 0 && (
+        <Group
+          title="Fabric"
+          summary={groupSummary(filters.fabric)}
+          open={!!expanded.fabric}
+          onToggle={() => toggleGroup("fabric")}
+        >
+          <OptionList>
+            {groups.fabrics.map((fabric) => (
+              <CheckOption
+                key={fabric}
+                checked={filters.fabric.some((v) => facetKey(v) === facetKey(fabric))}
+                onChange={() => toggleIn("fabric", fabric)}
+              >
+                {fabric}
+              </CheckOption>
+            ))}
+          </OptionList>
+        </Group>
+      )}
+      {groups.colours.length > 0 && (
+        <Group
+          title="Colour"
+          summary={groupSummary(filters.colour)}
+          open={!!expanded.colour}
+          onToggle={() => toggleGroup("colour")}
+        >
+          <OptionList>
+            {groups.colours.map((colour) => (
+              <CheckOption
+                key={colour}
+                checked={filters.colour.some((v) => facetKey(v) === facetKey(colour))}
+                onChange={() => toggleIn("colour", colour)}
+              >
+                {colour}
+              </CheckOption>
+            ))}
+          </OptionList>
+        </Group>
+      )}
+      {groups.price && (
+        <Group
+          title="Price"
+          summary={filters.maxPrice !== null ? ceilingLabel(filters.maxPrice) : null}
+          open={!!expanded.price}
+          onToggle={() => toggleGroup("price")}
+        >
+          <PriceSlider
+            range={groups.price}
+            maxPrice={filters.maxPrice}
+            onCommit={(maxPrice) => update({ maxPrice })}
+          />
+        </Group>
+      )}
+      {groups.categoryGroups.length > 0 && (
+        <Group
+          title="Category"
+          summary={filters.category ? categoryName(filters.category) : null}
+          open={!!expanded.category}
+          onToggle={() => toggleGroup("category")}
+        >
+          <div className="space-y-4">
+            {groups.categoryGroups.map((group) => (
+              <div key={group.name}>
+                <p className="text-xs uppercase tracking-wider text-ink-muted">{group.name}</p>
+                <OptionList className="mt-1">
+                  {group.children.map((child) => (
+                    <PickOption
+                      key={child.slug}
+                      selected={filters.category === child.slug}
+                      onClick={() => toggleOne("category", child.slug)}
+                    >
+                      {child.name}
+                    </PickOption>
+                  ))}
+                </OptionList>
+              </div>
+            ))}
+          </div>
+        </Group>
+      )}
+      {groups.sizes.length > 0 && (
+        <Group
+          title={options.sizeTitle ?? "Size"}
+          summary={filters.size}
+          open={!!expanded.size}
+          onToggle={() => toggleGroup("size")}
+        >
+          <OptionList>
+            {groups.sizes.map((size) => (
+              <PickOption
+                key={size}
+                selected={same(filters.size, size)}
+                onClick={() => toggleOne("size", size)}
+              >
+                {size}
+              </PickOption>
+            ))}
+          </OptionList>
+        </Group>
       )}
     </div>
   );
@@ -201,7 +320,7 @@ export default function FilterSidebar({
         variants={panel}
         className="relative flex h-full w-full max-w-sm flex-col bg-cream shadow-lift outline-none"
       >
-        <div className="flex items-center justify-between border-b border-ink/10 px-6 py-4">
+        <div className="flex items-center justify-between px-6 py-4">
           <h2 id={titleId} className="font-heading text-2xl text-ink">
             Filters
           </h2>
@@ -214,7 +333,7 @@ export default function FilterSidebar({
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-6 py-6">{content(3)}</div>
+        <div className="flex-1 overflow-y-auto px-6 pb-6">{content}</div>
         {/* Filters apply as they are tapped, so this is not an Apply step — it
             closes the drawer and says what is now on the page behind it. */}
         <div className="flex items-center gap-5 border-t border-ink/10 px-6 py-4">
@@ -245,9 +364,27 @@ export default function FilterSidebar({
 
   return (
     <>
-      {/* Desktop sidebar */}
-      <aside aria-label="Filters" className="hidden w-56 flex-shrink-0 lg:block">
-        {content(2)}
+      {/* Desktop sidebar. "Clear all" lives here, beside the title of the
+          thing it clears, rather than a second time beside the chips. */}
+      <aside aria-labelledby={sidebarTitleId} className="hidden w-60 flex-shrink-0 lg:block">
+        <div className="flex min-h-[44px] items-center justify-between pb-2">
+          <h2
+            id={sidebarTitleId}
+            className="font-body text-xs font-medium uppercase tracking-[0.18em] text-ink"
+          >
+            Filters
+          </h2>
+          {hasActiveFilters && onClearAll && (
+            <button
+              type="button"
+              onClick={onClearAll}
+              className="min-h-[44px] text-sm text-ink underline underline-offset-4 transition-colors hover:text-terracotta-deep"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+        {content}
       </aside>
 
       {/* Portalled so everything else on <body> can be made inert. On the
@@ -259,47 +396,112 @@ export default function FilterSidebar({
   );
 }
 
-type HeadingLevel = 2 | 3;
-
 /**
  * The catalogue matches values case-insensitively (sameCatalogueValue), so a
- * shared link reading ?fabric=cotton filters to "Cotton" — and the Cotton
- * option has to show as chosen, and tapping it has to undo it.
+ * shared link reading ?size=m filters to "M" — and the M option has to show
+ * as chosen, and tapping it has to undo it.
  */
 const same = (a: string | null, b: string) =>
   a !== null && a.trim().toLowerCase() === b.trim().toLowerCase();
 
-function GroupHeading({ level, children }: { level: HeadingLevel; children: ReactNode }) {
-  const Tag = level === 2 ? "h2" : "h3";
-  return <Tag className="font-heading text-lg text-ink">{children}</Tag>;
-}
-
-function OptionGroup({
-  level,
+/**
+ * One collapsible group: a disclosure button inside the group's heading, so it
+ * is both a landmark in the heading outline and a control ("Fabric, collapsed,
+ * button"). Closed, it says what is chosen in it — one value by name, more as
+ * a count — so the panel can be read without opening anything.
+ */
+function Group({
   title,
+  summary,
+  open,
+  onToggle,
   children,
 }: {
-  level: HeadingLevel;
   title: string;
+  summary: string | null;
+  open: boolean;
+  onToggle: () => void;
   children: ReactNode;
 }) {
+  const panelId = useId();
   return (
-    <div>
-      <GroupHeading level={level}>{title}</GroupHeading>
-      <div className="mt-3 flex flex-wrap gap-2">{children}</div>
+    <div className="border-b border-ink/10">
+      <h3>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={onToggle}
+          className="flex min-h-[52px] w-full items-center justify-between gap-4 py-3 text-left"
+        >
+          <span className="font-heading text-lg text-ink">{title}</span>
+          <span className="flex min-w-0 items-center gap-3">
+            {!open && summary && (
+              <span className="truncate font-body text-sm text-ink-muted">{summary}</span>
+            )}
+            {open ? (
+              <Minus aria-hidden className="h-4 w-4 flex-none text-ink" strokeWidth={1.5} />
+            ) : (
+              <Plus aria-hidden className="h-4 w-4 flex-none text-ink" strokeWidth={1.5} />
+            )}
+          </span>
+        </button>
+      </h3>
+      <div id={panelId} hidden={!open} className="pb-5">
+        {children}
+      </div>
     </div>
   );
 }
 
+function OptionList({ className, children }: { className?: string; children: ReactNode }) {
+  return <ul className={cn("space-y-0.5", className)}>{children}</ul>;
+}
+
 /**
- * One toggle. A button with aria-pressed, so "Cotton, toggle button, pressed"
- * is what a screen reader hears — before this the chosen option was only a
- * colour change.
- *
- * Chosen is white on ink rather than white on terracotta: the latter measured
- * 3.64:1, short of 4.5:1 for 14px text (logged for this PR by PR #170).
+ * A multi-choice option: a REAL checkbox, restyled. Its native role, state,
+ * keyboard (Space) and the site-wide focus ring all come with it; the label
+ * makes the whole row the hit area — 44px tall on touch screens.
  */
-function Option({
+function CheckOption({
+  checked,
+  onChange,
+  children,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <li>
+      <label className="flex min-h-[44px] cursor-pointer items-center gap-3 text-sm text-ink lg:min-h-[36px]">
+        <span className="relative flex h-4 w-4 flex-none">
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={onChange}
+            className="h-4 w-4 cursor-pointer appearance-none rounded-[3px] border border-ink-muted bg-cream transition-colors checked:border-ink checked:bg-ink hover:border-ink"
+          />
+          {checked && (
+            <Check
+              aria-hidden
+              strokeWidth={2.5}
+              className="pointer-events-none absolute inset-0 m-auto h-3 w-3 text-cream"
+            />
+          )}
+        </span>
+        <span className={checked ? "font-medium" : undefined}>{children}</span>
+      </label>
+    </li>
+  );
+}
+
+/**
+ * A one-of option (a category, a size): a toggle button, aria-pressed, because
+ * the chosen one can be un-chosen by choosing it again — which a radio button
+ * cannot do. Drawn with a round mark to read as "one of these".
+ */
+function PickOption({
   selected,
   onClick,
   children,
@@ -309,85 +511,24 @@ function Option({
   children: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={onClick}
-      className={cn(
-        "min-h-[40px] rounded-full border px-4 py-2 text-sm transition-colors",
-        selected
-          ? "border-ink bg-ink text-cream"
-          : "border-ink/15 text-ink hover:border-ink/50"
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function CategoryFilter({
-  level,
-  groups,
-  selected,
-  onSelect,
-}: {
-  level: HeadingLevel;
-  groups: CategoryFilterGroup[];
-  selected: string | null;
-  onSelect: (slug: string) => void;
-}) {
-  const offered = groups.filter((g) => g.children.length > 0);
-  if (offered.length === 0) return null;
-
-  return (
-    <div>
-      <GroupHeading level={level}>Category</GroupHeading>
-      <div className="mt-3 space-y-4">
-        {offered.map((group) => (
-          <div key={group.name}>
-            <p className="text-xs uppercase tracking-wider text-ink-muted">
-              {group.name}
-            </p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {group.children.map((child) => (
-                <Option
-                  key={child.slug}
-                  selected={selected === child.slug}
-                  onClick={() => onSelect(child.slug)}
-                >
-                  {child.name}
-                </Option>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function FilterGroup({
-  level,
-  title,
-  options,
-  selected,
-  onSelect,
-}: {
-  level: HeadingLevel;
-  title: string;
-  options: string[];
-  selected: string | null;
-  onSelect: (value: string) => void;
-}) {
-  if (options.length === 0) return null;
-
-  return (
-    <OptionGroup level={level} title={title}>
-      {options.map((opt) => (
-        <Option key={opt} selected={same(selected, opt)} onClick={() => onSelect(opt)}>
-          {opt}
-        </Option>
-      ))}
-    </OptionGroup>
+    <li>
+      <button
+        type="button"
+        aria-pressed={selected}
+        onClick={onClick}
+        className="flex min-h-[44px] w-full items-center gap-3 text-left text-sm text-ink lg:min-h-[36px]"
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "flex h-4 w-4 flex-none items-center justify-center rounded-full border transition-colors",
+            selected ? "border-ink" : "border-ink-muted"
+          )}
+        >
+          {selected && <span className="h-2 w-2 rounded-full bg-ink" />}
+        </span>
+        <span className={selected ? "font-medium" : undefined}>{children}</span>
+      </button>
+    </li>
   );
 }

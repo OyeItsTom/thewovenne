@@ -3,6 +3,7 @@ import type { ProductSize } from "./sizes";
 import { stockState } from "./stock";
 import { withinPriceCeiling } from "./pricing";
 import type { Filters } from "@/components/shop/FilterSidebar";
+import { matchesColour, matchesFabric } from "./catalogueFacets";
 
 /**
  * Which products match a set of filters, and which options are worth offering.
@@ -40,22 +41,6 @@ export function availableSizes(
     .map(([label]) => label);
 }
 
-/** Distinct non-empty values of a free-text attribute, case-insensitively. */
-export function distinctValues(
-  products: Product[],
-  pick: (p: Product) => string | null
-): string[] {
-  const seen = new Map<string, string>();
-  for (const p of products) {
-    const v = pick(p)?.trim();
-    // Keyed lower-case so "Indigo" and "indigo" are one option, displayed with
-    // the first spelling seen. The real fix is normalising the data, but a
-    // filter list that fragments as the catalogue grows is worse.
-    if (v) seen.set(v.toLowerCase(), seen.get(v.toLowerCase()) ?? v);
-  }
-  return [...seen.values()].sort((a, b) => a.localeCompare(b));
-}
-
 const same = (a: string | null, b: string | null) =>
   (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
 
@@ -65,8 +50,9 @@ export function matchesFilters(
   sizesByProduct: SizesByProduct
 ): boolean {
   if (filters.category && product.category_slug !== filters.category) return false;
-  if (filters.fabric && !same(product.fabric, filters.fabric)) return false;
-  if (filters.colour && !same(product.colour, filters.colour)) return false;
+  // By browsing facet, any of the chosen ones (lib/catalogueFacets).
+  if (!matchesFabric(product.fabric, filters.fabric)) return false;
+  if (!matchesColour(product.colour, filters.colour)) return false;
   // The shown (discounted) price, not price_inr — see lib/pricing shownPrice.
   if (!withinPriceCeiling(product, filters.maxPrice)) return false;
   // The card's own rule (stockState), so "In stock" can never keep a card that

@@ -20,6 +20,7 @@ import {
   catalogueSearchString,
   isUnfiltered,
   parseCatalogueParams,
+  searchParamsRecord,
   type CatalogueFilters,
 } from "../lib/catalogueParams";
 import {
@@ -29,9 +30,9 @@ import {
   offersAvailability,
   orderForDiscovery,
   resultCountLabel,
-  usefulPriceSteps,
   withoutFilter,
 } from "../lib/catalogueDiscovery";
+import { priceSliderRange } from "../lib/priceSlider";
 import { matchesFilters } from "../lib/productFilters";
 import { effectivePrice, shownPrice, withinPriceCeiling } from "../lib/pricing";
 import { getCatalogue, filterEffectiveCatalogueRows } from "../lib/products";
@@ -95,17 +96,18 @@ check("In stock counts as a filter", isUnfiltered({ ...NO_FILTERS, inStock: true
 check("a sort alone is NOT a filter", isUnfiltered({ ...NO_FILTERS, sort: "price-desc" }), true);
 check(
   "keys are written in a fixed order, sort last",
-  catalogueSearchString({ ...NO_FILTERS, sort: "price-asc", inStock: true, fabric: "Cotton" }),
+  catalogueSearchString({ ...NO_FILTERS, sort: "price-asc", inStock: true, fabric: ["Cotton"] }),
   "fabric=Cotton&availability=in-stock&sort=price-asc"
 );
 check("the default state is still the bare path", catalogueHref("/in/women/sarees", NO_FILTERS), "/in/women/sarees");
 for (const state of [
   { ...NO_FILTERS, inStock: true },
   { ...NO_FILTERS, sort: "price-desc" as const },
-  { ...NO_FILTERS, colour: "Red", inStock: true, sort: "price-asc" as const },
+  { ...NO_FILTERS, colour: ["Red"], inStock: true, sort: "price-asc" as const },
+  { ...NO_FILTERS, colour: ["Off-white", "Red"], fabric: ["Cotton", "Mul Cotton"], maxPrice: 2000 },
 ]) {
   const search = catalogueSearchString(state);
-  check(`round trip: ${search}`, parseCatalogueParams(Object.fromEntries(new URLSearchParams(search))), state);
+  check(`round trip: ${search}`, parseCatalogueParams(searchParamsRecord(new URLSearchParams(search))), state);
 }
 check(
   "the query key never contains the sort",
@@ -114,8 +116,8 @@ check(
 );
 check(
   "two sorts of one filter state share one query key",
-  JSON.stringify(catalogueQuery({ ...NO_FILTERS, colour: "Red", sort: "price-asc" })),
-  JSON.stringify(catalogueQuery({ ...NO_FILTERS, colour: "Red", sort: null }))
+  JSON.stringify(catalogueQuery({ ...NO_FILTERS, colour: ["Red"], sort: "price-asc" })),
+  JSON.stringify(catalogueQuery({ ...NO_FILTERS, colour: ["Red"], sort: null }))
 );
 
 // ── 2. ordering ──────────────────────────────────────────────────────────────
@@ -155,12 +157,17 @@ check("three customer sorts, no invented 'Recommended'",
 console.log("\n=== filtering and counting ===");
 const run = (f: CatalogueFilters) => MIXED.filter((p) => matchesFilters(p, f, {}));
 check("no filters: everything", run(NO_FILTERS).length, 6);
-check("single filter (colour)", ids(run({ ...NO_FILTERS, colour: "red" })), ["n4-sold", "n5"]);
+check("single filter (colour)", ids(run({ ...NO_FILTERS, colour: ["red"] })), ["n4-sold", "n5"]);
 check("In stock drops exactly the sold-out pieces", ids(run({ ...NO_FILTERS, inStock: true })), ["n1", "n3", "n5", "n6"]);
-check("multiple filters are AND (Red + In stock)", ids(run({ ...NO_FILTERS, colour: "Red", inStock: true })), ["n5"]);
-check("an impossible combination is empty", run({ ...NO_FILTERS, colour: "Red", fabric: "Silk" }).length, 0);
-check("clear all returns everything", run(clearedFilters({ ...NO_FILTERS, colour: "Red", inStock: true })).length, 6);
-check("clear all keeps the chosen sort", clearedFilters({ ...NO_FILTERS, colour: "Red", sort: "price-asc" }), { ...NO_FILTERS, sort: "price-asc" });
+check("multiple filters are AND (Red + In stock)", ids(run({ ...NO_FILTERS, colour: ["Red"], inStock: true })), ["n5"]);
+check("several values in ONE group are OR (Red or Off-white)",
+  ids(run({ ...NO_FILTERS, colour: ["Red", "Off-white"] })).length,
+  MIXED.filter((p) => ["red", "off-white"].includes((p.colour ?? "").toLowerCase())).length);
+check("…and still AND across groups (Red or Off-white, In stock)",
+  run({ ...NO_FILTERS, colour: ["Red", "Off-white"], inStock: true }).every((p) => p.stock_quantity > 0), true);
+check("an impossible combination is empty", run({ ...NO_FILTERS, colour: ["Red"], fabric: ["Silk"] }).length, 0);
+check("clear all returns everything", run(clearedFilters({ ...NO_FILTERS, colour: ["Red"], inStock: true })).length, 6);
+check("clear all keeps the chosen sort", clearedFilters({ ...NO_FILTERS, colour: ["Red"], sort: "price-asc" }), { ...NO_FILTERS, sort: "price-asc" });
 check("count, unfiltered", resultCountLabel(30, 30), "30 products");
 check("count, filtered", resultCountLabel(8, 30), "8 of 30 products");
 check("count, one product", resultCountLabel(1, 1), "1 product");
@@ -200,19 +207,19 @@ const under = (max: number) => ids(PRICED.filter((p) => matchesFilters(p, { ...N
 
 check("1. no discount: shown price is the stored price", shownPrice(PLAIN_1450), 1450);
 check("2. active discount: shown price is the card's price", [shownPrice(SALE), effectivePrice(SALE).price, effectivePrice(SALE).wasPrice], [1299, 1299, 1699]);
-check("3. ₹1,699 shown at ₹1,299 IS in 'Under ₹1,500'", under(1500).includes("sale-1699"), true);
+check("3. ₹1,699 shown at ₹1,299 IS within 'Up to ₹1,500'", under(1500).includes("sale-1699"), true);
 check("3. …and a plain ₹1,599 is not", under(1500).includes("plain-1599"), false);
-check("6. boundary: shown at exactly ₹1,500 is in 'Under ₹1,500' (inclusive, as before)", [shownPrice(EXACT), under(1500).includes("exact-1500")], [1500, true]);
-check("6. …and not in 'Under ₹1,499'", under(1499).includes("exact-1500"), false);
+check("6. boundary: shown at exactly ₹1,500 is within 'Up to ₹1,500' (inclusive, as before)", [shownPrice(EXACT), under(1500).includes("exact-1500")], [1500, true]);
+check("6. …and not within 'Up to ₹1,499'", under(1499).includes("exact-1500"), false);
 check("7. an expired discount does not count", [shownPrice(EXPIRED), under(1500).includes("expired-1699")], [1699, false]);
 check("7. a discount not yet started does not count", [shownPrice(NOT_STARTED), under(1500).includes("future-1699")], [1699, false]);
-check("'Under ₹1,500' is exactly the cards showing ₹1,500 or less", under(1500).sort(), ["exact-1500", "plain-1450", "sale-1699"]);
+check("'Up to ₹1,500' is exactly the cards showing ₹1,500 or less", under(1500).sort(), ["exact-1500", "plain-1450", "sale-1699"]);
 check("4. low→high sorts by the shown price",
   ids(orderForDiscovery(PRICED, "price-asc")), ["sale-1699", "plain-1450", "exact-1500", "plain-1599", "expired-1699", "future-1699"]);
 check("5. high→low sorts by the shown price (equal prices keep arrival order)",
   ids(orderForDiscovery(PRICED, "price-desc")), ["expired-1699", "future-1699", "plain-1599", "exact-1500", "plain-1450", "sale-1699"]);
-check("price steps are computed from shown prices",
-  usefulPriceSteps(PRICED.map((p) => shownPrice(p))), [1500]);
+check("the slider's range is computed from shown prices (₹1,299 sale is the low end, not ₹1,699)",
+  priceSliderRange(PRICED.map((p) => shownPrice(p))), { min: 1300, max: 1700, step: 100, lowest: 1299, highest: 1699 });
 check("withinPriceCeiling: no ceiling passes everything", PRICED.every((p) => withinPriceCeiling(p, null)), true);
 {
   const rows = PRICED.map((p) => ({ product_id: p.id, state: "published", is_active: true, category_id: "sarees",
@@ -229,16 +236,18 @@ ok("no listing compares the stored price_inr against a ceiling any more",
 ok("every surface goes through the one helper",
   read("lib/products.ts").includes("withinPriceCeiling(") && read("lib/productFilters.ts").includes("withinPriceCeiling(") &&
   read("lib/catalogueDiscovery.ts").includes("shownPrice(") &&
-  read("app/(storefront)/in/shop/page.tsx").includes("usefulPriceSteps(catalogue.map((p) => shownPrice(p)))") &&
-  read("components/shop/CategoryFilters.tsx").includes("usefulPriceSteps(products.map((p) => shownPrice(p)))"));
+  read("app/(storefront)/in/shop/page.tsx").includes("priceSliderRange(scope.map((p) => shownPrice(p)))") &&
+  read("components/shop/CategoryFilters.tsx").includes("priceSliderRange(products.map((p) => shownPrice(p)))"));
 
 // ── 4. options worth offering ────────────────────────────────────────────────
 
 console.log("\n=== only options that narrow ===");
 const LIVE_PRICES = [459, 699, 1250, 1299, 1299, 1399, 1450, 1499, 1550, 1599, 3299];
-check("shop: ₹3,500 and ₹5,000 would change nothing, so they go", usefulPriceSteps(LIVE_PRICES), [1500, 2500]);
-check("jewellery (₹459, ₹699): no ceiling narrows", usefulPriceSteps([459, 699]), []);
-check("one product: nothing to narrow", usefulPriceSteps([1299]), []);
+check("shop: the track runs from the cheapest piece to the dearest, in ₹100 stops",
+  priceSliderRange(LIVE_PRICES), { min: 500, max: 3300, step: 100, lowest: 459, highest: 3299 });
+check("jewellery (₹459, ₹699): a ₹500 or ₹600 ceiling does narrow", priceSliderRange([459, 699])?.min, 500);
+check("one product: nothing to narrow, no slider", priceSliderRange([1299]), null);
+check("every price inside one step: nothing to narrow", priceSliderRange([1210, 1290]), null);
 check("In stock is offered on a mixed shelf", offersAvailability(MIXED), true);
 check("…not when everything is in stock (a no-op)", offersAvailability(allIn), false);
 check("…not when everything is sold out (always empty)", offersAvailability(allOut), false);
@@ -249,17 +258,20 @@ check("…not on an empty shelf", offersAvailability([]), false);
 console.log("\n=== chosen filters as chips ===");
 check("no chips by default", activeFilters(NO_FILTERS), []);
 check("a sort is not a chip", activeFilters({ ...NO_FILTERS, sort: "price-asc" }), []);
-const chosen: CatalogueFilters = { ...NO_FILTERS, inStock: true, category: "sarees", fabric: "Cotton", colour: "Off-white", maxPrice: 1500 };
-check("chips in panel order, with stored values as labels",
+const chosen: CatalogueFilters = { ...NO_FILTERS, inStock: true, category: "sarees", fabric: ["Cotton", "Mul Cotton"], colour: ["Off-white"], maxPrice: 1500 };
+check("chips in panel order, one per value, facet names as labels",
   activeFilters(chosen, (s) => (s === "sarees" ? "Sarees" : null)).map((c) => c.label),
-  ["In stock", "Sarees", "Cotton", "Off-white", "Under ₹1,500"]);
+  ["In stock", "Cotton", "Mul Cotton", "Off-white", "Up to ₹1,500", "Sarees"]);
+check("a size chip is named by its group", activeFilters({ ...NO_FILTERS, size: "6" }, () => null, "Ring size").map((c) => c.label), ["Ring size 6"]);
 check("an unknown category slug still gets a removable chip",
   activeFilters({ ...NO_FILTERS, category: "shirts" }).map((c) => c.label), ["shirts"]);
-check("removing one chip removes only that filter",
-  withoutFilter(chosen, "fabric"), { ...chosen, fabric: null });
+check("removing one value's chip removes only that value",
+  withoutFilter(chosen, "fabric", "Cotton"), { ...chosen, fabric: ["Mul Cotton"] });
+check("…regardless of case", withoutFilter(chosen, "fabric", "mul cotton").fabric, ["Cotton"]);
+check("removing a single-valued chip clears it", withoutFilter(chosen, "category"), { ...chosen, category: null });
 check("removing In stock sets it false, not null", withoutFilter(chosen, "inStock").inStock, false);
 check("removing every chip one by one reaches the unfiltered state",
-  isUnfiltered(activeFilters(chosen).reduce((f, c) => withoutFilter(f, c.key), chosen)), true);
+  isUnfiltered(activeFilters(chosen).reduce((f, c) => withoutFilter(f, c.key, c.value), chosen)), true);
 
 // ── 6. category eligibility ──────────────────────────────────────────────────
 
@@ -369,11 +381,11 @@ const render = (el: React.ReactElement) =>
   renderToStaticMarkup(createElement(AppRouterContext.Provider, { value: ROUTER as never }, el));
 const asListing = (p: Product) => p as unknown as ProductListing;
 const OPTIONS = {
-  categoryGroups: [{ name: "Women", children: [{ name: "Sarees", slug: "sarees" }] }],
-  fabrics: ["Cotton"],
+  categoryGroups: [{ name: "Women", children: [{ name: "Sarees", slug: "sarees" }, { name: "Dupattas", slug: "dupattas" }] }],
+  fabrics: ["Cotton", "Mul Cotton"],
   colours: ["Off-white", "Red"],
   sizes: [],
-  priceSteps: [1500],
+  priceRange: { min: 1300, max: 1700, step: 100, lowest: 1299, highest: 1699 },
   availability: true,
 };
 
@@ -389,12 +401,16 @@ function markupChecks() {
   ok("a labelled native sort control", /<label[^>]*>[\s\S]*Sort[\s\S]*<select/.test(plain));
   ok("the sort shows Newest by default", /<option value="newest" selected="">Newest<\/option>/.test(plain));
   ok("a Filters button for phones, announced as opening a dialog", /aria-haspopup="dialog"[^>]*>[\s\S]*?Filters/.test(plain));
-  ok("an Availability group with In stock", plain.includes(">Availability</h2>") && plain.includes(">In stock</button>"));
-  ok("options expose their state with aria-pressed", (plain.match(/aria-pressed="false"/g) ?? []).length >= 5);
+  ok("an Availability group with In stock, as a checkbox",
+    /<h3><button[^>]*aria-expanded="false"[^>]*><span[^>]*>Availability<\/span>/.test(plain) && /type="checkbox"[\s\S]*?In stock/.test(plain));
+  ok("multi-choice options are real checkboxes (In stock, 2 fabrics, 2 colours)", (plain.match(/type="checkbox"/g) ?? []).length === 5);
+  const plainAside = plain.slice(plain.indexOf("<aside"), plain.indexOf("</aside>"));
+  ok("one-of options (the 2 categories) expose their state with aria-pressed",
+    (plainAside.match(/aria-pressed="false"/g) ?? []).length === 2);
   ok("sold-out cards follow every in-stock card in the markup",
     plain.indexOf("n6") < plain.indexOf("n2-sold") && plain.indexOf("n5") < plain.indexOf("n4-sold"));
 
-  const filtered: CatalogueFilters = { ...NO_FILTERS, colour: "Red", inStock: true };
+  const filtered: CatalogueFilters = { ...NO_FILTERS, colour: ["Red"], inStock: true };
   const narrowed = render(createElement(CatalogueListing, {
     products: orderForDiscovery(run(filtered), null).map(asListing), total: 6,
     filters: filtered, options: OPTIONS, onChange: noop,
@@ -403,18 +419,20 @@ function markupChecks() {
   ok("filtered: one removable chip per filter",
     narrowed.includes('aria-label="Remove filter: In stock"') && narrowed.includes('aria-label="Remove filter: Red"'));
   ok("filtered: Clear all appears", narrowed.includes(">Clear all</button>"));
-  ok("the chosen options read as pressed", (narrowed.match(/aria-pressed="true"/g) ?? []).length === 2);
+  ok("the chosen options read as checked", (narrowed.match(/checked=""/g) ?? []).length === 2);
+  ok("each collapsed group says what is chosen in it",
+    /Availability<\/span>[\s\S]*?>In stock<\/span>/.test(narrowed) && /Colour<\/span>[\s\S]*?>Red<\/span>/.test(narrowed));
   ok("the Filters button says how many are applied", narrowed.includes("(2)") && narrowed.includes(", 2 applied"));
 
   const empty = render(createElement(CatalogueListing, {
-    products: [], total: 6, filters: { ...NO_FILTERS, colour: "Red", fabric: "Silk" }, options: OPTIONS, onChange: noop,
+    products: [], total: 6, filters: { ...NO_FILTERS, colour: ["Red"], fabric: ["Silk"] }, options: OPTIONS, onChange: noop,
   }));
   ok("empty result: one clear message", empty.includes("No products match these filters."));
   ok("empty result: one way out, and no substitute products", empty.includes(">Clear filters</button>") && !empty.includes("<article"));
 
   const bare = render(createElement(CatalogueListing, {
     products: [asListing(item("j1", 459, 1))], total: 1, filters: NO_FILTERS,
-    options: { categoryGroups: [], fabrics: [], colours: [], sizes: [], priceSteps: [], availability: false },
+    options: { categoryGroups: [], fabrics: [], colours: [], sizes: [], priceRange: null, availability: false },
     onChange: noop,
   }));
   ok("nothing to filter: no Filters button and no sidebar", !bare.includes("aria-haspopup") && !bare.includes("<aside"));
@@ -440,15 +458,15 @@ function markupChecks() {
   }));
   ok("closed: no dialog in the page", !closed.includes('role="dialog"'));
   ok("hasFilterOptions: false for an empty option set",
-    hasFilterOptions({ categoryGroups: [], fabrics: [], colours: [], sizes: [], priceSteps: [], availability: false }) === false);
+    hasFilterOptions({ categoryGroups: [], fabrics: [], colours: [], sizes: [], priceRange: null, availability: false }) === false);
   ok("hasFilterOptions: true when only availability is offered",
-    hasFilterOptions({ categoryGroups: [], fabrics: [], colours: [], sizes: [], priceSteps: [], availability: true }));
+    hasFilterOptions({ categoryGroups: [], fabrics: [], colours: [], sizes: [], priceRange: null, availability: true }));
   const sharedLink = render(createElement(FilterSidebar, {
-    options: { ...OPTIONS, priceSteps: [1500] }, filters: { ...NO_FILTERS, maxPrice: 5000, colour: "red" },
+    options: OPTIONS, filters: { ...NO_FILTERS, maxPrice: 5000, colour: ["red"] },
     onChange: noop, isOpen: false, onClose: noop,
   }));
-  ok("a ceiling from a shared link stays visible and pressed", /aria-pressed="true"[^>]*>Under ₹5,000/.test(sharedLink));
-  ok("a lower-case colour from a shared link shows its option pressed", /aria-pressed="true"[^>]*>Red</.test(sharedLink));
+  ok("a ceiling from a shared link stays visible in the Price group's summary", /Price<\/span>[\s\S]*?>Up to ₹5,000<\/span>/.test(sharedLink));
+  ok("a lower-case colour from a shared link shows its option checked", /checked=""[^>]*\/>[\s\S]{0,400}?Red</.test(sharedLink));
   ok("chosen options are white on ink, not white on terracotta (3.64:1)",
     !read("components/shop/FilterSidebar.tsx").includes("bg-terracotta text-cream"));
   ok("the drawer reuses the shared trap decision (lib/focusTrap)",

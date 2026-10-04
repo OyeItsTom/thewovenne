@@ -12,11 +12,9 @@ import {
   parseCatalogueParams,
   type RawSearchParams,
 } from "@/lib/catalogueParams";
-import {
-  offersAvailability,
-  orderForDiscovery,
-  usefulPriceSteps,
-} from "@/lib/catalogueDiscovery";
+import { offersAvailability, orderForDiscovery } from "@/lib/catalogueDiscovery";
+import { facetOptionsFor } from "@/lib/products";
+import { priceSliderRange } from "@/lib/priceSlider";
 import ShopFilters from "@/components/shop/ShopFilters";
 import { shownPrice } from "@/lib/pricing";
 import { openGraph } from "@/lib/seo";
@@ -78,7 +76,7 @@ export default async function ShopPage({
 
   // THE DATABASE DOES THE FILTERING. What arrives here is the matching products
   // and nothing else, so the page serialises a result rather than a catalogue.
-  const [{ products: matched }, everything, categoryTree, facetValues] =
+  const [{ products: matched }, everything, categoryTree, facetRows] =
     await Promise.all([
       getCatalogue(catalogueQuery(filters)),
       // The unfiltered catalogue, server-side only, for the three things a
@@ -101,6 +99,16 @@ export default async function ShopPage({
   // in the shop whether or not a size filter was ever touched.
   const sizesByProduct = await getCatalogueSizes(products.map((p) => p.id));
 
+  // THE SCOPE EVERY OPTION IS OFFERED OVER: the whole catalogue, or — once a
+  // sub-category is chosen — just that one. Offering Mul Cotton while the shop
+  // is narrowed to Dhoti would be an option that can only empty the grid.
+  const chosenCategory =
+    categoryTree.flatMap((section) => section.children).find((c) => c.slug === filters.category) ??
+    null;
+  const scope = chosenCategory
+    ? catalogue.filter((p) => p.category_slug === chosenCategory.slug)
+    : catalogue;
+
   return (
     <div className="container-wovenne section-padding">
       <div className="text-center">
@@ -112,11 +120,12 @@ export default async function ShopPage({
       <ShopFilters
         products={products}
         total={catalogue.length}
-        priceSteps={usefulPriceSteps(catalogue.map((p) => shownPrice(p)))}
-        availability={offersAvailability(catalogue)}
+        priceRange={priceSliderRange(scope.map((p) => shownPrice(p)))}
+        availability={offersAvailability(scope)}
         categoryTree={categoryTree}
         sizesByProduct={sizesByProduct}
-        facetValues={facetValues}
+        facetValues={facetOptionsFor(facetRows, chosenCategory?.id ?? null)}
+        sizeScope={chosenCategory?.name ?? null}
         filters={filters}
       />
     </div>
