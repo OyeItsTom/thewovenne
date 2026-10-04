@@ -23,6 +23,7 @@ export default function CartDrawer() {
   const closeCart = useCartStore((s) => s.closeCart);
   const items = useCartStore((s) => s.items);
   const subtotal = useCartStore((s) => s.subtotal());
+  const lastAdded = useCartStore((s) => s.lastAdded);
   const reduced = useReducedMotion();
   const panel = slideInFromRight(reduced);
 
@@ -151,6 +152,11 @@ export default function CartDrawer() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="cart-drawer-title"
+        // After Add to Cart, what the add did is the dialog's description, so
+        // it is spoken with "Your Bag" as focus lands — a live region would race
+        // the focus move and is often cut off by it. Absent when the bag was
+        // opened from the header.
+        aria-describedby={lastAdded ? "cart-drawer-status" : undefined}
         // Focusable only programmatically: the panel is where focus lands on
         // open, but it should never be a Tab stop of its own afterwards.
         tabIndex={-1}
@@ -174,10 +180,25 @@ export default function CartDrawer() {
           </button>
         </div>
 
+        {lastAdded && (
+          <p id="cart-drawer-status" className="sr-only">
+            {lastAdded}
+          </p>
+        )}
+
         {items.length === 0 ? (
-          <div className="mt-16 flex flex-1 flex-col items-center justify-center text-center text-ink/50">
+          // The same way on as the cart page's own empty state, in the same
+          // words, so the two empty bags do not offer different things.
+          <div className="mt-16 flex flex-1 flex-col items-center justify-center text-center text-ink-muted">
             <ShoppingBag className="mb-4 h-10 w-10" strokeWidth={1.5} />
             <p className="text-sm">Your bag is empty.</p>
+            <Link
+              href="/in/shop"
+              onClick={closeCart}
+              className={buttonClassName("primary", "md", "mt-6")}
+            >
+              Explore the Collection
+            </Link>
           </div>
         ) : (
           // overscroll-contain stops the scroll chaining on: without it, flicking

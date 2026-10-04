@@ -28,7 +28,7 @@ export default function GlobalError({
           </p>
           <a
             href="/in"
-            className="mt-6 inline-block rounded-full bg-terracotta px-8 py-3 text-cream transition-colors hover:bg-terracotta-dark"
+            className="mt-6 inline-block rounded-full bg-terracotta-dark px-8 py-3 text-cream transition-colors hover:bg-terracotta-deep"
           >
             Back to THE WOVENNE
           </a>

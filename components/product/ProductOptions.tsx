@@ -9,6 +9,7 @@ import SizeSelector from "./SizeSelector";
 import AddToCart from "./AddToCart";
 import { effectivePrice } from "@/lib/pricing";
 import { sizeStockNote } from "@/lib/stock";
+import { showStickyCta, SITE_FOOTER_SELECTOR } from "@/lib/stickyCta";
 
 /** What the cart records when a product has no sizes of its own. */
 const NO_SIZE = "One Size";
@@ -85,6 +86,7 @@ export default function ProductOptions({
   const ctaRef = useRef<HTMLDivElement>(null);
   const [ctaVisible, setCtaVisible] = useState(false);
   const [ctaHasBeenSeen, setCtaHasBeenSeen] = useState(false);
+  const [footerVisible, setFooterVisible] = useState(false);
 
   useEffect(() => {
     const node = ctaRef.current;
@@ -109,7 +111,25 @@ export default function ProductOptions({
     return () => observer.disconnect();
   }, []);
 
-  const showStickyBar = ctaHasBeenSeen && !ctaVisible;
+  // The far edge: the moment any of the site footer enters the viewport the bar
+  // steps aside, and it returns when the footer leaves again. A separate
+  // observer because it watches a different element with a different margin —
+  // none, so it hides on the first pixel rather than once it is already
+  // covering something. No footer on the page (or no observer support) leaves
+  // this false, which is exactly the behaviour before it existed.
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const footer = document.querySelector(SITE_FOOTER_SELECTOR);
+    if (!footer) return;
+
+    const observer = new IntersectionObserver(([entry]) =>
+      setFooterVisible(entry.isIntersecting)
+    );
+    observer.observe(footer);
+    return () => observer.disconnect();
+  }, []);
+
+  const showStickyBar = showStickyCta({ ctaHasBeenSeen, ctaVisible, footerVisible });
 
   return (
     <div className="space-y-6">
@@ -119,7 +139,7 @@ export default function ProductOptions({
         /* Beside the size and above the button — the buying decision, not the
            photography. Small caps and a gold hairline, the same voice the page
            uses for the one-size note. No red, no animation, no countdown. */
-        <p className="flex items-center gap-2 text-xs uppercase tracking-[0.12em] text-ink/60">
+        <p className="flex items-center gap-2 text-xs uppercase tracking-[0.12em] text-ink-muted">
           <span aria-hidden className="h-1 w-1 rounded-full bg-gold" />
           {sizeNote}
         </p>
@@ -145,7 +165,7 @@ export default function ProductOptions({
         <button
           onClick={quickAdd}
           disabled={outOfStock}
-          className="shrink-0 rounded-full bg-terracotta px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-terracotta-dark disabled:opacity-50"
+          className="shrink-0 rounded-full bg-terracotta-dark px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-terracotta-deep disabled:cursor-not-allowed disabled:bg-linen disabled:text-ink-muted"
         >
           {outOfStock ? "Out of Stock" : `Add · ${size}`}
         </button>

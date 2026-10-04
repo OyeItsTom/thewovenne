@@ -12,11 +12,20 @@ const config: Config = {
         ink: {
           DEFAULT: "#1C1F3B",
           light: "#2C3057",
+          // Quiet secondary text: category, stock and size labels. Ink at 68%
+          // over white, as a solid colour so it holds on linen too — 5.56:1 on
+          // white, 4.62:1 on linen. The lighter ink/45–ink/60 it replaces fell
+          // below 4.5:1 at the 10–14px sizes these labels use.
+          muted: "#65677A",
         },
         linen: "#F0EAD6",
         terracotta: {
           DEFAULT: "#C2714F",
+          // The primary-button fill. White on DEFAULT is 3.64:1, short of the
+          // 4.5:1 that 14–18px button text needs; white on dark is 4.88:1.
           dark: "#A85D3F",
+          // Primary-button hover, one step further along the same hue (6.16:1).
+          deep: "#934F33",
         },
         gold: "#C9A84C",
         // Page background. Pure white — the emblem and product photography sit
