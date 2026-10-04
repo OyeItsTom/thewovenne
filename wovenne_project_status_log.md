@@ -1895,6 +1895,10 @@ instruction.
 migration written on `main` must therefore take `0059` or later**, or reviving
 #117 becomes a collision to untangle rather than a rebase.
 
+> **Superseded:** #117 landed and `0058_settlement_is_idempotent.sql` is on
+> `main`. For the current migration state see "Migration ledger — 4 October
+> 2026" at the bottom.
+
 ### Future architecture — audited, none of it implemented
 
 A read-only audit covered four areas. Each was re-checked against `a6138c4`
@@ -2202,6 +2206,10 @@ Fixes the deferred defect above, plus the second one Stage 1 found. Branch
 `fix/draft-stock-integrity` (from `main` 24c215b). **Migration 0060 has not been
 applied to any real database, and nothing is merged or deployed.**
 
+> **Superseded (4 October 2026):** 0060 has since been applied to production and
+> the fix is merged and deployed. See "Migration ledger — 4 October 2026" at the
+> bottom.
+
 **What was wrong.** (1) Publishing promoted the draft row wholesale, so a draft's
 copy of an unsized product's stock became the live figure, bringing sold pieces
 back. (2) The product form saved every size's *loaded* count straight back
@@ -2426,3 +2434,23 @@ hash to the repository's text.
 `is_admin()` is deliberately **not** being changed to match the repository's
 hash. With F03 closed, the preflight is complete, with no BLOCKER and no open
 REVIEW. Next is the read-only history audit.
+
+## Migration ledger — 4 October 2026
+
+Verified read-only against production by the owner:
+
+- Production's migration ledger is **`public.schema_migrations`** (added by
+  `0057`), not Supabase's built-in migration history. The Supabase dashboard's
+  migrations card not listing recent files is expected and means nothing.
+- The ledger holds **62 rows; the latest is `0062`.** `0060`
+  (publish keeps live stock), `0061` (`is_staff()`) and `0062` (`is_admin()`
+  requires aal2) are all applied. Nothing in `supabase/migrations/` is pending.
+- Statements above that 0060 is unapplied, that `main` stops at `0057` or
+  `0059`, or that 0061/0062 are pending are history, not the current state.
+
+Test guards must not pin the highest migration number. `ai-budget.test.ts`
+still asserted "no migration beyond 0059" and "0058 is still not taken", so it
+failed on a clean `main`; it now carries the same invariant guards as the other
+AI suites (0059 is the AI phase's only migration, no later migration touches an
+`ai_`/`chat_`/`eval_` object, 0058 is the settlement migration, and no two
+migrations share a number).
