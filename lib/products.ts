@@ -6,6 +6,7 @@ import {
   visibleCategoryIds,
 } from "./categories";
 import { ANON_CTX, preferDraft, statesFor, type ReadCtx } from "./readCtx";
+import { withinPriceCeiling } from "./pricing";
 import type { Category, Product, ProductListing } from "./types";
 
 // Storefront reads come from PUBLISHED versions, never the identity tables.
@@ -521,6 +522,12 @@ export interface CatalogueFilterInput {
   colour?: string | null;
   size?: string | null;
   maxPrice?: number | null;
+  /**
+   * Only rows with stock to sell. The version's stock_quantity is the whole
+   * truth here: for a sized product 0056 derives it from the sizes, so this is
+   * the same figure the card's "Sold out" label reads. Read, never written.
+   */
+  inStock?: boolean | null;
 }
 
 /** Literal, case-insensitive comparison with surrounding whitespace ignored. */
@@ -555,7 +562,8 @@ export function filterEffectiveCatalogueRows(
     if (category && row.category_id !== category.id) return false;
     if (filters.fabric && !sameCatalogueValue(row.fabric, filters.fabric)) return false;
     if (filters.colour && !sameCatalogueValue(row.colour, filters.colour)) return false;
-    if (filters.maxPrice != null && row.price_inr > filters.maxPrice) return false;
+    if (!withinPriceCeiling(row, filters.maxPrice)) return false;
+    if (filters.inStock && !(row.stock_quantity > 0)) return false;
     if (sizeProductIds && !sizeProductIds.has(row.product_id)) return false;
     return true;
   });
@@ -668,17 +676,24 @@ export async function getCatalogue(
   if (attributeScopedProductIds) {
     query = query.in("product_id", [...attributeScopedProductIds]);
   }
-  if (filters.maxPrice !== null && filters.maxPrice !== undefined) {
-    query = query.lte("price_inr", filters.maxPrice);
-  }
+  // NO PRICE CONDITION IN THE QUERY. The ceiling is compared against the SHOWN
+  // price (a live discount applied), which the database cannot filter on —
+  // public.effective_price() is a function of five columns, not a column. So
+  // the rows come back unpriced-filtered and are narrowed below by the same
+  // rule the card and the sort use. At catalogue scale that is a handful of
+  // extra rows; paging is applied after the ceiling so it stays exact.
+  const byPrice = filters.maxPrice !== null && filters.maxPrice !== undefined;
   if (sizeScopedProductIds) {
     query = query.in("product_id", [...sizeScopedProductIds]);
+  }
+  if (filters.inStock) {
+    query = query.gt("stock_quantity", 0);
   }
 
   query = query
     .order(NEWEST_PRODUCT_FIRST, BY_NEWEST_PRODUCT)
     .order("product_id", { ascending: true });
-  if (opts.limit !== undefined) {
+  if (opts.limit !== undefined && !byPrice) {
     const from = opts.offset ?? 0;
     query = query.range(from, from + opts.limit - 1);
   }
@@ -687,6 +702,17 @@ export async function getCatalogue(
   if (error) {
     console.error("getCatalogue:", error.message);
     return { products: [], total: 0 };
+  }
+
+  if (byPrice) {
+    const now = new Date();
+    const priced = ((data as unknown as ProductListingRow[]) ?? []).filter((row) =>
+      withinPriceCeiling(row, filters.maxPrice, now)
+    );
+    const from = opts.offset ?? 0;
+    const page = opts.limit !== undefined ? priced.slice(from, from + opts.limit) : priced;
+    const products = finishListing(page, cats);
+    return { products, total: products.length };
   }
 
   const products = finishListing(data, cats);

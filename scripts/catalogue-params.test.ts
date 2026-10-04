@@ -45,7 +45,7 @@ check(
     size: "M",
     maxPrice: "2500",
   }),
-  { category: "sarees", fabric: "Cotton", colour: "gold", size: "M", maxPrice: 2500 }
+  { category: "sarees", fabric: "Cotton", colour: "gold", size: "M", maxPrice: 2500, inStock: false, sort: null }
 );
 
 check("whitespace is trimmed", parseCatalogueParams({ colour: "  gold  " }).colour, "gold");
@@ -91,6 +91,8 @@ const someFilters = {
   colour: "gold",
   size: null,
   maxPrice: 2500,
+  inStock: false,
+  sort: null,
 };
 check(
   "only the set filters appear",
@@ -102,6 +104,8 @@ check("and the href joins them on", catalogueHref("/in/shop", someFilters), "/in
 check(
   "key order is fixed, not object order",
   catalogueSearchString({
+    sort: null,
+    inStock: false,
     maxPrice: 2500,
     size: null,
     colour: "gold",
@@ -124,7 +128,7 @@ for (const original of [
   NO_FILTERS,
   { ...NO_FILTERS, colour: "gold" },
   { ...NO_FILTERS, category: "sarees", maxPrice: 1500 },
-  { category: "shirts", fabric: "Cotton", colour: "white", size: "M", maxPrice: 3500 },
+  { category: "shirts", fabric: "Cotton", colour: "white", size: "M", maxPrice: 3500, inStock: true, sort: "price-desc" as const },
   { ...NO_FILTERS, fabric: "Handloom 120 count mul cotton" },
 ]) {
   const search = catalogueSearchString(original);

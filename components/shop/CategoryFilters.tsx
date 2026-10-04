@@ -1,32 +1,47 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { SlidersHorizontal } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { Product } from "@/lib/types";
-import ProductGrid from "./ProductGrid";
-import FilterSidebar, {
-  EMPTY_FILTERS,
-  type Filters,
-  type FilterOptions,
-} from "./FilterSidebar";
+import type { FilterOptions } from "./FilterSidebar";
+import { shownPrice } from "@/lib/pricing";
+import CatalogueListing from "./CatalogueListing";
 import {
   availableSizes,
   distinctValues,
   matchesFilters,
   type SizesByProduct,
 } from "@/lib/productFilters";
+import {
+  NO_FILTERS,
+  catalogueHref,
+  parseCatalogueParams,
+  type CatalogueFilters,
+} from "@/lib/catalogueParams";
+import {
+  offersAvailability,
+  orderForDiscovery,
+  usefulPriceSteps,
+} from "@/lib/catalogueDiscovery";
 
 /**
- * Size, colour and material for one sub-category listing.
+ * The listing on a section (/in/women) or sub-category (/in/women/sarees) page.
  *
- * Filtering happens in the browser over a server-fetched list: a sub-category
- * holds tens of products, not thousands, so a round trip per click would be
- * slower and no more correct. If a section ever grows past that, this becomes
- * a server-side query — the shared matcher means the rule itself would not
- * change.
+ * Filtering and ordering happen in the browser over a server-fetched list: a
+ * section holds tens of products, not thousands, so a round trip per click
+ * would be slower and no more correct. The rules are the shared ones —
+ * matchesFilters, orderForDiscovery — so this page and the shop cannot answer
+ * the same question differently.
  *
- * No category filter here, unlike the shop-wide listing: you are already inside
- * one, and offering to filter by it again is noise.
+ * THE URL CARRIES THE CHOICE, so a reload or a shared link keeps it. Written
+ * with history.replaceState rather than a navigation: these pages are
+ * statically generated, and a navigation (or useSearchParams) would make them
+ * render per request. Replace, not push — a filter tap is not a page, so Back
+ * still leaves the listing as it always has. The first render is always the
+ * unfiltered listing, which is what the static HTML and crawlers get; the URL
+ * is read once on mount.
+ *
+ * No category filter here, unlike the shop: you are already inside one, and a
+ * section links to its sub-categories directly above this.
  */
 export default function CategoryFilters({
   products,
@@ -35,8 +50,25 @@ export default function CategoryFilters({
   products: Product[];
   sizesByProduct: SizesByProduct;
 }) {
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [filters, setFilters] = useState<CatalogueFilters>(NO_FILTERS);
+
+  useEffect(() => {
+    const parsed = parseCatalogueParams(
+      Object.fromEntries(new URLSearchParams(window.location.search))
+    );
+    // A ?category= has no meaning inside a category page; ignore it rather than
+    // let it empty the grid.
+    setFilters({ ...parsed, category: null });
+  }, []);
+
+  const change = (next: CatalogueFilters) => {
+    setFilters(next);
+    window.history.replaceState(
+      window.history.state,
+      "",
+      catalogueHref(window.location.pathname, next)
+    );
+  };
 
   const options: FilterOptions = useMemo(
     () => ({
@@ -46,64 +78,28 @@ export default function CategoryFilters({
       // Empty for sarees, which have no sizes — so the Size filter simply is
       // not rendered, with nothing anywhere naming that category.
       sizes: availableSizes(products, sizesByProduct),
+      priceSteps: usefulPriceSteps(products.map((p) => shownPrice(p))),
+      availability: offersAvailability(products),
     }),
     [products, sizesByProduct]
   );
 
-  const filtered = useMemo(
-    () => products.filter((p) => matchesFilters(p, filters, sizesByProduct)),
+  const shown = useMemo(
+    () =>
+      orderForDiscovery(
+        products.filter((p) => matchesFilters(p, filters, sizesByProduct)),
+        filters.sort
+      ),
     [products, filters, sizesByProduct]
   );
 
-  const nothingToFilter =
-    options.sizes.length === 0 &&
-    options.fabrics.length === 0 &&
-    options.colours.length === 0;
-
-  // A filter panel offering nothing is worse than no panel.
-  if (nothingToFilter) {
-    return <ProductGrid products={products} headingLevel={2} />;
-  }
-
   return (
-    <div className="flex flex-col gap-10 lg:flex-row lg:gap-12">
-      <button
-        onClick={() => setMobileOpen(true)}
-        className="flex items-center gap-2 self-start rounded-full border border-ink/15 px-5 py-2.5 text-sm uppercase tracking-wider text-ink lg:hidden"
-      >
-        <SlidersHorizontal className="h-4 w-4" /> Filters
-      </button>
-
-      <FilterSidebar
-        options={options}
-        filters={filters}
-        onChange={setFilters}
-        isOpen={mobileOpen}
-        onClose={() => setMobileOpen(false)}
-      />
-
-      <div className="flex-1">
-        {filtered.length === 0 ? (
-          <div className="py-20 text-center">
-            <p className="text-sm text-ink/60">
-              No pieces match those filters just yet.
-            </p>
-            <button
-              onClick={() => setFilters(EMPTY_FILTERS)}
-              className="mt-3 text-sm uppercase tracking-wider text-terracotta underline-offset-4 hover:underline"
-            >
-              Clear filters
-            </button>
-          </div>
-        ) : (
-          <>
-            <p className="mb-6 text-xs uppercase tracking-wider text-ink/50">
-              {filtered.length} of {products.length}
-            </p>
-            <ProductGrid products={filtered} headingLevel={2} />
-          </>
-        )}
-      </div>
-    </div>
+    <CatalogueListing
+      products={shown}
+      total={products.length}
+      filters={filters}
+      options={options}
+      onChange={change}
+    />
   );
 }

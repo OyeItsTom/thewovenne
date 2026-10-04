@@ -196,17 +196,28 @@ ok(
 );
 
 console.log("\n=== which grids are h2, by source ===");
+// Since PR 2 (discovery) every listing grid is rendered by ONE component,
+// CatalogueListing, which the shop, section and sub-category pages all route
+// through — so it holds the only listing grid, and the rest must use it.
 for (const [file, expected] of [
-  ["components/shop/ShopFilters.tsx", 1],
-  ["components/shop/CategoryFilters.tsx", 2],
-  ["app/(storefront)/in/[slug]/page.tsx", 1],
+  ["components/shop/CatalogueListing.tsx", 1],
+  ["components/shop/ShopFilters.tsx", 0],
+  ["components/shop/CategoryFilters.tsx", 0],
+  ["app/(storefront)/in/[slug]/page.tsx", 0],
 ] as const) {
   check(`${file}: every grid passes headingLevel={2}`, (read(file).match(/<ProductGrid [^>]*headingLevel=\{2\}/g) ?? []).length, expected);
   check(`${file}: and no grid is left at the default`, (read(file).match(/<ProductGrid (?![^>]*headingLevel)[^>]*\/>/g) ?? []).length, 0);
 }
 ok(
+  "the shop and category listings render through CatalogueListing",
+  /<CatalogueListing\b/.test(read("components/shop/ShopFilters.tsx")) &&
+    /<CatalogueListing\b/.test(read("components/shop/CategoryFilters.tsx")) &&
+    /<CategoryFilters\b/.test(read("app/(storefront)/in/[slug]/page.tsx")) &&
+    /<CategoryFilters\b/.test(read("app/(storefront)/in/[slug]/[child]/page.tsx"))
+);
+ok(
   "no h1 was added anywhere in the changed components",
-  ["components/shop/ProductCard.tsx", "components/shop/FilterSidebar.tsx", "components/product/AddToCart.tsx", "components/product/DeliveryEstimator.tsx", "components/product/SizeSelector.tsx"].every(
+  ["components/shop/ProductCard.tsx", "components/shop/FilterSidebar.tsx", "components/shop/CatalogueListing.tsx", "components/product/AddToCart.tsx", "components/product/DeliveryEstimator.tsx", "components/product/SizeSelector.tsx"].every(
     (f) => !/<h1\b|"h1"/.test(read(f))
   )
 );

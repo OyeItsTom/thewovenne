@@ -5,8 +5,20 @@ import {
   getCatalogueFacetValues,
   getCatalogueSizes,
 } from "@/lib/storefront";
-import { parseCatalogueParams, type RawSearchParams } from "@/lib/catalogueParams";
+import {
+  NO_FILTERS,
+  catalogueQuery,
+  isUnfiltered,
+  parseCatalogueParams,
+  type RawSearchParams,
+} from "@/lib/catalogueParams";
+import {
+  offersAvailability,
+  orderForDiscovery,
+  usefulPriceSteps,
+} from "@/lib/catalogueDiscovery";
 import ShopFilters from "@/components/shop/ShopFilters";
+import { shownPrice } from "@/lib/pricing";
 import { openGraph } from "@/lib/seo";
 import { cPath } from "@/lib/country";
 
@@ -66,13 +78,24 @@ export default async function ShopPage({
 
   // THE DATABASE DOES THE FILTERING. What arrives here is the matching products
   // and nothing else, so the page serialises a result rather than a catalogue.
-  const [{ products }, categoryTree, facetValues] = await Promise.all([
-    getCatalogue(filters),
-    getCatalogueCategoryTree(),
-    // Across the whole catalogue, not just this result — otherwise filtering to
-    // one product would leave one chip and no way back.
-    getCatalogueFacetValues(),
-  ]);
+  const [{ products: matched }, everything, categoryTree, facetValues] =
+    await Promise.all([
+      getCatalogue(catalogueQuery(filters)),
+      // The unfiltered catalogue, server-side only, for the three things a
+      // filtered result cannot answer: the "of 33" in the count, and which price
+      // and availability options would narrow anything. It is the same cached
+      // query the bare /in/shop already makes; none of it is sent to the page.
+      isUnfiltered(filters) ? null : getCatalogue(catalogueQuery(NO_FILTERS)),
+      // Only sections and sub-categories that hold something — the header's rule.
+      getCatalogueCategoryTree(),
+      // Across the whole catalogue, not just this result — otherwise filtering to
+      // one product would leave one chip and no way back.
+      getCatalogueFacetValues(),
+    ]);
+  const catalogue = everything?.products ?? matched;
+
+  // What can be bought first, sold-out pieces after, the chosen sort inside each.
+  const products = orderForDiscovery(matched, filters.sort);
 
   // Only for the products actually on show. Previously this was every product
   // in the shop whether or not a size filter was ever touched.
@@ -88,6 +111,9 @@ export default async function ShopPage({
       </div>
       <ShopFilters
         products={products}
+        total={catalogue.length}
+        priceSteps={usefulPriceSteps(catalogue.map((p) => shownPrice(p)))}
+        availability={offersAvailability(catalogue)}
         categoryTree={categoryTree}
         sizesByProduct={sizesByProduct}
         facetValues={facetValues}

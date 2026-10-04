@@ -79,16 +79,30 @@ export const getCatalogueFacetValues = async () => {
   return cachedFacets();
 };
 
+/**
+ * The shop's Category filter: sections, narrowed to the sub-categories that
+ * hold a published, active product.
+ *
+ * getNavCategoryTree, not getVisibleCategoryTree, and that is the fix. The
+ * header already used the nav tree, so it never offered Shirts or Dresses; the
+ * shop's filter used the merely-visible tree and offered all fourteen, ten of
+ * them empty. One rule now answers "is there anything to browse here?" for the
+ * header, the shop and the section pages. Routes, robots and the sitemap do not
+ * read this and are unchanged.
+ *
+ * Stock level is ignored by that rule on purpose — a sold-out shelf is still a
+ * shelf. It fails closed (an error gives []), which here only hides the filter.
+ */
 const cachedCategoryTree = unstable_cache(
-  async () => categories.getVisibleCategoryTree(ANON_CTX),
-  ["catalogue-category-tree"],
+  async () => categories.getNavCategoryTree(ANON_CTX),
+  ["catalogue-eligible-category-tree"],
   { revalidate: 60, tags: ["catalogue"] }
 );
 
 /** Public catalogue support reads share its TTL; preview remains request-local. */
 export const getCatalogueCategoryTree = async () => {
   const ctx = await previewCtx();
-  if (ctx.preview) return categories.getVisibleCategoryTree(ctx);
+  if (ctx.preview) return categories.getNavCategoryTree(ctx);
   return cachedCategoryTree();
 };
 

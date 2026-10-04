@@ -10,11 +10,21 @@
  * nothing else, so both the server page and the client controls can agree on
  * what a URL means, and so it can be tested without a browser.
  *
- * DELIBERATELY SMALL. Sorting and paging are not parsed here yet; they are
- * separate pieces of work. The shape is additive — a `sort` and a `page` key
- * slot in beside these without changing how anything already written reads a
- * URL.
+ * DELIBERATELY SMALL. Paging is not parsed here yet. `availability` and `sort`
+ * were added additively (Premium UX PR 2): no URL that worked before reads any
+ * differently now.
  */
+
+/**
+ * The customer-facing orders, and nothing more.
+ *
+ * There is no "Recommended": nothing in the catalogue ranks products, and a
+ * label promising curation over what is really "newest" would be a small lie.
+ * Null — the default, never written to the URL — is newest product first, the
+ * order every listing has always used. See lib/catalogueDiscovery.
+ */
+export type CatalogueSort = "price-asc" | "price-desc";
+export const CATALOGUE_SORTS: readonly CatalogueSort[] = ["price-asc", "price-desc"];
 
 export interface CatalogueFilters {
   /** Sub-category slug, e.g. "sarees". Null means every visible category. */
@@ -24,6 +34,13 @@ export interface CatalogueFilters {
   size: string | null;
   /** Inclusive upper bound in rupees. Null means no ceiling. */
   maxPrice: number | null;
+  /** Only pieces that can be bought right now. Written as availability=in-stock. */
+  inStock: boolean;
+  /**
+   * An ORDER, not a filter: isUnfiltered() ignores it, and it is never part of
+   * a catalogue query — the page orders the result. Null is the default order.
+   */
+  sort: CatalogueSort | null;
 }
 
 export const NO_FILTERS: CatalogueFilters = {
@@ -32,6 +49,8 @@ export const NO_FILTERS: CatalogueFilters = {
   colour: null,
   size: null,
   maxPrice: null,
+  inStock: false,
+  sort: null,
 };
 
 /** What a page receives from Next: values may be absent, single, or repeated. */
@@ -69,7 +88,14 @@ export function parseCatalogueParams(params: RawSearchParams): CatalogueFilters 
       Number.isFinite(parsedPrice) && parsedPrice > 0
         ? Math.min(parsedPrice, 100_000_000)
         : null,
+    // One spelling only. Anything else is a mangled link, read as "everything".
+    inStock: one(params.availability) === "in-stock",
+    sort: parseSort(one(params.sort)),
   };
+}
+
+function parseSort(value: string | null): CatalogueSort | null {
+  return CATALOGUE_SORTS.find((s) => s === value) ?? null;
 }
 
 function cap(value: string | null): string | null {
@@ -83,8 +109,27 @@ export function isUnfiltered(filters: CatalogueFilters): boolean {
     filters.fabric === null &&
     filters.colour === null &&
     filters.size === null &&
-    filters.maxPrice === null
+    filters.maxPrice === null &&
+    !filters.inStock
   );
+}
+
+/**
+ * The part of the state a catalogue QUERY depends on — everything but the sort.
+ *
+ * Built field by field so the bare shop and a filtered page's "everything" read
+ * hand the cache byte-identical arguments, and so a sort never becomes a cache
+ * key of its own: every order shares the one answer per filter combination.
+ */
+export function catalogueQuery(filters: CatalogueFilters): Omit<CatalogueFilters, "sort"> {
+  return {
+    category: filters.category,
+    fabric: filters.fabric,
+    colour: filters.colour,
+    size: filters.size,
+    maxPrice: filters.maxPrice,
+    inStock: filters.inStock,
+  };
 }
 
 /**
@@ -101,6 +146,8 @@ export function catalogueSearchString(filters: CatalogueFilters): string {
   if (filters.colour) params.set("colour", filters.colour);
   if (filters.size) params.set("size", filters.size);
   if (filters.maxPrice !== null) params.set("maxPrice", String(filters.maxPrice));
+  if (filters.inStock) params.set("availability", "in-stock");
+  if (filters.sort) params.set("sort", filters.sort);
   return params.toString();
 }
 

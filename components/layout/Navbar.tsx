@@ -20,10 +20,17 @@ export default async function Navbar() {
       // The sub-categories the mega-menu opens. Already filtered upstream to
       // visible ones that actually hold products, so a menu never offers a link
       // to an empty listing.
-      children: parent.children.map((child) => ({
-        href: cPath(`/${parent.slug}/${child.slug}`),
-        label: child.name,
-      })),
+      children: [
+        ...parent.children.map((child) => ({
+          href: cPath(`/${parent.slug}/${child.slug}`),
+          label: child.name,
+        })),
+        // The section itself, last. The word in the bar already links there,
+        // but on a phone that word sits beside the chevron that opens this
+        // list, and a menu reading only "Sarees" leaves "everything in Women"
+        // one guess away. Same URL as the section link — nothing new to index.
+        { href: cPath(`/${parent.slug}`), label: `View all ${parent.name}` },
+      ],
     })),
     // /about, not /#story — the story is no longer a homepage section, and the
     // anchor it pointed at went with it. A link that silently scrolls nowhere

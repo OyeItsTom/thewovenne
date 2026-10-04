@@ -62,6 +62,36 @@ export function effectivePrice(
   return { price, wasPrice: base, active: true };
 }
 
+type PricedProduct = Parameters<typeof effectivePrice>[0];
+
+/**
+ * THE customer-facing price: what the card shows, what "Price: low to high"
+ * sorts by, and what "Under ₹1,500" compares against — one rule, so the
+ * number on screen and the filter can never contradict each other.
+ *
+ * Before this the filter compared the stored base price: a saree at ₹1,699
+ * shown as ₹1,299 was missing from "Under ₹1,500" while its card said ₹1,299.
+ *
+ * Display and discovery only, like effectivePrice. Checkout still charges what
+ * public.effective_price() resolves server-side; stored prices are untouched.
+ */
+export function shownPrice(product: PricedProduct, now: Date = new Date()): number {
+  return effectivePrice(product, now).price;
+}
+
+/**
+ * Whether a product sits under a price ceiling, by its shown price. Inclusive,
+ * as the database's `lte` was: a piece shown at exactly ₹1,500 is in
+ * "Under ₹1,500". No ceiling means everything passes.
+ */
+export function withinPriceCeiling(
+  product: PricedProduct,
+  maxPrice: number | null | undefined,
+  now: Date = new Date()
+): boolean {
+  return maxPrice == null || shownPrice(product, now) <= maxPrice;
+}
+
 /** Whole-rupee saving, for the understated "Save ₹x" line. */
 export function savingAmount(d: Discounted): number {
   return d.wasPrice == null ? 0 : d.wasPrice - d.price;
