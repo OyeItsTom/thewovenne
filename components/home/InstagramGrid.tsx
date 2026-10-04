@@ -1,6 +1,9 @@
 import { Instagram } from "lucide-react";
+import { OFFICIAL_INSTAGRAM_URL } from "@/lib/structuredData";
 
-const INSTAGRAM_URL = "https://www.instagram.com/thewovenne";
+// The same constant the OnlineStore node names in sameAs, so the profile this
+// block invites people to and the identity Google is told about cannot drift.
+const INSTAGRAM_URL = OFFICIAL_INSTAGRAM_URL;
 
 /**
  * The invitation to follow — with no feed behind it yet.

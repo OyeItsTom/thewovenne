@@ -54,8 +54,24 @@ for (const name of ["Women", "Men", "Jewellery"]) {
   const button = new RegExp(`<button type="button" aria-expanded="false" aria-controls="${id}"[^>]*>${name}<svg`);
   ok(`${name}: a real <button>, collapsed, controlling #${id}`, button.test(html));
 }
-ok("no header link to a section page while the menus are closed",
-  !/href="\/in\/(women|men|jewellery)"/.test(html));
+// Closed menus keep their links in the HTML inside <ul hidden> — the only way a
+// crawler can follow the header to a section. Outside those hidden lists there
+// must still be no link to a section page: the name is a button, not a link.
+const hiddenLists = html.match(/<ul hidden="">[\s\S]*?<\/ul>/g) ?? [];
+const visibleHtml = html.replace(/<ul hidden="">[\s\S]*?<\/ul>/g, "");
+ok("no VISIBLE header link to a section page while the menus are closed",
+  !/href="\/in\/(women|men|jewellery)"/.test(visibleHtml));
+ok("each closed section keeps one hidden list of its links", hiddenLists.length === 3);
+for (const item of LINKS.filter((l) => l.children?.length)) {
+  const list = hiddenLists.find((l) => l.includes(`href="${item.href}"`)) ?? "";
+  for (const child of item.children!) {
+    ok(`${item.label}: closed menu still carries ${child.label} → ${child.href}`,
+      list.includes(`href="${child.href}"`) && list.includes(`>${child.label}<`));
+  }
+}
+ok("the hidden lists carry no id (the open panel owns menuId)",
+  hiddenLists.every((l) => !l.includes('id="nav-menu-')));
+ok("the hidden copy renders only while its menu is closed", src.includes("{!isOpen && (\n                  <ul hidden>"));
 ok("the old aria-haspopup on a link is gone (a disclosure, not an ARIA menu)", !html.includes('aria-haspopup="true"'));
 ok("plain links stay links", html.includes('href="/in/about"') && html.includes('href="/in/customer-style"'));
 ok("the panel carries the id the trigger names", src.includes("id={menuId}"));

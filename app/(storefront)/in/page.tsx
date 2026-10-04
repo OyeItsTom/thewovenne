@@ -8,7 +8,7 @@ import LookbookSections from "@/components/home/LookbookSections";
 import { getCuratedProducts } from "@/lib/curated";
 import { getContent } from "@/lib/storefront";
 import JsonLd from "@/components/seo/JsonLd";
-import { organizationNode } from "@/lib/structuredData";
+import { organizationNode, websiteNode } from "@/lib/structuredData";
 import { cPath } from "@/lib/country";
 import { openGraph } from "@/lib/seo";
 import type { Metadata } from "next";
@@ -89,6 +89,11 @@ export default async function Home() {
           is the home page: "/" only 308s to it. Repeating it on each PDP would
           add weight to every crawl and say nothing it does not say once here. */}
       <JsonLd data={organizationNode()} />
+      {/* The site-name signal. It belongs on the domain's home page, and "/"
+          is a single 308 to this one — Google takes the redirect target. The
+          two nodes name each other by @id: the WebSite's publisher IS this
+          OnlineStore. See websiteNode() in lib/structuredData. */}
+      <JsonLd data={websiteNode()} />
 
       <Hero content={hero} />
 
