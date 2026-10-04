@@ -38,7 +38,7 @@ export default function WhyLinen({ content }: { content?: WhyLinenContent }) {
         whileInView="visible"
         viewport={{ once: true, margin: "-100px" }}
         variants={container}
-        className="mt-14 grid gap-6 sm:grid-cols-3 sm:gap-8"
+        className="mt-14 grid gap-10 sm:grid-cols-3 sm:gap-8"
       >
         {c.cards.map((card, i) => {
           const Icon = ICONS[i % ICONS.length];
@@ -46,7 +46,11 @@ export default function WhyLinen({ content }: { content?: WhyLinenContent }) {
             <motion.div
               key={card.title}
               variants={item}
-              className="rounded-2xl bg-linen/60 p-8 text-center"
+              // A hairline over each column rather than a filled panel. Three
+              // beige boxes read as a feature grid; a rule and whitespace read
+              // as one considered page, the way the product page and footer
+              // already separate their parts.
+              className="border-t border-ink/10 px-2 pt-8 text-center sm:px-4"
             >
               <Icon className="mx-auto h-8 w-8 text-terracotta" strokeWidth={1.5} />
               <h3 className="mt-4 font-heading text-xl text-ink">{card.title}</h3>

@@ -131,7 +131,7 @@ export default async function SubCategoryPage({
           { name: child.name },
         ])}
       />
-      <nav aria-label="Breadcrumb" className="text-xs text-ink/50">
+      <nav aria-label="Breadcrumb" className="text-xs text-ink-muted">
         <Link href={cPath(`/${parent.slug}`)} className="hover:text-terracotta">
           {parent.name}
         </Link>

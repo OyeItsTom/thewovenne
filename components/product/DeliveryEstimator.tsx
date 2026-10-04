@@ -107,12 +107,12 @@ export default function DeliveryEstimator({
           enterKeyHint="search"
           maxLength={12}
           placeholder={label}
-          className="min-w-0 flex-1 rounded-lg border border-ink/15 bg-white px-3 py-2.5 text-base text-ink placeholder:text-ink/35 focus:border-terracotta focus:outline-none sm:text-sm"
+          className="min-w-0 flex-1 rounded-lg border border-ink/15 bg-white px-3 py-2.5 text-base text-ink placeholder:text-ink-muted focus:border-terracotta focus:outline-none sm:text-sm"
         />
         <button
           type="submit"
           disabled={state.kind === "checking" || !postal.trim()}
-          className="shrink-0 rounded-lg border border-ink/15 px-4 py-2.5 text-xs uppercase tracking-wider text-ink transition-colors hover:border-terracotta hover:text-terracotta disabled:opacity-40"
+          className="shrink-0 rounded-lg border border-ink/15 px-4 py-2.5 text-xs uppercase tracking-wider text-ink transition-colors hover:border-terracotta hover:text-terracotta disabled:border-ink/10 disabled:text-ink-muted"
         >
           {state.kind === "checking" ? (
             <Loader2 aria-hidden className="h-4 w-4 animate-spin motion-reduce:animate-none" />

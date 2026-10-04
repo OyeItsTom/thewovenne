@@ -126,10 +126,14 @@ const unrelated = curate(
   new Set(["saved"])
 );
 check("pieces sharing nothing with the wishlist do not make the row 'personal'", unrelated.reason, "new");
-const big = Array.from({ length: 20 }, (_, i) => item(`q${i}`, 1, { colour: i < 2 ? "Red" : "Blue" }));
-const savedTwo = curate([...big, item("s1", 1, { colour: "Red" })], new Set(["q5", "s1"]));
+// q5 is saved and sits inside the newest twelve; only q0/q1 share s1's colour.
+const big = Array.from({ length: 20 }, (_, i) =>
+  item(`q${i}`, 1, { category_id: i === 5 ? "earrings" : "sarees", fabric: null, colour: i < 2 ? "Red" : i === 5 ? "Green" : null }));
+const s1 = item("s1", 1, { category_id: "necklace", fabric: null, colour: "Red" });
+const savedTwo = curate([...big, s1], new Set(["q5", "s1"]));
+check("…and that row really is personal (two colour matches)", savedTwo.reason, "personal");
 check("personal row is as long as the guest row when the shelf allows (so it can swap in)",
-  savedTwo.products.length, curate([...big, item("s1", 1, { colour: "Red" })], null).products.length);
+  savedTwo.products.length, curate([...big, s1], null).products.length);
 
 console.log("\n=== an empty rail renders nothing ===");
 check("CuratedForYou with no products renders no section",
@@ -275,10 +279,41 @@ function cacheChecks() {
   ok("the merchandising rule holds no state of its own", !/unstable_cache|new Map\(|let /.test(read("lib/merchandising.ts")));
 }
 
+// ── 6. PR 3 polish: material block and contrast ──────────────────────────────
+
+function polishChecks() {
+  console.log("\n=== material-first PDP, quiet text that still reads ===");
+  const detail = read("components/product/ProductDetail.tsx");
+  const block = detail.slice(detail.indexOf("{(product.fabric || care) && ("), detail.indexOf("</dl>"));
+  ok("the material block renders only when there is a stored fact to show", detail.includes("{(product.fabric || care) && ("));
+  ok("it shows the stored fabric value as-is", block.includes("{product.fabric}"));
+  ok("it never shows colour (stored colour is not yet reliable)", !/product\.colour/.test(block));
+  ok("the care row only appears when a care note was written, and links to it",
+    block.includes("{care && (") && block.includes('href="#material-care"'));
+  const care = read("components/product/MaterialCare.tsx");
+  ok("the care section unfolds when reached by that link", care.includes('window.location.hash === "#material-care"'));
+  ok("…and clears the sticky header when scrolled to", care.includes('id="material-care" className="scroll-mt-28'));
+  const quiet = [
+    ["card was-price", "components/shop/ProductCard.tsx", /text-ink\/45 line-through/],
+    ["PDP was-price", "components/product/ProductDetail.tsx", /text-ink\/40 line-through/],
+    ["PDP breadcrumb", "components/product/ProductDetail.tsx", /Breadcrumb" className="mb-8 text-xs text-ink\/50/],
+    ["sub-category breadcrumb", "app/(storefront)/in/[slug]/[child]/page.tsx", /Breadcrumb" className="text-xs text-ink\/50/],
+    ["heritage/craft labels", "components/product/BrandKnowledgePanel.tsx", /text-ink\/(45|50)/],
+    ["care labels", "components/product/MaterialCare.tsx", /text-ink\/(50|55)/],
+    ["rail subtitle", "components/home/CuratedForYou.tsx", /text-ink\/55/],
+    ["pincode placeholder", "components/product/DeliveryEstimator.tsx", /placeholder:text-ink\/35/],
+  ] as const;
+  for (const [name, file, low] of quiet) ok(`${name}: no sub-4.5:1 ink tint left`, !low.test(read(file)));
+  const why = read("components/home/WhyLinen.tsx");
+  ok("Why Us: hairline columns, no filled beige panels", why.includes("border-t border-ink/10") && !why.includes("bg-linen/60"));
+  ok("Why Us: still no environmental iconography", !/\bLeaf\b|Sprout|Recycle/.test(why.replace(/No Leaf/g, "")));
+}
+
 async function main() {
   await relatedChecks();
   listingChecks();
   cacheChecks();
+  polishChecks();
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);
 }
