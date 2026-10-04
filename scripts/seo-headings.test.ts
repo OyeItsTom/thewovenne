@@ -112,47 +112,54 @@ check("by default (under 'You May Also Like', the home rails) they stay h3", out
 check("the card name's classes are identical at both levels", headingClasses(listing), headingClasses(related));
 ok("a card renders no h1", !/<h1\b/.test(listing + related));
 
-console.log("\n=== filters: h2 in the sidebar, h3 under the drawer's own h2 ===");
+console.log("\n=== filters: an h2 'Filters', then h3 groups — the same in the sidebar and the drawer ===");
+// PR #175: the desktop sidebar gained a visible "Filters" title (with Clear all
+// beside it), so its groups moved from h2 to h3 under it — the outline the
+// drawer always had. Every option list has two values so each group is shown
+// (a one-option group is hidden as a no-op).
 const filterProps = {
   options: {
-    categoryGroups: [{ name: "Women", children: [{ name: "Sarees", slug: "sarees" }] }],
-    fabrics: ["Cotton"],
-    colours: ["Red"],
-    sizes: ["M"],
+    categoryGroups: [{ name: "Women", children: [{ name: "Sarees", slug: "sarees" }, { name: "Dupattas", slug: "dupattas" }] }],
+    fabrics: ["Cotton", "Mul Cotton"],
+    colours: ["Red", "Off-white"],
+    sizes: ["M", "L"],
+    sizeTitle: "Size",
+    priceRange: { min: 1300, max: 3300, step: 100, lowest: 1250, highest: 3299 },
   },
-  filters: { category: null, fabric: null, colour: null, size: null, maxPrice: null },
+  filters: { category: null, fabric: [], colour: [], size: null, maxPrice: null, inStock: false, sort: null },
   onChange: () => {},
   onClose: () => {},
 };
 const closed = render(createElement(FilterSidebar, { ...filterProps, isOpen: false } as never));
-check("desktop sidebar groups are h2, straight under the page's h1", outline(closed), [
-  "h2:Category",
-  "h2:Size",
-  "h2:Fabric",
-  "h2:Colour",
-  "h2:Price",
-]);
-const open = render(createElement(FilterSidebar, { ...filterProps, isOpen: true } as never));
-check("the open drawer: its own h2, then the same groups as h3", outline(open), [
-  "h2:Category",
-  "h2:Size",
-  "h2:Fabric",
-  "h2:Colour",
-  "h2:Price",
+check("desktop sidebar: h2 Filters, then the groups as h3", outline(closed), [
   "h2:Filters",
-  "h3:Category",
-  "h3:Size",
   "h3:Fabric",
   "h3:Colour",
   "h3:Price",
+  "h3:Category",
+  "h3:Size",
 ]);
-check(
-  "the group heading classes are unchanged at both levels",
-  [...new Set(headingClasses(open).filter((c) => c !== "font-heading text-2xl text-ink"))],
-  ["font-heading text-lg text-ink"]
+const open = render(createElement(FilterSidebar, { ...filterProps, isOpen: true } as never));
+check("the open drawer: its own h2, then the same groups as h3", outline(open), [
+  "h2:Filters",
+  "h3:Fabric",
+  "h3:Colour",
+  "h3:Price",
+  "h3:Category",
+  "h3:Size",
+  "h2:Filters",
+  "h3:Fabric",
+  "h3:Colour",
+  "h3:Price",
+  "h3:Category",
+  "h3:Size",
+]);
+ok(
+  "group titles keep the heading face (font-heading text-lg) inside their disclosure buttons",
+  (closed.match(/<h3><button[^>]*><span class="font-heading text-lg text-ink">/g) ?? []).length === 5
 );
 const words = (html: string) => outline(html).map((h) => h.slice(3));
-check("no heading text was added or removed", words(closed), ["Category", "Size", "Fabric", "Colour", "Price"]);
+check("the group names are the familiar ones", words(closed).slice(1), ["Fabric", "Colour", "Price", "Category", "Size"]);
 
 console.log("\n=== the listing page as it is composed: h1, then h2 ===");
 // The same order the shop and category templates render: the h1, the sidebar,

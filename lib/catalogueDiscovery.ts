@@ -1,7 +1,7 @@
 import type { ProductListing } from "./types";
 import { shownPrice } from "./pricing";
 import { stockState } from "./stock";
-import { formatINR } from "./utils";
+import { ceilingLabel } from "./priceSlider";
 import {
   NO_FILTERS,
   type CatalogueFilters,
@@ -98,27 +98,6 @@ export function resultCountLabel(shown: number, total: number): string {
     : `${shown} of ${total} ${noun(total)}`;
 }
 
-/** Ceilings the Price filter may offer. */
-export const PRICE_STEPS: readonly number[] = [1500, 2500, 3500, 5000];
-
-/**
- * The price ceilings worth offering for these prices.
- *
- * A ceiling is only useful if it narrows: at least one piece under it AND at
- * least one above. Against today's catalogue "Under ₹3,500" and "Under ₹5,000"
- * both return all 33 products, and on Jewellery every ceiling does — options
- * that change nothing are clutter, and an option that empties the grid reads as
- * broken. Pass SHOWN prices (lib/pricing shownPrice) — what the filter compares.
- */
-export function usefulPriceSteps(
-  prices: readonly number[],
-  steps: readonly number[] = PRICE_STEPS
-): number[] {
-  return steps.filter(
-    (step) => prices.some((p) => p <= step) && prices.some((p) => p > step)
-  );
-}
-
 /**
  * Whether "In stock" is worth offering for these products.
  *
@@ -137,37 +116,56 @@ export function offersAvailability(
 export type FilterKey = "inStock" | "category" | "size" | "fabric" | "colour" | "maxPrice";
 export interface ActiveFilter {
   key: FilterKey;
+  /** For a list (fabric, colour), WHICH of its values this chip removes. */
+  value?: string;
   label: string;
 }
 
 /**
- * The filters a customer has chosen, in the order the panel lists them.
+ * The filters a customer has chosen, in the order the panel lists them, one
+ * chip per value — "Cotton ×  Mul Cotton ×", each removable on its own.
  *
- * Labels are the values as stored and as the panel shows them — nothing is
- * renamed here. A category slug is shown by its name when the page knows it,
- * and as the slug itself when it does not (a shared link to a section that has
- * since emptied), so the chip can still be removed.
+ * Fabric chips show the browsing facet (Mul Cotton), the same words the panel
+ * offers. A category slug is shown by its name when the page knows it, and as
+ * the slug itself when it does not (a shared link to a section that has since
+ * emptied), so the chip can still be removed. A size chip is "Size 6" — named
+ * by the panel's title when the page knows it ("Ring size 6").
  */
 export function activeFilters(
   filters: CatalogueFilters,
-  categoryName: (slug: string) => string | null = () => null
+  categoryName: (slug: string) => string | null = () => null,
+  sizeTitle = "Size"
 ): ActiveFilter[] {
   const chips: ActiveFilter[] = [];
   if (filters.inStock) chips.push({ key: "inStock", label: "In stock" });
+  for (const value of filters.fabric) chips.push({ key: "fabric", value, label: value });
+  for (const value of filters.colour) chips.push({ key: "colour", value, label: value });
+  if (filters.maxPrice !== null) {
+    chips.push({ key: "maxPrice", label: ceilingLabel(filters.maxPrice) });
+  }
   if (filters.category) {
     chips.push({ key: "category", label: categoryName(filters.category) ?? filters.category });
   }
-  if (filters.size) chips.push({ key: "size", label: `Size ${filters.size}` });
-  if (filters.fabric) chips.push({ key: "fabric", label: filters.fabric });
-  if (filters.colour) chips.push({ key: "colour", label: filters.colour });
-  if (filters.maxPrice !== null) {
-    chips.push({ key: "maxPrice", label: `Under ${formatINR(filters.maxPrice)}` });
-  }
+  if (filters.size) chips.push({ key: "size", label: `${sizeTitle} ${filters.size}` });
   return chips;
 }
 
-/** The same filters with one removed. The sort is kept. */
-export function withoutFilter(filters: CatalogueFilters, key: FilterKey): CatalogueFilters {
+/**
+ * The same filters with one chip's worth removed: a single value of a list, or
+ * the whole of anything else. The sort is kept.
+ */
+export function withoutFilter(
+  filters: CatalogueFilters,
+  key: FilterKey,
+  value?: string
+): CatalogueFilters {
+  if (key === "fabric" || key === "colour") {
+    const rest =
+      value === undefined
+        ? []
+        : filters[key].filter((v) => v.toLowerCase() !== value.toLowerCase());
+    return { ...filters, [key]: rest };
+  }
   return { ...filters, [key]: key === "inStock" ? false : null };
 }
 

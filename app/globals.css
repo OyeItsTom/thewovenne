@@ -89,6 +89,87 @@
   }
 
   /*
+   * The Price filter's slider (components/shop/PriceSlider): a native range
+   * input drawn as a hairline and a small thumb. The input itself stays 44px
+   * tall so the whole band is the touch target; only the track is thin. The
+   * part of the track up to the thumb is ink (--fill, set inline), the rest a
+   * faint ink — no tick marks, so the ₹100 stops read as one continuous line.
+   * Focus keeps the site-wide :focus-visible outline on the input, and the
+   * thumb gains a terracotta ring so the moving part is unmistakable.
+   */
+  .price-range {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 44px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .price-range::-webkit-slider-runnable-track {
+    height: 2px;
+    border-radius: 9999px;
+    background: linear-gradient(
+      to right,
+      theme("colors.ink.DEFAULT") 0 var(--fill, 100%),
+      rgb(28 31 59 / 0.15) var(--fill, 100%) 100%
+    );
+  }
+  .price-range::-moz-range-track {
+    height: 2px;
+    border-radius: 9999px;
+    background: rgb(28 31 59 / 0.15);
+  }
+  .price-range::-moz-range-progress {
+    height: 2px;
+    border-radius: 9999px;
+    background: theme("colors.ink.DEFAULT");
+  }
+  .price-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    margin-top: -9px;
+    border-radius: 9999px;
+    border: 1.5px solid theme("colors.ink.DEFAULT");
+    background: theme("colors.cream");
+    box-shadow: 0 1px 3px rgb(28 31 59 / 0.18);
+  }
+  .price-range::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 9999px;
+    border: 1.5px solid theme("colors.ink.DEFAULT");
+    background: theme("colors.cream");
+    box-shadow: 0 1px 3px rgb(28 31 59 / 0.18);
+  }
+  .price-range:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px theme("colors.cream"), 0 0 0 5px theme("colors.terracotta.deep");
+  }
+  .price-range:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 3px theme("colors.cream"), 0 0 0 5px theme("colors.terracotta.deep");
+  }
+  /*
+   * On a touch screen the thumb is what a finger has to land on (iOS Safari
+   * does not jump to a tapped point on the track), so its HIT box grows to
+   * 44px while the circle drawn stays 20px: a transparent border is part of
+   * the thumb, and the ring moves inside it as an inset shadow.
+   */
+  @media (pointer: coarse) {
+    .price-range::-webkit-slider-thumb {
+      width: 44px;
+      height: 44px;
+      margin-top: -21px;
+      border: 12px solid transparent;
+      background-clip: padding-box;
+      box-shadow: inset 0 0 0 1.5px theme("colors.ink.DEFAULT");
+    }
+    .price-range:focus-visible::-webkit-slider-thumb {
+      box-shadow: inset 0 0 0 1.5px theme("colors.ink.DEFAULT"),
+        inset 0 0 0 4px theme("colors.terracotta.deep");
+    }
+  }
+
+  /*
    * The product-inspection stage.
    *
    * IT MUST STAY 3:4, because that is the crop the product page shows and the

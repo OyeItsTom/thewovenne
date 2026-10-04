@@ -7,6 +7,7 @@ import {
 } from "./categories";
 import { ANON_CTX, preferDraft, statesFor, type ReadCtx } from "./readCtx";
 import { withinPriceCeiling } from "./pricing";
+import { colourOptions, fabricOptions, matchesColour, matchesFabric } from "./catalogueFacets";
 import { promotable } from "./merchandising";
 import type { Category, Product, ProductListing } from "./types";
 
@@ -519,8 +520,13 @@ export async function getAllProducts(ctx: ReadCtx = ANON_CTX): Promise<Product[]
 export interface CatalogueFilterInput {
   /** Sub-category slug. Resolved to an id here, so callers pass what the URL has. */
   category?: string | null;
-  fabric?: string | null;
-  colour?: string | null;
+  /**
+   * Fabric facets (lib/catalogueFacets) — any of them matches. A single string
+   * is a one-item list, so older callers read as they always did.
+   */
+  fabric?: readonly string[] | string | null;
+  /** Body colours — any of them matches. */
+  colour?: readonly string[] | string | null;
   size?: string | null;
   maxPrice?: number | null;
   /**
@@ -529,6 +535,13 @@ export interface CatalogueFilterInput {
    * the same figure the card's "Sold out" label reads. Read, never written.
    */
   inStock?: boolean | null;
+}
+
+/** A list filter as a list: absent and "" are none, a string is one. */
+function asList(value: readonly string[] | string | null | undefined): readonly string[] {
+  if (value === null || value === undefined) return [];
+  if (typeof value === "string") return value.trim() ? [value] : [];
+  return value;
 }
 
 /** Literal, case-insensitive comparison with surrounding whitespace ignored. */
@@ -561,8 +574,8 @@ export function filterEffectiveCatalogueRows(
   return preferDraft(rows, (r) => r.product_id).filter((row) => {
     if (!row.is_active || !row.category_id || !visible.has(row.category_id)) return false;
     if (category && row.category_id !== category.id) return false;
-    if (filters.fabric && !sameCatalogueValue(row.fabric, filters.fabric)) return false;
-    if (filters.colour && !sameCatalogueValue(row.colour, filters.colour)) return false;
+    if (!matchesFabric(row.fabric, asList(filters.fabric))) return false;
+    if (!matchesColour(row.colour, asList(filters.colour))) return false;
     if (!withinPriceCeiling(row, filters.maxPrice)) return false;
     if (filters.inStock && !(row.stock_quantity > 0)) return false;
     if (sizeProductIds && !sizeProductIds.has(row.product_id)) return false;
@@ -595,7 +608,9 @@ async function matchingAttributeProductIds(
   visibleCategoryIds: string[],
   ctx: ReadCtx
 ): Promise<Set<string> | null> {
-  if (!filters.fabric && !filters.colour) return null;
+  const fabrics = asList(filters.fabric);
+  const colours = asList(filters.colour);
+  if (fabrics.length === 0 && colours.length === 0) return null;
   const { data, error } = await ctx.client
     .from("product_versions")
     .select("product_id, fabric, colour")
@@ -610,8 +625,7 @@ async function matchingAttributeProductIds(
     (data ?? [])
       .filter(
         (row) =>
-          (!filters.fabric || sameCatalogueValue(row.fabric, filters.fabric)) &&
-          (!filters.colour || sameCatalogueValue(row.colour, filters.colour))
+          matchesFabric(row.fabric, fabrics) && matchesColour(row.colour, colours)
       )
       .map((row) => row.product_id as string)
   );
@@ -722,30 +736,36 @@ export async function getCatalogue(
   return { products, total: products.length };
 }
 
+/** One product's browsable attributes, for building filter options. */
+export interface FacetRow {
+  fabric: string | null;
+  colour: string | null;
+  category_id: string | null;
+}
+
 /**
  * The values worth offering as filters, across the whole visible catalogue.
  *
- * A SEPARATE, DELIBERATELY THIN QUERY. The chips must describe the entire
- * catalogue, not merely the page being shown — otherwise filtering down to one
- * product would leave one chip and no way back. Reading two short text columns
- * for every product is a fraction of reading every product: no description, no
- * gallery, no prices, no discount window.
+ * A SEPARATE, DELIBERATELY THIN QUERY. The options must describe the catalogue
+ * (or the one sub-category the shop is narrowed to), not merely the page being
+ * shown — otherwise filtering down to one product would leave one option and no
+ * way back. Reading three short columns for every product is a fraction of
+ * reading every product: no description, no gallery, no prices.
  *
- * Values are returned as stored. Normalising them is separate work; this is the
- * query, not the vocabulary.
+ * Returns the ROWS, not the options: the page decides the scope (everything,
+ * or the chosen sub-category) and turns rows into facets with
+ * facetOptionsFor(). Stored values are returned untouched.
  */
-export async function getCatalogueFacetValues(
-  ctx: ReadCtx = ANON_CTX
-): Promise<{ fabrics: string[]; colours: string[] }> {
+export async function getCatalogueFacetValues(ctx: ReadCtx = ANON_CTX): Promise<FacetRow[]> {
   const visibleIds = await scopeToVisible(undefined, ctx);
-  if (visibleIds.length === 0) return { fabrics: [], colours: [] };
+  if (visibleIds.length === 0) return [];
 
   let facetQuery = ctx.client
     .from("product_versions")
     .select(
       ctx.preview
         ? "product_id, fabric, colour, category_id, is_active, state, pending_delete"
-        : "fabric, colour"
+        : "fabric, colour, category_id"
     )
     .in("state", statesFor(ctx));
   if (!ctx.preview) {
@@ -755,39 +775,38 @@ export async function getCatalogueFacetValues(
 
   if (error) {
     console.error("getCatalogueFacetValues:", error.message);
-    return { fabrics: [], colours: [] };
+    return [];
   }
 
-  const raw = ((data ?? []) as unknown) as {
+  const raw = ((data ?? []) as unknown) as (FacetRow & {
     product_id?: string;
-    fabric: string | null;
-    colour: string | null;
-    category_id?: string;
     is_active?: boolean;
     state?: string;
     pending_delete?: boolean;
-  }[];
+  })[];
   const visible = new Set(visibleIds);
   const rows = ctx.preview
     ? preferDraft(raw, (row) => row.product_id ?? "").filter(
         (row) => row.is_active && visible.has(row.category_id ?? "")
       )
     : raw;
-  const pick = (get: (r: (typeof rows)[number]) => string | null) => {
-    // Keyed case-insensitively so "gold" and "Gold" are one chip, shown with the
-    // first spelling seen. Genuinely different fabrics stay separate — this only
-    // collapses values that differ by case or surrounding space.
-    const seen = new Map<string, string>();
-    for (const row of rows) {
-      const value = get(row)?.trim();
-      if (!value) continue;
-      const key = value.toLowerCase();
-      if (!seen.has(key)) seen.set(key, value);
-    }
-    return [...seen.values()].sort((a, b) => a.localeCompare(b));
-  };
+  return rows.map((r) => ({ fabric: r.fabric, colour: r.colour, category_id: r.category_id }));
+}
 
-  return { fabrics: pick((r) => r.fabric), colours: pick((r) => r.colour) };
+/**
+ * Fabric and Colour options for some facet rows, optionally only those in one
+ * category. Fabric options are browsing facets (Mul Cotton), colours as
+ * stored; both de-duplicated without regard to case.
+ */
+export function facetOptionsFor(
+  rows: readonly FacetRow[],
+  categoryId?: string | null
+): { fabrics: string[]; colours: string[] } {
+  const scoped = categoryId ? rows.filter((r) => r.category_id === categoryId) : rows;
+  return {
+    fabrics: fabricOptions(scoped.map((r) => r.fabric)),
+    colours: colourOptions(scoped.map((r) => r.colour)),
+  };
 }
 
 /**

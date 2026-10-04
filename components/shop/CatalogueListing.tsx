@@ -22,9 +22,10 @@ import ProductGrid from "@/components/shop/ProductGrid";
  * (/in/women) and a sub-category (/in/women/sarees).
  *
  *   30 products                                Sort  Newest ⌄
- *   [In stock ×] [Cotton ×]  Clear all                  (only when filtered)
+ *   [In stock ×] [Mul Cotton ×]                         (only when filtered)
  *   ─────────────────────────────────────────────────────────
- *   Filters          │  grid
+ *   FILTERS  Clear all │  grid
+ *   Fabric          +  │
  *
  * On a phone the sidebar becomes a drawer, and the first line becomes the
  * Filters button and the sort — the two controls a thumb needs — with the
@@ -59,9 +60,13 @@ export default function CatalogueListing({
   const categoryNames = new Map(
     options.categoryGroups.flatMap((g) => g.children.map((c) => [c.slug, c.name] as const))
   );
-  const chips = activeFilters(filters, (slug) => categoryNames.get(slug) ?? null);
+  const chips = activeFilters(
+    filters,
+    (slug) => categoryNames.get(slug) ?? null,
+    options.sizeTitle
+  );
   const count = resultCountLabel(products.length, total);
-  const showFilters = hasFilterOptions(options) || chips.length > 0;
+  const showFilters = hasFilterOptions(options, filters) || chips.length > 0;
   const clearAll = () => onChange(clearedFilters(filters));
 
   return (
@@ -111,10 +116,10 @@ export default function CatalogueListing({
             <>
               <ul aria-label="Applied filters" className="flex flex-wrap gap-2">
                 {chips.map((chip) => (
-                  <li key={chip.key}>
+                  <li key={`${chip.key}:${chip.value ?? ""}`}>
                     <button
                       type="button"
-                      onClick={() => onChange(withoutFilter(filters, chip.key))}
+                      onClick={() => onChange(withoutFilter(filters, chip.key, chip.value))}
                       aria-label={`Remove filter: ${chip.label}`}
                       className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full border border-ink/15 px-3 text-sm text-ink transition-colors hover:border-ink/50"
                     >
@@ -124,10 +129,13 @@ export default function CatalogueListing({
                   </li>
                 ))}
               </ul>
+              {/* On a phone this is the visible way out with the drawer shut. On
+                  desktop the sidebar's own header carries Clear all, so it is
+                  not said twice. */}
               <button
                 type="button"
                 onClick={clearAll}
-                className="min-h-[36px] text-sm text-ink underline underline-offset-4 hover:text-terracotta-dark"
+                className="min-h-[36px] text-sm text-ink underline underline-offset-4 hover:text-terracotta-dark lg:hidden"
               >
                 Clear all
               </button>

@@ -18,6 +18,7 @@
  *
  * Exits non-zero on failure.
  */
+import { matchesColour, matchesFabric } from "../lib/catalogueFacets";
 import {
   parseCatalogueParams,
   catalogueSearchString,
@@ -74,10 +75,9 @@ function makeCatalogue(n: number): Fixture[] {
 function applyFilters(items: Fixture[], f: CatalogueFilters): Fixture[] {
   return items.filter((p) => {
     if (f.category && p.category_slug !== f.category) return false;
-    if (f.fabric && (p.fabric ?? "").trim().toLowerCase() !== f.fabric.trim().toLowerCase())
-      return false;
-    if (f.colour && (p.colour ?? "").trim().toLowerCase() !== f.colour.trim().toLowerCase())
-      return false;
+    // The real facet rule (lib/catalogueFacets), any of the chosen values.
+    if (!matchesFabric(p.fabric, f.fabric)) return false;
+    if (!matchesColour(p.colour, f.colour)) return false;
     if (f.maxPrice !== null && p.price_inr > f.maxPrice) return false;
     return true;
   });
@@ -101,7 +101,7 @@ console.log("\n=== payload grows with the RESULT, not the catalogue ===");
 
 for (const n of SIZES) {
   const all = makeCatalogue(n);
-  const filtered = applyFilters(all, { ...NO_FILTERS, category: "sarees", colour: "gold" });
+  const filtered = applyFilters(all, { ...NO_FILTERS, category: "sarees", colour: ["gold"] });
   // What the page would serialise is the filtered set, not `all`.
   const serialisedAll = JSON.stringify(all).length;
   const serialisedResult = JSON.stringify(filtered).length;
@@ -113,8 +113,8 @@ for (const n of SIZES) {
   );
 }
 
-const four = applyFilters(makeCatalogue(4), { ...NO_FILTERS, colour: "gold" });
-const fourHundred = applyFilters(makeCatalogue(400), { ...NO_FILTERS, colour: "gold" });
+const four = applyFilters(makeCatalogue(4), { ...NO_FILTERS, colour: ["gold"] });
+const fourHundred = applyFilters(makeCatalogue(400), { ...NO_FILTERS, colour: ["gold"] });
 console.log(
   `  note   colour=gold returns ${four.length} of 4 and ${fourHundred.length} of 400 — ` +
     `the result grows with matches, which is the point of paging (separate work)`
@@ -142,7 +142,7 @@ for (const n of SIZES) {
     true
   );
 
-  const none = applyFilters(all, { ...NO_FILTERS, category: "sarees", colour: "does-not-exist" });
+  const none = applyFilters(all, { ...NO_FILTERS, category: "sarees", colour: ["does-not-exist"] });
   check(`${n}: an impossible combination returns nothing`, none.length, 0);
 
   check(`${n}: clearing filters returns everything`, applyFilters(all, NO_FILTERS).length, n);
@@ -200,7 +200,7 @@ console.log("\n=== a facet always selects the products it came from ===");
 {
   const all = makeCatalogue(400);
   for (const value of facets(all, (p) => p.fabric)) {
-    const matched = applyFilters(all, { ...NO_FILTERS, fabric: value });
+    const matched = applyFilters(all, { ...NO_FILTERS, fabric: [value] });
     check(
       `chip "${value}" is not a dead end`,
       matched.length > 0,
@@ -213,9 +213,9 @@ console.log("\n=== a facet always selects the products it came from ===");
 console.log("\n=== URL generation stays deterministic at every size ===");
 {
   const states: CatalogueFilters[] = [
-    { ...NO_FILTERS, colour: "gold" },
-    { ...NO_FILTERS, colour: "gold", fabric: "Cotton" },
-    { category: "sarees", fabric: "Linen", colour: "white", size: "M", maxPrice: 3000, inStock: true, sort: "price-asc" },
+    { ...NO_FILTERS, colour: ["gold"] },
+    { ...NO_FILTERS, colour: ["gold"], fabric: ["Cotton"] },
+    { category: "sarees", fabric: ["Linen"], colour: ["white"], size: "M", maxPrice: 3000, inStock: true, sort: "price-asc" },
   ];
   for (const state of states) {
     const a = catalogueSearchString(state);

@@ -13,7 +13,16 @@
  * DELIBERATELY SMALL. Paging is not parsed here yet. `availability` and `sort`
  * were added additively (Premium UX PR 2): no URL that worked before reads any
  * differently now.
+ *
+ * FABRIC AND COLOUR ARE LISTS (Natural Fabric PR #175). A customer can want
+ * Cotton OR Mul Cotton, so each may repeat — ?fabric=Cotton&fabric=Mul+Cotton —
+ * and a product matches if it is any of them. A single ?fabric=Cotton is the
+ * one-item list it always was. Fabric values are read as their browsing facet
+ * (lib/catalogueFacets), so a link written before facets existed,
+ * ?fabric=Handloom+120+count+mul+cotton, now reads — and is rewritten — as
+ * Mul Cotton.
  */
+import { fabricFacet } from "./catalogueFacets";
 
 /**
  * The customer-facing orders, and nothing more.
@@ -29,8 +38,10 @@ export const CATALOGUE_SORTS: readonly CatalogueSort[] = ["price-asc", "price-de
 export interface CatalogueFilters {
   /** Sub-category slug, e.g. "sarees". Null means every visible category. */
   category: string | null;
-  fabric: string | null;
-  colour: string | null;
+  /** Fabric facets (lib/catalogueFacets), any of which matches. Empty: no filter. */
+  fabric: string[];
+  /** Body colours, any of which matches. Empty: no filter. */
+  colour: string[];
   size: string | null;
   /** Inclusive upper bound in rupees. Null means no ceiling. */
   maxPrice: number | null;
@@ -45,8 +56,8 @@ export interface CatalogueFilters {
 
 export const NO_FILTERS: CatalogueFilters = {
   category: null,
-  fabric: null,
-  colour: null,
+  fabric: [],
+  colour: [],
   size: null,
   maxPrice: null,
   inStock: false,
@@ -61,6 +72,44 @@ function one(value: string | string[] | undefined): string | null {
   const v = Array.isArray(value) ? value[0] : value;
   const trimmed = (v ?? "").trim();
   return trimmed === "" ? null : trimmed;
+}
+
+/** At most this many values per list. Nobody ticks nine colours; a URL might. */
+const MAX_LIST = 8;
+
+/**
+ * Every value of a repeatable key: trimmed, capped, de-duplicated without
+ * regard to case (the catalogue matches that way), and SORTED, so the same
+ * choice made in a different order is the same URL and the same cache entry.
+ */
+function list(
+  value: string | string[] | undefined,
+  normalise: (v: string) => string | null = (v) => v
+): string[] {
+  const raw = Array.isArray(value) ? value : value === undefined ? [] : [value];
+  const seen = new Map<string, string>();
+  for (const v of raw) {
+    const capped = cap((v ?? "").trim() || null);
+    const n = capped === null ? null : normalise(capped);
+    if (n && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+  }
+  return [...seen.values()]
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+    .slice(0, MAX_LIST);
+}
+
+/**
+ * A URLSearchParams as the record Next hands a page, repeated keys kept as
+ * arrays. Client listings read window.location through this, so they see
+ * exactly what the server would.
+ */
+export function searchParamsRecord(params: URLSearchParams): RawSearchParams {
+  const record: RawSearchParams = {};
+  for (const key of new Set(params.keys())) {
+    const values = params.getAll(key);
+    record[key] = values.length === 1 ? values[0] : values;
+  }
+  return record;
 }
 
 /**
@@ -80,13 +129,14 @@ export function parseCatalogueParams(params: RawSearchParams): CatalogueFilters 
 
   return {
     category: cap(one(params.category)),
-    fabric: cap(one(params.fabric)),
-    colour: cap(one(params.colour)),
+    fabric: list(params.fabric, fabricFacet),
+    colour: list(params.colour),
     size: cap(one(params.size)),
     // Positive and finite, or absent. "0" and "-5" are not ceilings anyone means.
+    // Whole rupees: prices are, and a slider never writes a fraction.
     maxPrice:
-      Number.isFinite(parsedPrice) && parsedPrice > 0
-        ? Math.min(parsedPrice, 100_000_000)
+      Number.isFinite(parsedPrice) && parsedPrice >= 1
+        ? Math.min(Math.round(parsedPrice), 100_000_000)
         : null,
     // One spelling only. Anything else is a mangled link, read as "everything".
     inStock: one(params.availability) === "in-stock",
@@ -106,8 +156,8 @@ function cap(value: string | null): string | null {
 export function isUnfiltered(filters: CatalogueFilters): boolean {
   return (
     filters.category === null &&
-    filters.fabric === null &&
-    filters.colour === null &&
+    filters.fabric.length === 0 &&
+    filters.colour.length === 0 &&
     filters.size === null &&
     filters.maxPrice === null &&
     !filters.inStock
@@ -124,8 +174,8 @@ export function isUnfiltered(filters: CatalogueFilters): boolean {
 export function catalogueQuery(filters: CatalogueFilters): Omit<CatalogueFilters, "sort"> {
   return {
     category: filters.category,
-    fabric: filters.fabric,
-    colour: filters.colour,
+    fabric: sortedList(filters.fabric),
+    colour: sortedList(filters.colour),
     size: filters.size,
     maxPrice: filters.maxPrice,
     inStock: filters.inStock,
@@ -142,13 +192,18 @@ export function catalogueQuery(filters: CatalogueFilters): Omit<CatalogueFilters
 export function catalogueSearchString(filters: CatalogueFilters): string {
   const params = new URLSearchParams();
   if (filters.category) params.set("category", filters.category);
-  if (filters.fabric) params.set("fabric", filters.fabric);
-  if (filters.colour) params.set("colour", filters.colour);
+  for (const fabric of sortedList(filters.fabric)) params.append("fabric", fabric);
+  for (const colour of sortedList(filters.colour)) params.append("colour", colour);
   if (filters.size) params.set("size", filters.size);
   if (filters.maxPrice !== null) params.set("maxPrice", String(filters.maxPrice));
   if (filters.inStock) params.set("availability", "in-stock");
   if (filters.sort) params.set("sort", filters.sort);
   return params.toString();
+}
+
+/** The order a list is written in — the parser's, so a round trip is stable. */
+function sortedList(values: readonly string[]): string[] {
+  return [...values].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 }
 
 /** A full href for a listing at these filters. Bare path when nothing is set. */
