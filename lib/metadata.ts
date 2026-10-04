@@ -223,6 +223,20 @@ function nameAlreadySays(name: string, category: string): boolean {
   return singular.length > 2 && lower.includes(singular);
 }
 
+/**
+ * The description a product page PRINTS: the stored text, trimmed, or null.
+ *
+ * The same trim the Product node gets from prune() in lib/jsonLd, so the page
+ * and the markup agree on when a piece has a description at all — a
+ * whitespace-only cell is no description on either. Paragraph breaks are NOT
+ * collapsed here, unlike metaDescription(): the page sets this text with
+ * whitespace-pre-line, so the breaks the owner typed are the breaks a customer
+ * sees. Nothing is reworded, expanded or composed.
+ */
+export function productDescriptionText(text: string | null | undefined): string | null {
+  return text?.trim() || null;
+}
+
 export interface ProductMetaInput {
   name: string;
   /** products.description. Null or blank when nobody has written one. */
