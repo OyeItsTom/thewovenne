@@ -484,13 +484,25 @@ async function main() {
     t("the WhatsApp path passes no recorder", !/recorder/.test(wa));
     t("the WhatsApp path still calls the shared loop", /streamChat\(parsed\.messages\)/.test(wa));
 
-    // 0059 exists as of Phase 1.6 and is approved. 0058 must still not — it
-    // belongs to parked PR #117 and a collision there turns a rebase into an
-    // untangle.
-    const migs = listFiles("supabase/migrations");
-    t("0058 is still not taken on main", migs.filter((f) => /\/0058_/.test(f)).length === 0);
-    t("0059 is the AI daily spend migration", migs.filter((f) => /\/0059_ai_daily_spend\.sql$/.test(f)).length === 1);
-    t("no migration beyond 0059 was created", migs.filter((f) => /\/00[6-9]\d_/.test(f)).length === 0);
+    // Scope guards, same as the other AI suites carry. These used to pin migration
+    // NUMBERS ("0058 is still not taken" — 0058 was held for parked PR #117 — and
+    // "no migration beyond 0059"). Other work has since taken 0058 and 0060–0062
+    // legitimately, so the guard is now what the numbers stood for: 0059 is the AI
+    // phase's only migration, no later one touches an AI object, and numbers never
+    // collide.
+    const migs = fs.readdirSync("supabase/migrations").filter((f) => f.endsWith(".sql"));
+    const AI_OBJECT = /\b(ai|chat|eval)_[a-z_]+/;
+    const sqlOf = (f: string) =>
+      fs.readFileSync(`supabase/migrations/${f}`, "utf8").split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+    const laterAiMigrations = migs.filter((f) => /^\d{4}_/.test(f) && Number(f.slice(0, 4)) > 59 && AI_OBJECT.test(sqlOf(f)));
+    const numbers = migs.map((f) => f.slice(0, 4));
+    t("0059 is the AI daily spend migration", migs.filter((f) => /^0059_ai_daily_spend\.sql$/.test(f)).length === 1);
+    t("the guard can see an AI migration (it flags 0059's own objects)", AI_OBJECT.test(sqlOf("0059_ai_daily_spend.sql")));
+    t("no migration after 0059 touches an AI object", laterAiMigrations.length === 0, laterAiMigrations.join(", "));
+    t("0058 is the payment settlement migration, not an AI one",
+      JSON.stringify(migs.filter((f) => /^0058_/.test(f))) === JSON.stringify(["0058_settlement_is_idempotent.sql"]));
+    t("no two migrations share a number", new Set(numbers).size === numbers.length,
+      numbers.filter((n, i) => numbers.indexOf(n) !== i).join(", "));
 
     const pay = fs.readFileSync("app/api/checkout/razorpay/route.ts", "utf8");
     t("payment code is untouched by this work", !/ai\/budget|ai\/limits|ai\/observability/.test(pay));
