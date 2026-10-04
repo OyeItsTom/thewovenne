@@ -71,7 +71,9 @@ export default async function Footer() {
     footer.bottom_note_visible === false ? "" : (footer.bottom_note ?? "").trim();
 
   return (
-    <footer className="relative overflow-hidden bg-ink text-cream">
+    // data-site-footer: the boundary the product page's sticky Add to Cart
+    // hides at (lib/stickyCta). Marked rather than inferred from the tag.
+    <footer data-site-footer className="relative overflow-hidden bg-ink text-cream">
       <div className="bg-weave-light absolute inset-0" aria-hidden />
 
       {/*
