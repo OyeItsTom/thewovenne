@@ -146,15 +146,13 @@ export default async function SubCategoryPage({
         </h1>
       </div>
 
-      <div className="mt-12">
-        {products.length === 0 ? (
-          <p className="py-20 text-center text-sm text-ink/60">
-            This collection is still on the loom. Please check back soon.
-          </p>
-        ) : (
-          <CategoryFilters products={products} sizesByProduct={sizesByProduct} />
-        )}
-      </div>
+      {products.length === 0 ? (
+        <p className="mt-12 py-20 text-center text-sm text-ink/60">
+          This collection is still on the loom. Please check back soon.
+        </p>
+      ) : (
+        <CategoryFilters products={products} sizesByProduct={sizesByProduct} />
+      )}
     </div>
   );
 }

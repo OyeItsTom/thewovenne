@@ -1,5 +1,6 @@
 import type { Product } from "./types";
 import type { ProductSize } from "./sizes";
+import { stockState } from "./stock";
 import type { Filters } from "@/components/shop/FilterSidebar";
 
 /**
@@ -66,6 +67,9 @@ export function matchesFilters(
   if (filters.fabric && !same(product.fabric, filters.fabric)) return false;
   if (filters.colour && !same(product.colour, filters.colour)) return false;
   if (filters.maxPrice && product.price_inr > filters.maxPrice) return false;
+  // The card's own rule (stockState), so "In stock" can never keep a card that
+  // says "Sold out", or drop one that does not.
+  if (filters.inStock && stockState(product.stock_quantity).soldOut) return false;
 
   if (filters.size) {
     // Stock, not just existence: filtering by M should not surface a product

@@ -521,6 +521,12 @@ export interface CatalogueFilterInput {
   colour?: string | null;
   size?: string | null;
   maxPrice?: number | null;
+  /**
+   * Only rows with stock to sell. The version's stock_quantity is the whole
+   * truth here: for a sized product 0056 derives it from the sizes, so this is
+   * the same figure the card's "Sold out" label reads. Read, never written.
+   */
+  inStock?: boolean | null;
 }
 
 /** Literal, case-insensitive comparison with surrounding whitespace ignored. */
@@ -556,6 +562,7 @@ export function filterEffectiveCatalogueRows(
     if (filters.fabric && !sameCatalogueValue(row.fabric, filters.fabric)) return false;
     if (filters.colour && !sameCatalogueValue(row.colour, filters.colour)) return false;
     if (filters.maxPrice != null && row.price_inr > filters.maxPrice) return false;
+    if (filters.inStock && !(row.stock_quantity > 0)) return false;
     if (sizeProductIds && !sizeProductIds.has(row.product_id)) return false;
     return true;
   });
@@ -673,6 +680,9 @@ export async function getCatalogue(
   }
   if (sizeScopedProductIds) {
     query = query.in("product_id", [...sizeScopedProductIds]);
+  }
+  if (filters.inStock) {
+    query = query.gt("stock_quantity", 0);
   }
 
   query = query

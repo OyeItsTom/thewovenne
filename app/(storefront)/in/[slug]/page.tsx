@@ -4,7 +4,8 @@ import { notFound } from "next/navigation";
 import { getNavCategoryTree, getVisibleCategoryTree } from "@/lib/storefront";
 import { getProductsByCategoryIds } from "@/lib/storefront";
 import { getPageBySlug, getPublishedPages } from "@/lib/storefront";
-import ProductGrid from "@/components/shop/ProductGrid";
+import CategoryFilters from "@/components/shop/CategoryFilters";
+import { getSizesForProducts } from "@/lib/sizes";
 import PageBlocks from "@/components/page/PageBlocks";
 import { openGraph } from "@/lib/seo";
 import { cPath } from "@/lib/country";
@@ -139,9 +140,26 @@ export default async function SlugPage({
   const { category, page } = await resolve(params.slug);
 
   if (category) {
-    const products = await getProductsByCategoryIds(
-      category.children.map((c) => c.id)
+    const [products, stocked] = await Promise.all([
+      getProductsByCategoryIds(category.children.map((c) => c.id)),
+      stockedChildren(category.slug),
+    ]);
+    // One query for every product's sizes rather than one per product.
+    const sizesByProduct = Object.fromEntries(
+      await getSizesForProducts(products.map((p) => p.id))
     );
+
+    /*
+     * ONLY SUB-CATEGORIES WITH SOMETHING IN THEM, and only when there is a
+     * choice to make. This listed every visible child: Men offered Shirts,
+     * Kurtas, Trousers and Nehru Jackets above a single dhoti, four links to
+     * "still on the loom". Now it is the header's rule (stockedChildren), so a
+     * section links to exactly the shelves the header does — and with one
+     * stocked shelf, the section's own grid already IS that shelf, so it links
+     * to nothing. Empty sub-category routes still exist and keep their noindex;
+     * they are just not advertised.
+     */
+    const shelves = stocked ?? [];
 
     return (
       <div className="container-wovenne section-padding">
@@ -152,29 +170,30 @@ export default async function SlugPage({
           </h1>
         </div>
 
-        {category.children.length > 1 && (
-          <div className="mt-10 flex flex-wrap justify-center gap-3">
-            {category.children.map((child) => (
+        {shelves.length > 1 && (
+          <nav
+            aria-label={`${category.name} categories`}
+            className="mt-8 flex flex-wrap justify-center gap-3"
+          >
+            {shelves.map((child) => (
               <Link
-                key={child.id}
+                key={child.slug}
                 href={cPath(`/${category.slug}/${child.slug}`)}
-                className="rounded-full border border-ink/15 px-4 py-2 text-xs uppercase tracking-widest text-ink/70 transition-colors hover:border-terracotta hover:text-terracotta"
+                className="inline-flex min-h-[40px] items-center rounded-full border border-ink/15 px-4 text-xs uppercase tracking-widest text-ink/70 transition-colors hover:border-terracotta hover:text-terracotta"
               >
                 {child.name}
               </Link>
             ))}
-          </div>
+          </nav>
         )}
 
-        <div className="mt-12">
-          {products.length === 0 ? (
-            <p className="py-20 text-center text-sm text-ink/60">
-              This collection is still on the loom. Please check back soon.
-            </p>
-          ) : (
-            <ProductGrid products={products} headingLevel={2} />
-          )}
-        </div>
+        {products.length === 0 ? (
+          <p className="mt-12 py-20 text-center text-sm text-ink/60">
+            This collection is still on the loom. Please check back soon.
+          </p>
+        ) : (
+          <CategoryFilters products={products} sizesByProduct={sizesByProduct} />
+        )}
       </div>
     );
   }

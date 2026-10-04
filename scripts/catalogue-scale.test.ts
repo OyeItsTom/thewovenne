@@ -215,7 +215,7 @@ console.log("\n=== URL generation stays deterministic at every size ===");
   const states: CatalogueFilters[] = [
     { ...NO_FILTERS, colour: "gold" },
     { ...NO_FILTERS, colour: "gold", fabric: "Cotton" },
-    { category: "sarees", fabric: "Linen", colour: "white", size: "M", maxPrice: 3000 },
+    { category: "sarees", fabric: "Linen", colour: "white", size: "M", maxPrice: 3000, inStock: true, sort: "price-asc" },
   ];
   for (const state of states) {
     const a = catalogueSearchString(state);
