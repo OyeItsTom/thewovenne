@@ -98,12 +98,18 @@ export const OFFICIAL_INSTAGRAM_URL = "https://www.instagram.com/thewovenne";
 /**
  * The logo, absolute.
  *
- * Google asks for at least 112x112, crawlable and indexable. This is the file
- * already serving as the default share image — 2275x2275, public, and covered
- * by robots.txt's Allow — so the mark Google associates with the business is the
- * mark already in use rather than a second one introduced for schema.
+ * Google asks for at least 112x112, crawlable and indexable, and for an image
+ * that looks as intended on a purely white background. This is the emblem on
+ * white — 3096x2792, public, covered by robots.txt's Allow, and the same mark
+ * the navbar, footer and favicon show.
+ *
+ * NOT logo_illustrated.png, which it used to be: that is the share flyer, with
+ * "@thewovenne" and "www.thewovenne.com" printed under the wordmark. A logo is
+ * the business's mark, not a promotional card, and Google crops logos small
+ * enough that the printed handle and URL become noise. The flyer is still the
+ * default share image (DEFAULT_OG_IMAGE in lib/seo), where that text belongs.
  */
-export const LOGO_URL = customerUrl("/logo_illustrated.png");
+export const LOGO_URL = customerUrl("/logo_emblem_white_bg.png");
 
 /**
  * The business facts, confirmed by the owner and published on the site.
