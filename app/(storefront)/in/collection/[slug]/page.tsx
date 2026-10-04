@@ -5,6 +5,7 @@ import { getContent } from "@/lib/storefront";
 import ProductGrid from "@/components/shop/ProductGrid";
 import { openGraph } from "@/lib/seo";
 import { collectionHref } from "@/lib/urls";
+import { orderForDiscovery } from "@/lib/catalogueDiscovery";
 
 /**
  * A seasonal collection, e.g. /collection/onam-edit — where the homepage
@@ -100,7 +101,10 @@ export default async function CollectionPage({
       </div>
 
       <div className="mt-12">
-        <ProductGrid products={products} />
+        {/* A listing, so sold-out pieces stay — after everything that can be
+            bought, newest first within each group, exactly as the shop and the
+            category pages order theirs. */}
+        <ProductGrid products={orderForDiscovery(products, null)} />
       </div>
     </div>
   );
