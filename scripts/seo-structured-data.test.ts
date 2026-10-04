@@ -18,6 +18,10 @@ import {
   productNode,
   breadcrumbNode,
   organizationNode,
+  websiteNode,
+  ORGANIZATION_ID,
+  WEBSITE_ID,
+  OFFICIAL_INSTAGRAM_URL,
   aggregateRatingNode,
   BRAND_NAME,
   SITE_URL,
@@ -317,8 +321,35 @@ check("address is the confirmed trading address", org.address, {
 const orgJson = JSON.stringify(org);
 ok("admin@ never reaches the storefront — it is the operator's own login",
   !orgJson.includes("admin@thewovenne.com"));
-ok("no sameAs: the Instagram link is admin-editable content, not a fixed fact",
-  !orgJson.includes("sameAs"));
+check("sameAs is the brand's own Instagram profile, and only that",
+  org.sameAs, ["https://www.instagram.com/thewovenne"]);
+check("the profile is a fixed constant, not the footer's editable field",
+  OFFICIAL_INSTAGRAM_URL, "https://www.instagram.com/thewovenne");
+check("the organisation has a stable @id on the root", org["@id"], "https://www.thewovenne.com/#organization");
+check("ORGANIZATION_ID agrees", ORGANIZATION_ID, org["@id"]);
+check("alternateName is the short form only", org.alternateName, ["Wovenne"]);
+for (const unconfirmed of ["legalName", "foundingDate", "taxID", "vatID", "description", "contactPoint", "youtube"]) {
+  ok(`no unconfirmed ${unconfirmed} on the organisation`, !orgJson.includes(unconfirmed));
+}
+
+console.log("\n=== WEBSITE (site name) ===");
+
+const site = websiteNode();
+check("WebSite type", site["@type"], "WebSite");
+check("name is the one canonical spelling", site.name, "THE WOVENNE");
+check("url is the domain root, not /in", site.url, "https://www.thewovenne.com/");
+check("alternateName: short form first, then the domain", site.alternateName, ["Wovenne", "thewovenne.com"]);
+check("@id on the root", site["@id"], "https://www.thewovenne.com/#website");
+check("WEBSITE_ID agrees", WEBSITE_ID, site["@id"]);
+check("publisher is the OnlineStore, by reference", site.publisher, { "@id": ORGANIZATION_ID });
+ok("the name agrees with og:site_name and the title suffix (SITE_NAME)", site.name === org.name);
+ok("no SearchAction (the sitelinks search box is retired)", !JSON.stringify(site).includes("SearchAction"));
+ok("the alternate names never restate the name in another case",
+  site.alternateName.every((n) => n.toLowerCase() !== site.name.toLowerCase()));
+const siteJson = serializeJsonLd(site)!;
+ok("it serialises to valid JSON-LD", (() => { try { return JSON.parse(siteJson)["@type"] === "WebSite"; } catch { return false; } })());
+ok("the homepage Instagram block links the same profile",
+  fs.readFileSync("components/home/InstagramGrid.tsx", "utf8").includes("OFFICIAL_INSTAGRAM_URL"));
 
 /*
  * MERCHANT POLICY IS THE ORGANISATION'S, NOT THE PRODUCT'S. Google takes
@@ -391,6 +422,7 @@ ok("availability reads the sizes-aware stock verdict", detail.includes("stockSta
 ok("the rating passed is the one the page renders", detail.includes("rating,"));
 ok("the sub-category route emits a breadcrumb", childRoute.includes("breadcrumbNode("));
 ok("the home page emits the organization node", home.includes("organizationNode()"));
+ok("the home page emits the WebSite node", home.includes("<JsonLd data={websiteNode()} />"));
 
 for (const [name, file] of [
   ["ProductDetail", detail],
@@ -402,6 +434,15 @@ for (const [name, file] of [
     "Google asks for it once, not on every page");
 }
 ok("only one file emits organizationNode", home.includes("organizationNode") && !detail.includes("organizationNode"));
+for (const [name, file] of [
+  ["ProductDetail", detail],
+  ["sub-category route", childRoute],
+  ["hierarchical product route", hierarchical],
+  ["legacy product route", legacy],
+] as const) {
+  ok(`${name} does not emit a WebSite node`, !file.includes("websiteNode") && !file.includes('"WebSite"'),
+    "one WebSite node, on the home page only");
+}
 ok("no hand-written ld+json anywhere but the JsonLd component",
   !detail.includes("application/ld+json") && !childRoute.includes("application/ld+json") && !home.includes("application/ld+json"));
 ok("the JsonLd component routes through the escaping helper",
@@ -411,8 +452,8 @@ console.log("\n=== NO DUPLICATE NODES ON ONE PAGE ===");
 
 const pdpTypes = [productNode(base)["@type"], productCrumbs!["@type"]];
 check("a PDP emits Product + BreadcrumbList, each once", pdpTypes.length, new Set(pdpTypes).size);
-const homeTypes = [organizationNode()["@type"]];
-check("the home page emits one node", homeTypes.length, new Set(homeTypes).size);
+const homeTypes = [organizationNode()["@type"], websiteNode()["@type"]];
+check("the home page emits OnlineStore + WebSite, each once", homeTypes.length, new Set(homeTypes).size);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

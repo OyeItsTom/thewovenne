@@ -52,6 +52,50 @@ export const BRAND_NAME = SITE_NAME;
 export const SITE_URL = `${PRODUCTION_ORIGIN}/`;
 
 /**
+ * Stable identifiers for the two site-level entities, so the WebSite node can
+ * name its publisher by reference instead of describing the business twice.
+ *
+ * Fragments on the ROOT, not on /in: the entities are the domain's, and /in is
+ * one market inside it. They are identifiers rather than pages — nothing is
+ * served at "#organization" — and they must never change once Google has seen
+ * them, because a changed @id reads as a different entity.
+ */
+export const ORGANIZATION_ID = `${SITE_URL}#organization`;
+export const WEBSITE_ID = `${SITE_URL}#website`;
+
+/**
+ * Other names people genuinely use for this site, most preferred first.
+ *
+ *   "Wovenne"         the short form the site itself uses — the assistant is
+ *                     "Ask Wovenne" — and how the name is said aloud
+ *   "thewovenne.com"  the domain, which is also how the brand is typed into a
+ *                     search box (the Instagram handle is @thewovenne). Google's
+ *                     site-name guidance names the domain as the fallback to
+ *                     offer when the preferred name is not picked up
+ *
+ * NOT "The Wovenne": that is the same name in different case, not an
+ * alternative, and listing it would only blur which casing is canonical.
+ */
+export const BRAND_ALTERNATE_NAMES = ["Wovenne", "thewovenne.com"] as const;
+
+/**
+ * The brand's own Instagram profile — the one identity outside this domain
+ * that is verifiably Wovenne's.
+ *
+ * A CONSTANT HERE, NOT THE FOOTER'S ADMIN FIELD. The footer's Instagram row is
+ * admin-editable content and can be retyped; an identity claim cannot follow a
+ * text field. This is the profile the homepage's own Follow block links to
+ * (components/home/InstagramGrid, which imports it from here) and the handle
+ * printed on the logo artwork itself, and Google already lists it under the
+ * brand name as "The Wovenne (@thewovenne)".
+ *
+ * Nothing else belongs beside it until it is confirmed: a YouTube channel
+ * named @TheWovenne exists in search results, but whether it is the
+ * business's is not something this codebase knows.
+ */
+export const OFFICIAL_INSTAGRAM_URL = "https://www.instagram.com/thewovenne";
+
+/**
  * The logo, absolute.
  *
  * Google asks for at least 112x112, crawlable and indexable. This is the file
@@ -354,9 +398,13 @@ function returnPolicyNode() {
  * has been settled: hello@ is the customer address, admin@ is the operator's
  * own login and stays off the storefront.
  *
- * Still absent: sameAs. The Instagram profile is real, but it is admin-editable
- * content rather than a fixed fact, and a link that can be changed in a text
- * field is not something to assert as this business's identity from here.
+ * sameAs IS THE INSTAGRAM PROFILE AND NOTHING ELSE — see OFFICIAL_INSTAGRAM_URL
+ * for why that is a fixed constant rather than the footer's editable field.
+ *
+ * Still deliberately absent: description (the business is described by the
+ * page and by the WebSite node's own page; a schema sentence would be a second
+ * place for a claim to drift), legalName, foundingDate, taxID and any
+ * registration number — none of them is a confirmed fact in this codebase.
  *
  * `url` is the root, which is what Google uses to identify the entity — not
  * /in, which is one market inside the site.
@@ -365,13 +413,52 @@ export function organizationNode() {
   return {
     "@context": "https://schema.org",
     "@type": "OnlineStore",
+    "@id": ORGANIZATION_ID,
     name: BRAND_NAME,
+    alternateName: [BRAND_ALTERNATE_NAMES[0]],
     url: SITE_URL,
     logo: LOGO_URL,
+    sameAs: [OFFICIAL_INSTAGRAM_URL],
     email: PUBLIC_EMAIL,
     telephone: PUBLIC_PHONE,
     address: POSTAL_ADDRESS,
     hasMerchantReturnPolicy: returnPolicyNode(),
     hasShippingService: shippingServiceNode(),
+  };
+}
+
+/**
+ * The site itself — the node Google's site-name system reads.
+ *
+ * ── WHY THIS LIVES ON /in ──
+ *
+ * Google wants WebSite markup on the domain-level home page, and "/" on this
+ * domain is a single permanent redirect to /in (middleware). A redirect has no
+ * HTML to carry markup, and Google's site-name documentation is explicit that
+ * when the home page redirects, "the site name will reflect the redirect
+ * target". So /in — the page "/" resolves to, and the page whose canonical is
+ * itself — is where the node has to be.
+ *
+ * `url` IS STILL THE ROOT: the property names the home page of the domain, and
+ * the site being named is www.thewovenne.com, not a /in subdirectory (Google
+ * does not support site names below the domain or subdomain level at all).
+ *
+ * ONE WebSite NODE, NOT TWO. Google asks that site-name properties sit on a
+ * single WebSite node rather than a second block. Nothing else on the site
+ * emits one; scripts/seo-structured-data.test.ts holds that.
+ *
+ * No SearchAction: the sitelinks search box it powered was retired by Google in
+ * November 2024, and the site's search page is not something to advertise as a
+ * feature that no longer exists.
+ */
+export function websiteNode() {
+  return {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "@id": WEBSITE_ID,
+    name: BRAND_NAME,
+    alternateName: [...BRAND_ALTERNATE_NAMES],
+    url: SITE_URL,
+    publisher: { "@id": ORGANIZATION_ID },
   };
 }

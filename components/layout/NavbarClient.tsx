@@ -270,6 +270,30 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
                     </motion.div>
                   )}
                 </AnimatePresence>
+
+                {/* THE CLOSED MENU'S LINKS STAY IN THE HTML, HIDDEN.
+                    Mounting the panel only while open (PR #172) left the
+                    server-rendered page with no link at all to Women, Men,
+                    Jewellery or any sub-category — every page shipped a
+                    header a crawler could not follow past "Our Story". These
+                    are the same links the open panel shows, in the same
+                    order; `hidden` keeps them out of view, out of the tab
+                    order and out of the accessibility tree, so nothing about
+                    the menu's behaviour changes. The section name is still a
+                    button, and "View all …" is still the way to the section.
+                    No id: the open panel above owns menuId, and the two
+                    coexist for the length of its exit animation. */}
+                {!isOpen && (
+                  <ul hidden>
+                    {children.map((child) => (
+                      <li key={child.href}>
+                        <Link href={child.href} prefetch={false}>
+                          {child.label}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             );
           })}
