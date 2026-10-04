@@ -23,6 +23,7 @@ import { stockNote, stockState } from "@/lib/stock";
 import JsonLd from "@/components/seo/JsonLd";
 import { productImageUrl } from "@/lib/seo";
 import { careFor } from "@/lib/care";
+import { productDescriptionText } from "@/lib/metadata";
 import { breadcrumbNode, productNode } from "@/lib/structuredData";
 import { productHref } from "@/lib/urls";
 
@@ -81,6 +82,7 @@ export default async function ProductDetail({
   // Only a note written for this piece. Null means nothing approved to say, and
   // the Material & Care section is not rendered. See lib/care.
   const care = careFor({ careNote: knowledge?.care ?? null });
+  const description = productDescriptionText(product.description);
 
   // DECIDED ON THE SERVER. Both switches are read here, so "off" means the
   // component is never rendered and its markup never reaches the browser —
@@ -222,9 +224,13 @@ export default async function ProductDetail({
             </p>
           )}
 
-          {product.description && (
-            <p className="mt-6 max-w-prose text-[15px] leading-[1.75] text-ink/70">
-              {product.description}
+          {/* whitespace-pre-line, as the heritage and care notes already are:
+              two descriptions are written as two paragraphs, and a plain <p>
+              ran them together. Trimmed, so a blank cell renders nothing — the
+              same verdict the Product markup reaches. See lib/metadata. */}
+          {description && (
+            <p className="mt-6 max-w-prose whitespace-pre-line text-[15px] leading-[1.75] text-ink/70">
+              {description}
             </p>
           )}
 

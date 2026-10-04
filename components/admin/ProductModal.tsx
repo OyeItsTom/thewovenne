@@ -760,12 +760,13 @@ export default function ProductModal({
               value={form.care_note}
               onChange={update("care_note")}
             />
-            {/* Said here because it is not obvious: the product page falls back
-                to fabric-generic advice, and writing this replaces it. */}
+            {/* Said here because it is not obvious: the product page has NO
+                fallback care advice (SEO-6A, lib/care). This note is the only
+                care a customer sees, and without it there is no care section. */}
             <p className="mt-1 text-xs text-ink/50">
               {form.care_note.trim()
-                ? "This replaces the general fabric care advice on the product page."
-                : "Empty: the product page shows the general advice for this fabric."}
+                ? "Shown on the product page as this piece's care advice."
+                : "Empty: the product page shows no care advice for this piece."}
             </p>
           </div>
         </div>
