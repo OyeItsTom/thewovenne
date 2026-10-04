@@ -1,5 +1,5 @@
 import type { ProductListing } from "./types";
-import { effectivePrice } from "./pricing";
+import { shownPrice } from "./pricing";
 import { stockState } from "./stock";
 import { formatINR } from "./utils";
 import {
@@ -73,7 +73,7 @@ export function orderForDiscovery<T extends Orderable>(
       product,
       index,
       soldOut: stockState(product.stock_quantity).soldOut,
-      price: effectivePrice(product, now).price,
+      price: shownPrice(product, now),
     }))
     .sort(
       (a, b) =>
@@ -108,7 +108,7 @@ export const PRICE_STEPS: readonly number[] = [1500, 2500, 3500, 5000];
  * least one above. Against today's catalogue "Under ₹3,500" and "Under ₹5,000"
  * both return all 33 products, and on Jewellery every ceiling does — options
  * that change nothing are clutter, and an option that empties the grid reads as
- * broken. Compared on price_inr because that is what the filter compares.
+ * broken. Pass SHOWN prices (lib/pricing shownPrice) — what the filter compares.
  */
 export function usefulPriceSteps(
   prices: readonly number[],

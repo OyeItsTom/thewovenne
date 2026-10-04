@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Product } from "@/lib/types";
 import type { FilterOptions } from "./FilterSidebar";
+import { shownPrice } from "@/lib/pricing";
 import CatalogueListing from "./CatalogueListing";
 import {
   availableSizes,
@@ -77,7 +78,7 @@ export default function CategoryFilters({
       // Empty for sarees, which have no sizes — so the Size filter simply is
       // not rendered, with nothing anywhere naming that category.
       sizes: availableSizes(products, sizesByProduct),
-      priceSteps: usefulPriceSteps(products.map((p) => p.price_inr)),
+      priceSteps: usefulPriceSteps(products.map((p) => shownPrice(p))),
       availability: offersAvailability(products),
     }),
     [products, sizesByProduct]

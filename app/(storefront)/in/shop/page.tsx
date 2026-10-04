@@ -18,6 +18,7 @@ import {
   usefulPriceSteps,
 } from "@/lib/catalogueDiscovery";
 import ShopFilters from "@/components/shop/ShopFilters";
+import { shownPrice } from "@/lib/pricing";
 import { openGraph } from "@/lib/seo";
 import { cPath } from "@/lib/country";
 
@@ -111,7 +112,7 @@ export default async function ShopPage({
       <ShopFilters
         products={products}
         total={catalogue.length}
-        priceSteps={usefulPriceSteps(catalogue.map((p) => p.price_inr))}
+        priceSteps={usefulPriceSteps(catalogue.map((p) => shownPrice(p)))}
         availability={offersAvailability(catalogue)}
         categoryTree={categoryTree}
         sizesByProduct={sizesByProduct}

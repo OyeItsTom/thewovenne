@@ -33,6 +33,7 @@ import {
   withoutFilter,
 } from "../lib/catalogueDiscovery";
 import { matchesFilters } from "../lib/productFilters";
+import { effectivePrice, shownPrice, withinPriceCeiling } from "../lib/pricing";
 import { getCatalogue, filterEffectiveCatalogueRows } from "../lib/products";
 import { getNavCategoryTree, getVisibleCategoryTree } from "../lib/categories";
 import { stockedChildrenOf } from "../lib/metadata";
@@ -180,6 +181,57 @@ console.log("\n=== the In stock filter in the catalogue query ===");
     filterEffectiveCatalogueRows(rows, {}, ["sarees"], cats, null).length, 2);
 }
 
+// ── 3b. one price rule: shown = sorted = filtered ───────────────────────────
+
+console.log("\n=== the price a customer sees is the price every control uses ===");
+const DAY = 86_400_000;
+const past = new Date(Date.now() - 10 * DAY).toISOString();
+const soon = new Date(Date.now() + 10 * DAY).toISOString();
+const yesterday = new Date(Date.now() - DAY).toISOString();
+// Tom's example: stored ₹1,699, shown ₹1,299 (flat ₹400 off, live window).
+const SALE = item("sale-1699", 1699, 3, { discount_type: "flat", discount_value: 400, discount_starts_at: past, discount_ends_at: soon } as Partial<Product>);
+const PLAIN_1450 = item("plain-1450", 1450, 3);
+const PLAIN_1599 = item("plain-1599", 1599, 3);
+const EXPIRED = item("expired-1699", 1699, 3, { discount_type: "flat", discount_value: 400, discount_starts_at: past, discount_ends_at: yesterday } as Partial<Product>);
+const NOT_STARTED = item("future-1699", 1699, 3, { discount_type: "flat", discount_value: 400, discount_starts_at: soon, discount_ends_at: null } as Partial<Product>);
+const EXACT = item("exact-1500", 2000, 3, { discount_type: "percent", discount_value: 25 } as Partial<Product>);
+const PRICED = [SALE, PLAIN_1450, PLAIN_1599, EXPIRED, NOT_STARTED, EXACT];
+const under = (max: number) => ids(PRICED.filter((p) => matchesFilters(p, { ...NO_FILTERS, maxPrice: max }, {})));
+
+check("1. no discount: shown price is the stored price", shownPrice(PLAIN_1450), 1450);
+check("2. active discount: shown price is the card's price", [shownPrice(SALE), effectivePrice(SALE).price, effectivePrice(SALE).wasPrice], [1299, 1299, 1699]);
+check("3. ₹1,699 shown at ₹1,299 IS in 'Under ₹1,500'", under(1500).includes("sale-1699"), true);
+check("3. …and a plain ₹1,599 is not", under(1500).includes("plain-1599"), false);
+check("6. boundary: shown at exactly ₹1,500 is in 'Under ₹1,500' (inclusive, as before)", [shownPrice(EXACT), under(1500).includes("exact-1500")], [1500, true]);
+check("6. …and not in 'Under ₹1,499'", under(1499).includes("exact-1500"), false);
+check("7. an expired discount does not count", [shownPrice(EXPIRED), under(1500).includes("expired-1699")], [1699, false]);
+check("7. a discount not yet started does not count", [shownPrice(NOT_STARTED), under(1500).includes("future-1699")], [1699, false]);
+check("'Under ₹1,500' is exactly the cards showing ₹1,500 or less", under(1500).sort(), ["exact-1500", "plain-1450", "sale-1699"]);
+check("4. low→high sorts by the shown price",
+  ids(orderForDiscovery(PRICED, "price-asc")), ["sale-1699", "plain-1450", "exact-1500", "plain-1599", "expired-1699", "future-1699"]);
+check("5. high→low sorts by the shown price (equal prices keep arrival order)",
+  ids(orderForDiscovery(PRICED, "price-desc")), ["expired-1699", "future-1699", "plain-1599", "exact-1500", "plain-1450", "sale-1699"]);
+check("price steps are computed from shown prices",
+  usefulPriceSteps(PRICED.map((p) => shownPrice(p))), [1500]);
+check("withinPriceCeiling: no ceiling passes everything", PRICED.every((p) => withinPriceCeiling(p, null)), true);
+{
+  const rows = PRICED.map((p) => ({ product_id: p.id, state: "published", is_active: true, category_id: "sarees",
+    stock_quantity: 3, price_inr: p.price_inr, discount_type: p.discount_type, discount_value: p.discount_value,
+    discount_starts_at: p.discount_starts_at, discount_ends_at: p.discount_ends_at })) as never[];
+  const cats = new Map<string, Category>([["sarees", { id: "sarees", slug: "sarees" } as Category]]);
+  check("preview path filters by the shown price too",
+    filterEffectiveCatalogueRows(rows, { maxPrice: 1500 }, ["sarees"], cats, null).map((r: { product_id: string }) => r.product_id).sort(),
+    ["exact-1500", "plain-1450", "sale-1699"]);
+}
+const priceSrc = read("lib/products.ts") + read("lib/productFilters.ts") + read("lib/catalogueDiscovery.ts");
+ok("no listing compares the stored price_inr against a ceiling any more",
+  !/lte\("price_inr"/.test(priceSrc) && !/price_inr > filters\.maxPrice/.test(priceSrc));
+ok("every surface goes through the one helper",
+  read("lib/products.ts").includes("withinPriceCeiling(") && read("lib/productFilters.ts").includes("withinPriceCeiling(") &&
+  read("lib/catalogueDiscovery.ts").includes("shownPrice(") &&
+  read("app/(storefront)/in/shop/page.tsx").includes("usefulPriceSteps(catalogue.map((p) => shownPrice(p)))") &&
+  read("components/shop/CategoryFilters.tsx").includes("usefulPriceSteps(products.map((p) => shownPrice(p)))"));
+
 // ── 4. options worth offering ────────────────────────────────────────────────
 
 console.log("\n=== only options that narrow ===");
@@ -298,6 +350,15 @@ async function categoryChecks() {
     (await getCatalogue({ inStock: true }, {}, ctx)).products.map((p) => p.id).sort(), ["a", "c"]);
   check("getCatalogue: inStock false is the same as absent",
     (await getCatalogue({ inStock: false }, {}, ctx)).products.length, 3);
+  // Row "a" stored ₹1,000 → shown ₹1,000; "c" stored ₹1,002. Give "c" a sale and
+  // a ceiling only the sale clears.
+  listingRows[2].price_inr = 1699;
+  Object.assign(listingRows[2], { discount_type: "flat", discount_value: 400 });
+  check("getCatalogue (database path): a ₹1,699 piece shown at ₹1,299 is under ₹1,500",
+    (await getCatalogue({ maxPrice: 1500 }, {}, ctx)).products.map((p) => p.id).sort(), ["a", "b", "c"]);
+  check("getCatalogue: and is excluded under ₹1,200", (await getCatalogue({ maxPrice: 1200 }, {}, ctx)).products.map((p) => p.id).sort(), ["a", "b"]);
+  check("getCatalogue: paging applies after the price ceiling",
+    (await getCatalogue({ maxPrice: 1500 }, { limit: 1, offset: 1 }, ctx)).products.length, 1);
 }
 
 // ── 7. rendered markup ───────────────────────────────────────────────────────
