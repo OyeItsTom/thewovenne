@@ -44,6 +44,15 @@ export function priceStep(spread: number): number {
  * The low end is rounded UP so its first stop still includes the cheapest
  * piece: a ₹390 ring with the track starting at ₹300 would put a stop on the
  * track that empties the grid.
+ *
+ * BOTH ENDS ARE WHOLE STEPS, and that is load-bearing. A native range input's
+ * stops are min + k × step, and the browser clamps to the last stop at or
+ * below max. With the raw ₹390 and ₹3,299 as ends the last stop would be
+ * ₹3,290 — the thumb could never reach the end, and "Any price" would be
+ * unreachable by mouse, keyboard or touch. Rounded to ₹400 and ₹3,300, the
+ * difference is a whole number of steps, so the far end is a real stop and
+ * it means no ceiling (ceilingFor). The labels under the track still show the
+ * true ₹390 and ₹3,299.
  */
 export function priceSliderRange(prices: readonly number[]): PriceSliderRange | null {
   const finite = prices.filter((p) => Number.isFinite(p) && p > 0);

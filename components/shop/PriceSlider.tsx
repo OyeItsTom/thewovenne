@@ -96,7 +96,13 @@ export default function PriceSlider({
           if (timer.current) clearTimeout(timer.current);
           timer.current = setTimeout(() => commit(pos), 400);
         }}
-        onPointerUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
+        // Only when the value MOVED (a change is pending). A plain click on
+        // the thumb fires pointerup with no change — and with an off-stop
+        // ceiling from an old link (?maxPrice=1777, drawn at the ₹1,800 stop)
+        // committing then would silently rewrite the customer's filter.
+        onPointerUp={(e) => {
+          if (timer.current) commit(Number((e.target as HTMLInputElement).value));
+        }}
         onBlur={(e) => {
           if (timer.current) commit(Number(e.target.value));
         }}

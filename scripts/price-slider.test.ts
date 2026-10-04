@@ -140,5 +140,92 @@ ok("follows the URL by value, so a re-render mid-commit never snaps the thumb ba
   src.includes("}, [min, max, step, maxPrice]);"));
 ok("no canvas, no custom role=slider", !/<canvas|role="slider"/.test(src));
 
+console.log("\n=== the far end is a real stop (final hardening) ===");
+/**
+ * The HTML spec's value sanitisation for <input type=range>: stops are
+ * min + k × step; a value is rounded to the nearest stop, and a stop past max
+ * steps back down to the last one at or below it. This is what the browser
+ * lets a thumb, a key or a finger reach.
+ */
+function browserStops(min: number, max: number, step: number): number[] {
+  const stops: number[] = [];
+  for (let v = min; v <= max + 1e-9; v += step) stops.push(Math.round(v));
+  return stops;
+}
+const sanitise = (min: number, max: number, step: number, v: number) => {
+  const stops = browserStops(min, max, step);
+  const clamped = Math.min(max, Math.max(min, v));
+  return stops.reduce((best, s) => (Math.abs(s - clamped) < Math.abs(best - clamped) ? s : best), stops[0]);
+};
+{
+  // Why rounding the ends matters: the raw catalogue ends would strand the thumb.
+  const raw = browserStops(390, 3299, 100);
+  check("counter-example: raw ends ₹390–₹3,299 would make ₹3,290 the last reachable stop", raw[raw.length - 1], 3290);
+  const stops = browserStops(shop.min, shop.max, shop.step);
+  check("actual shop track: 30 stops, ₹400 … ₹3,300", [stops.length, stops[0], stops[stops.length - 1]], [30, 400, 3300]);
+  check("the last reachable stop IS the max", stops[stops.length - 1] === shop.max, true);
+  check("…and it means Any price (no ceiling)", ceilingFor(shop, stops[stops.length - 1]), null);
+  check("dragging past the end sanitises to the max, i.e. Any price", ceilingFor(shop, sanitise(shop.min, shop.max, shop.step, 99999)), null);
+  check("End key (= max) is Any price", ceilingFor(shop, shop.max), null);
+  check("one stop short of the end is the last real ceiling (₹3,200)", ceilingFor(shop, stops[stops.length - 2]), 3200);
+  check("the ₹3,299 saree is excluded only at ₹3,200, never at the end", [3299 <= 3200, ceilingFor(shop, shop.max)], [false, null]);
+
+  // Property check over generated catalogues, across all three step sizes.
+  let seed = 7;
+  const rand = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+  let bad = 0;
+  let tried = 0;
+  for (let i = 0; i < 600; i++) {
+    const n = 2 + Math.floor(rand() * 12);
+    const scale = [4_000, 30_000, 120_000][i % 3];
+    const prices = Array.from({ length: n }, () => 1 + Math.floor(rand() * scale));
+    const r = priceSliderRange(prices);
+    if (!r) continue;
+    tried++;
+    const s = browserStops(r.min, r.max, r.step);
+    const okEnds = (r.max - r.min) % r.step === 0 && s[s.length - 1] === r.max && ceilingFor(r, r.max) === null;
+    const okLow = r.min >= r.lowest && r.min - r.lowest < r.step;
+    const okHigh = r.max >= r.highest && r.max - r.highest < r.step;
+    if (!okEnds || !okLow || !okHigh) bad++;
+  }
+  check(`${tried} generated catalogues: the far end is always a reachable stop meaning Any price`, bad, 0);
+}
+
+console.log("\n=== malformed and stale URLs ===");
+const parsed = (q: Record<string, string | string[]>) => parseCatalogueParams(q).maxPrice;
+check("maxPrice=0 → no ceiling", parsed({ maxPrice: "0" }), null);
+check("maxPrice=-100 → no ceiling", parsed({ maxPrice: "-100" }), null);
+check("maxPrice=abc → no ceiling", parsed({ maxPrice: "abc" }), null);
+check("duplicate maxPrice → the first", parsed({ maxPrice: ["1500", "9000"] }), 1500);
+check("maxPrice=999999 → kept as written (filters nothing out)", parsed({ maxPrice: "999999" }), 999999);
+check("…its thumb sits at the end", sliderPosition(shop, 999999), shop.max);
+check("…and the slider reads Any price there, honestly", ceilingFor(shop, sliderPosition(shop, 999999)), null);
+check("maxPrice=1777 (off-stop, old link) is preserved exactly — not rounded", parsed({ maxPrice: "1777" }), 1777);
+check("…the browser draws its thumb at the nearest stop, ₹1,800", sanitise(shop.min, shop.max, shop.step, 1777), 1800);
+ok("…the slider still labels it 'Up to ₹1,777' until moved", html(shop, 1777).includes(">Up to ₹1,777</p>"));
+check("…and moving the thumb snaps to stops from there (one right = ₹1,900)", ceilingFor(shop, 1800 + shop.step), 1900);
+ok("a click on the thumb that moves nothing never commits (so ₹1,777 is not silently rewritten)",
+  /onPointerUp=\{\(e\) => \{\s*if \(timer\.current\) commit/.test(src));
+check("a ceiling below the first stop: thumb at the first stop, filter as written",
+  [sliderPosition(shop, 100), parsed({ maxPrice: "100" })], [400, 100]);
+
+console.log("\n=== the domain comes from the scope, never the price-filtered result ===");
+{
+  const shopPage = read("app/(storefront)/in/shop/page.tsx");
+  ok("shop: the range is built from `scope`, which is the UNFILTERED catalogue (or its chosen sub-category)",
+    shopPage.includes("priceSliderRange(scope.map((p) => shownPrice(p)))") &&
+    shopPage.includes("const catalogue = everything?.products ?? matched;") &&
+    /isUnfiltered\(filters\) \? null : getCatalogue\(catalogueQuery\(NO_FILTERS\)\)/.test(shopPage) &&
+    /const scope = chosenCategory\s*\? catalogue\.filter/.test(shopPage));
+  const cat = read("components/shop/CategoryFilters.tsx");
+  ok("category pages: the range is built from every product on the page, not the filtered `shown`",
+    cat.includes("priceRange: priceSliderRange(products.map((p) => shownPrice(p)))") &&
+    !/priceSliderRange\(shown/.test(cat));
+  const SAREE_PRICES = [1250, 1299, 1399, 1499, 1599, 3299];
+  const full = priceSliderRange(SAREE_PRICES)!;
+  check("sarees: ₹1,300 → ₹3,300 whatever ceiling is chosen", [full.min, full.max], [1300, 3300]);
+  check("at 'Up to ₹2,000' the thumb has room to go back up to the end", [sliderPosition(full, 2000) < full.max, ceilingFor(full, full.max)], [true, null]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);
