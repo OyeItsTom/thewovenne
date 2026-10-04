@@ -37,7 +37,7 @@ export default function BrandKnowledgePanel({
       <div className="mx-auto mt-10 grid max-w-4xl gap-10 sm:grid-cols-2">
         {heritage && (
           <div>
-            <h3 className="text-xs uppercase tracking-wider text-ink/50">
+            <h3 className="text-xs uppercase tracking-wider text-ink-muted">
               Heritage
             </h3>
             {/* whitespace-pre-line, not a markdown renderer: what was typed is
@@ -50,7 +50,7 @@ export default function BrandKnowledgePanel({
         )}
         {craft && (
           <div>
-            <h3 className="text-xs uppercase tracking-wider text-ink/50">
+            <h3 className="text-xs uppercase tracking-wider text-ink-muted">
               Craft
             </h3>
             <p className="mt-3 whitespace-pre-line text-base leading-relaxed text-ink/70">
@@ -60,7 +60,7 @@ export default function BrandKnowledgePanel({
         )}
       </div>
 
-      <p className="mt-10 text-center text-xs text-ink/45">
+      <p className="mt-10 text-center text-xs text-ink-muted">
         Written by us about {productName} — not generated, and not a stock
         description.
       </p>

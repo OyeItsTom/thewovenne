@@ -24,12 +24,14 @@ export default function CuratedForYou({ set }: { set: CuratedSet }) {
         <h2 className="mt-2 font-heading text-4xl text-ink sm:text-5xl">
           {personal ? "Chosen from what you've saved" : "From the Latest Weave"}
         </h2>
-        <p className="mx-auto mt-4 max-w-md text-sm text-ink/55">
+        <p className="mx-auto mt-4 max-w-md text-sm text-ink-muted">
           {personal
             ? `Pieces that share the colours and cloth of the ${set.basedOn} ${
                 set.basedOn === 1 ? "piece" : "pieces"
               } on your wishlist.`
-            : "The most recent additions to the collection."}
+            : // Only pieces that can be bought appear here (lib/curated), so
+              // the line says so rather than promising every recent addition.
+              "The most recent additions still available."}
         </p>
       </div>
 

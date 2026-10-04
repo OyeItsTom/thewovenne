@@ -7,6 +7,7 @@ import {
 } from "./categories";
 import { ANON_CTX, preferDraft, statesFor, type ReadCtx } from "./readCtx";
 import { withinPriceCeiling } from "./pricing";
+import { promotable } from "./merchandising";
 import type { Category, Product, ProductListing } from "./types";
 
 // Storefront reads come from PUBLISHED versions, never the identity tables.
@@ -1040,6 +1041,23 @@ export async function getAllBrandKnowledge(
     .filter((k) => hasBrandKnowledge(k));
 }
 
+/**
+ * "You May Also Like": other pieces from the same sub-category that can be
+ * bought now.
+ *
+ * A PROMOTION, NOT A LISTING (lib/merchandising). Sold-out pieces are left out,
+ * and when nothing in the category qualifies the result is empty and the
+ * product page renders no section at all — it does not reach into other
+ * categories for something to fill the row.
+ *
+ * ORDERED, newest product first. This query used to have no ORDER BY, so which
+ * four appeared was whatever order Postgres happened to return.
+ *
+ * NO LIMIT IN THE QUERY. Stock is judged after preview's draft collapse, so the
+ * row is cut to `limit` only once the sold-out pieces are gone — a LIMIT 4 in
+ * SQL could return four sold-out pieces and leave an empty row beside in-stock
+ * ones. A sub-category is a shelf of tens, not thousands.
+ */
 export async function getRelatedProducts(
   categoryId: string | null,
   excludeSlug: string,
@@ -1055,11 +1073,12 @@ export async function getRelatedProducts(
     .eq("is_active", true)
     .eq("category_id", categoryId)
     .neq("slug", excludeSlug)
-    .limit(limit);
+    .order(NEWEST_PRODUCT_FIRST, BY_NEWEST_PRODUCT)
+    .order("product_id", { ascending: true });
 
   if (error) {
     console.error("getRelatedProducts:", error.message);
     return [];
   }
-  return finish(data, cats);
+  return promotable(finish(data, cats), limit);
 }

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAllProducts } from "./products";
+import { promotable } from "./merchandising";
 import type { Product } from "./types";
 
 /**
@@ -18,6 +19,12 @@ import type { Product } from "./types";
  * Purchase history slots in here later without changing any caller: the
  * weighting below already treats "pieces you liked" as a bag of attributes, and
  * bought items are simply a stronger source for that bag.
+ *
+ * ONLY PIECES THAT CAN BE BOUGHT. Both rows are promotions, not listings — see
+ * lib/merchandising. Five of the twelve newest were sold out, so a third of the
+ * home page's product row was pointing at things nobody could buy. Sold-out
+ * pieces still shape taste (a saved one says what someone likes) but are never
+ * offered, and a thin shelf gives a shorter row rather than a padded one.
  */
 
 const TARGET = 12; // Within the 10–15 the brief asked for.
@@ -57,18 +64,28 @@ export async function getCuratedProducts(
 ): Promise<CuratedSet> {
   const all = await getAllProducts();
 
-  // Newest first is how getAllProducts already returns them, so this is the
-  // new-arrivals answer with no extra work.
-  const newest = all.slice(0, TARGET);
-
-  if (!signedIn || !supabase) {
-    return { products: newest, reason: "new", basedOn: 0 };
-  }
+  if (!signedIn || !supabase) return curate(all, null);
 
   // RLS scopes this to the signed-in customer's own rows.
   const { data: rows } = await supabase.from("wishlists").select("product_id");
-  const savedIds = new Set((rows ?? []).map((r) => r.product_id as string));
-  if (savedIds.size === 0) {
+  return curate(all, new Set((rows ?? []).map((r) => r.product_id as string)));
+}
+
+/**
+ * The choice itself, given the catalogue (newest product first, as
+ * getAllProducts returns it) and the customer's saved ids — null for a guest.
+ * Pure, so it is tested without a database.
+ */
+export function curate(all: Product[], savedIds: Set<string> | null): CuratedSet {
+  // What may be offered. Same newest-first order: promotable only removes.
+  const buyable = promotable(all);
+
+  // Newest first is how getAllProducts already returns them — by the product's
+  // original creation date, not its latest edit — so this is the new-arrivals
+  // answer with no extra work.
+  const newest = buyable.slice(0, TARGET);
+
+  if (!savedIds || savedIds.size === 0) {
     return { products: newest, reason: "new", basedOn: 0 };
   }
 
@@ -84,7 +101,7 @@ export async function getCuratedProducts(
   const byFabric = tally(saved, "fabric");
   const byColour = tally(saved, "colour");
 
-  const scored = all
+  const scored = buyable
     // Never recommend something already saved — they have seen it, and a
     // "for you" row that returns your own wishlist looks like a bug.
     .filter((p) => !savedIds.has(p.id))
@@ -103,7 +120,10 @@ export async function getCuratedProducts(
       if (col && byColour.has(col)) {
         score += ATTRIBUTE_WEIGHTS.colour * byColour.get(col)!;
       }
-      if (product.stock_quantity > 0) score += 1;
+      // No point for being in stock any more: every candidate is. It used to
+      // give every in-stock piece a score of 1, so pieces sharing nothing with
+      // the wishlist counted as "matches" and the row could claim to be
+      // "Chosen from what you've saved" without being.
 
       return { product, score };
     })
@@ -118,7 +138,10 @@ export async function getCuratedProducts(
   const chosen = [...matched];
   if (chosen.length < TARGET) {
     const already = new Set(chosen.map((p) => p.id));
-    for (const p of newest) {
+    // From every buyable piece, not just the newest twelve: saved pieces are
+    // skipped, and padding from a list that contains them would come up short
+    // of the guest row — which CuratedPersonalizer then refuses to swap in.
+    for (const p of buyable) {
       if (chosen.length >= TARGET) break;
       if (already.has(p.id) || savedIds.has(p.id)) continue;
       chosen.push(p);

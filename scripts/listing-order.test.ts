@@ -232,9 +232,17 @@ async function main() {
   const ordersByVersionDate = [...src.matchAll(/\.order\("created_at"/g)].length;
   check("exactly one version-date order remains, in the ADMIN product list", ordersByVersionDate, 1);
   check("and it is getAdminProducts", /getAdminProducts[\s\S]*?\.order\("created_at", \{ ascending: false \}\)/.test(src.split("export async function getFeaturedProducts")[0]), true);
-  check("getRelatedProducts is untouched (still no ORDER BY, deferred)", /getRelatedProducts[\s\S]*?\.limit\(limit\);/.test(src) && !/getRelatedProducts[^}]*\.order\(/.test(src), true);
+  // Was deferred here ("still no ORDER BY"); Premium UX PR 3 orders it by the
+  // product's creation date and caps it after the stock check, not in SQL.
+  const related = src.slice(src.indexOf("export async function getRelatedProducts"));
+  check("getRelatedProducts orders by the product's own creation date, newest first",
+    related.includes(".order(NEWEST_PRODUCT_FIRST, BY_NEWEST_PRODUCT)") && !related.includes(".limit("), true);
   const curated = fs.readFileSync("lib/curated.ts", "utf8");
-  check("the home rail takes getAllProducts' order as-is", curated.includes("const newest = all.slice(0, TARGET);"), true);
+  // PR 3: sold-out pieces are removed first (promotable only removes, never
+  // re-ranks), so the rail is still getAllProducts' order.
+  check("the home rail takes getAllProducts' order as-is",
+    curated.includes("const buyable = promotable(all);") && curated.includes("const newest = buyable.slice(0, TARGET);") &&
+    !/\.sort\(/.test(fs.readFileSync("lib/merchandising.ts", "utf8")), true);
 
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);

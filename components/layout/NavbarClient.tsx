@@ -43,17 +43,53 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
   const [expandedMobile, setExpandedMobile] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Whether the open menu was opened deliberately (click, Enter, Space) rather
+  // than by the pointer passing over it. A deliberate open stays open when the
+  // pointer leaves; a hover open closes as it always did.
+  const pinned = useRef(false);
+  const triggers = useRef(new Map<string, HTMLButtonElement>());
+  const desktopNav = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
   const totalItems = useCartStore((s) => s.totalItems());
   const toggleCart = useCartStore((s) => s.toggleCart);
 
   const openNow = (href: string) => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
+    if (openMenu !== href) pinned.current = false;
     setOpenMenu(href);
   };
   const closeSoon = () => {
+    if (pinned.current) return;
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = setTimeout(() => setOpenMenu(null), CLOSE_DELAY_MS);
+  };
+  const closeMenu = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    pinned.current = false;
+    setOpenMenu(null);
+  };
+
+  /**
+   * THE SECTION NAME OPENS ITS MENU; IT DOES NOT NAVIGATE.
+   *
+   * Women, Men and Jewellery were links that also opened a dropdown, and the
+   * dropdown already ends in "View all Women" — two ways to the same page, one
+   * of them easy to trigger by accident while reaching for a sub-category. The
+   * name is now a disclosure button and "View all …" is the one way to the
+   * section page. The section routes themselves are untouched.
+   *
+   * Click, Enter and Space all arrive here (a real button). A hover-opened
+   * menu is pinned by the click rather than toggled shut under the pointer; a
+   * pinned menu closes on a second click, Escape, or focus/click outside.
+   */
+  const onTrigger = (href: string) => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    if (openMenu === href && pinned.current) {
+      closeMenu();
+      return;
+    }
+    pinned.current = true;
+    setOpenMenu(href);
   };
 
   useEffect(() => {
@@ -71,12 +107,28 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
     if (!openMenu && !searchOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      setOpenMenu(null);
+      // Focus goes back to the section name when it was inside that menu, so
+      // a keyboard user is left where they started rather than on <body>.
+      const trigger = openMenu ? triggers.current.get(openMenu) : undefined;
+      const inMenu = !!trigger?.parentElement?.contains(document.activeElement);
+      closeMenu();
       setSearchOpen(false);
+      if (inMenu) trigger?.focus();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [openMenu, searchOpen]);
+
+  // A pinned menu has no pointer to leave it, so a click anywhere outside the
+  // desktop nav closes it.
+  useEffect(() => {
+    if (!openMenu) return;
+    const onDown = (e: PointerEvent) => {
+      if (!desktopNav.current?.contains(e.target as Node)) closeMenu();
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [openMenu]);
 
   return (
     <header className="sticky top-0 z-40 border-b border-ink/5 bg-cream/90 backdrop-blur-md">
@@ -131,11 +183,12 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
           by this header's own container, it is where that container widens to
           `lg:px-12`, and it leaves 45px spare instead of zero.
         */}
-        <div className="hidden items-center gap-8 lg:flex">
+        <div ref={desktopNav} className="hidden items-center gap-8 lg:flex">
           {navLinks.map((link) => {
             const children = link.children ?? [];
             const hasMenu = children.length > 0;
             const isOpen = openMenu === link.href;
+            const menuId = `nav-menu-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 
             if (!hasMenu) {
               return (
@@ -153,22 +206,27 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
               <div
                 key={link.href}
                 className="relative"
+                // Hover still opens it — an enhancement for a mouse, not the
+                // only way in. Keyboard focus no longer opens it on its own:
+                // a Tab past the header should not unfold three menus.
                 onMouseEnter={() => openNow(link.href)}
                 onMouseLeave={closeSoon}
-                // Opens on keyboard focus too, so the sub-categories are not
-                // reachable by mouse only.
-                onFocus={() => openNow(link.href)}
                 onBlur={(e) => {
                   if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                    setOpenMenu(null);
+                    if (openMenu === link.href) closeMenu();
                   }
                 }}
               >
-                <Link
-                  href={link.href}
+                <button
+                  type="button"
+                  ref={(el) => {
+                    if (el) triggers.current.set(link.href, el);
+                    else triggers.current.delete(link.href);
+                  }}
+                  onClick={() => onTrigger(link.href)}
                   aria-expanded={isOpen}
-                  aria-haspopup="true"
-                  className="flex items-center gap-1.5 font-body text-sm uppercase tracking-widest text-ink/80 transition-colors hover:text-terracotta"
+                  aria-controls={menuId}
+                  className="flex items-center gap-1.5 rounded-sm font-body text-sm uppercase tracking-widest text-ink/80 transition-colors hover:text-terracotta focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta focus-visible:ring-offset-4 focus-visible:ring-offset-cream"
                 >
                   {link.label}
                   <ChevronDown
@@ -177,7 +235,7 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
                       isOpen ? "rotate-180" : ""
                     }`}
                   />
-                </Link>
+                </button>
 
                 <AnimatePresence>
                   {isOpen && (
@@ -191,13 +249,16 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
                       // between the word and the panel and the menu closes.
                       className="absolute left-1/2 top-full z-50 -translate-x-1/2 pt-3"
                     >
-                      <div className="min-w-[14rem] rounded-xl border border-ink/10 bg-cream p-2 shadow-soft">
+                      <div
+                        id={menuId}
+                        className="min-w-[14rem] rounded-xl border border-ink/10 bg-cream p-2 shadow-soft"
+                      >
                         <ul>
                           {children.map((child) => (
                             <li key={child.href}>
                               <Link
                                 href={child.href}
-                                onClick={() => setOpenMenu(null)}
+                                onClick={closeMenu}
                                 className="block rounded-lg px-4 py-2.5 font-body text-sm text-ink/80 transition-colors hover:bg-linen/60 hover:text-terracotta"
                               >
                                 {child.label}
@@ -301,43 +362,46 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
                 const children = link.children ?? [];
                 const hasMenu = children.length > 0;
                 const isExpanded = expandedMobile === link.href;
+                const groupId = `nav-group-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 
                 return (
                   <div key={link.href}>
-                    <div className="flex items-center justify-between">
+                    {/* A SECTION IS A GROUP TO OPEN, NOT A PAGE TO LEAVE FOR.
+                        The word used to navigate and only the chevron beside it
+                        expanded, so the obvious tap took a phone away before it
+                        had seen the sub-categories. The whole row is now one
+                        button; the group it opens ends in "View all …", which is
+                        the way to the section page. */}
+                    {hasMenu ? (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedMobile(isExpanded ? null : link.href)}
+                        aria-expanded={isExpanded}
+                        aria-controls={groupId}
+                        className="flex w-full items-center justify-between py-1 text-left font-body text-sm uppercase tracking-widest text-ink/80"
+                      >
+                        {link.label}
+                        <ChevronDown
+                          aria-hidden
+                          className={`h-4 w-4 text-ink/60 transition-transform duration-200 ${
+                            isExpanded ? "rotate-180" : ""
+                          }`}
+                        />
+                      </button>
+                    ) : (
                       <Link
                         href={link.href}
                         onClick={() => setMobileOpen(false)}
-                        className="font-body text-sm uppercase tracking-widest text-ink/80"
+                        className="block py-1 font-body text-sm uppercase tracking-widest text-ink/80"
                       >
                         {link.label}
                       </Link>
-
-                      {/* A separate control from the link: tapping the word
-                          should still go to the section, so the chevron is what
-                          expands. Merging them would make the section itself
-                          unreachable on a phone. */}
-                      {hasMenu && (
-                        <button
-                          onClick={() =>
-                            setExpandedMobile(isExpanded ? null : link.href)
-                          }
-                          aria-expanded={isExpanded}
-                          aria-label={`${isExpanded ? "Hide" : "Show"} ${link.label} categories`}
-                          className="p-1 text-ink/60"
-                        >
-                          <ChevronDown
-                            className={`h-4 w-4 transition-transform duration-200 ${
-                              isExpanded ? "rotate-180" : ""
-                            }`}
-                          />
-                        </button>
-                      )}
-                    </div>
+                    )}
 
                     <AnimatePresence>
                       {hasMenu && isExpanded && (
                         <motion.ul
+                          id={groupId}
                           initial={{ height: 0, opacity: 0 }}
                           animate={{ height: "auto", opacity: 1 }}
                           exit={{ height: 0, opacity: 0 }}

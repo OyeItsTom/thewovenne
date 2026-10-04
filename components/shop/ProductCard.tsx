@@ -349,7 +349,7 @@ export default function ProductCard({
           <span className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap font-body text-sm font-medium text-ink">
             {formatINR(price)}
             {wasPrice != null && (
-              <span className="text-[11px] font-normal text-ink/45 line-through">
+              <span className="text-[11px] font-normal text-ink-muted line-through">
                 {formatINR(wasPrice)}
               </span>
             )}

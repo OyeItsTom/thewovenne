@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CareGuidance } from "@/lib/care";
@@ -39,10 +39,22 @@ export default function MaterialCare({
 }) {
   const [open, setOpen] = useState(false);
 
+  // Arriving from the buy column's "How to look after it" link (#material-care)
+  // unfolds it, so the link never lands on a closed section on a phone. Desktop
+  // shows the body regardless, so this changes nothing there.
+  useEffect(() => {
+    const unfoldOnHash = () => {
+      if (window.location.hash === "#material-care") setOpen(true);
+    };
+    unfoldOnHash();
+    window.addEventListener("hashchange", unfoldOnHash);
+    return () => window.removeEventListener("hashchange", unfoldOnHash);
+  }, []);
+
   return (
     <section className="mt-24 border-t border-ink/10 pt-16" aria-labelledby="material-care">
       <div className="text-center">
-        <h2 id="material-care" className="font-heading text-3xl text-ink sm:text-4xl">
+        <h2 id="material-care" className="scroll-mt-28 font-heading text-3xl text-ink sm:text-4xl">
           Material &amp; Care
         </h2>
       </div>
@@ -53,7 +65,7 @@ export default function MaterialCare({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls="care-body"
-        className="mx-auto mt-6 flex items-center gap-2 text-xs uppercase tracking-wider text-ink/55 transition-colors hover:text-terracotta lg:hidden"
+        className="mx-auto mt-6 flex items-center gap-2 text-xs uppercase tracking-wider text-ink-muted transition-colors hover:text-terracotta lg:hidden"
       >
         {open ? "Hide" : "How to look after it"}
         <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
@@ -68,13 +80,13 @@ export default function MaterialCare({
       >
         {fabric && (
           <div className="sm:border-r sm:border-ink/10 sm:pr-12">
-            <h3 className="text-xs uppercase tracking-wider text-ink/50">Fabric</h3>
+            <h3 className="text-xs uppercase tracking-wider text-ink-muted">Fabric</h3>
             <p className="mt-3 font-heading text-2xl text-ink">{fabric}</p>
           </div>
         )}
 
         <div>
-          <h3 className="text-xs uppercase tracking-wider text-ink/50">
+          <h3 className="text-xs uppercase tracking-wider text-ink-muted">
             How to look after it
           </h3>
           {/* whitespace-pre-line so the paragraph breaks somebody typed survive,

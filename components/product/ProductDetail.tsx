@@ -128,7 +128,7 @@ export default async function ProductDetail({
         />
       )}
       {breadcrumb && (
-        <nav aria-label="Breadcrumb" className="mb-8 text-xs text-ink/50">
+        <nav aria-label="Breadcrumb" className="mb-8 text-xs text-ink-muted">
           <Link href={cPath(`/${breadcrumb.parent.slug}`)} className="hover:text-terracotta">
             {breadcrumb.parent.name}
           </Link>
@@ -205,7 +205,7 @@ export default async function ProductDetail({
           <p className="mt-4 font-body text-xl tracking-wide text-ink">
             {formatINR(price)}
             {wasPrice != null && (
-              <span className="ml-3 align-middle text-base font-normal text-ink/40 line-through">
+              <span className="ml-3 align-middle text-base font-normal text-ink-muted line-through">
                 {formatINR(wasPrice)}
               </span>
             )}
@@ -245,12 +245,45 @@ export default async function ProductDetail({
             </div>
           )}
 
-          {product.fabric && (
-            // The fabric named where it helps a decision; how to wash it now has
-            // its own section further down. One line here, not an accordion.
-            <p className="mt-6 text-xs uppercase tracking-wider text-ink-muted">
-              {product.fabric}
-            </p>
+          {(product.fabric || care) && (
+            /* THE MATERIAL, LABELLED, after everything needed to buy. It was a
+               lone line of small caps under the delivery check with no label —
+               "HANDLOOM 120 COUNT MUL COTTON" on its own, easy to read as a
+               code rather than as the cloth. Now it sits under the same
+               rule-and-label as Quantity and Delivery above it, and the value
+               is set as words, in the case it was stored in.
+
+               Only stored facts: the fabric column, and a pointer to the care
+               note when one was written for this piece. Colour is deliberately
+               absent — the stored colour does not yet reliably describe the
+               cloth (most pieces read "Off-white" whatever their border). */
+            <dl className="mt-6 space-y-5 border-t border-ink/10 pt-5">
+              {product.fabric && (
+                <div>
+                  <dt className="font-heading text-sm uppercase tracking-wider text-ink-muted">
+                    Fabric
+                  </dt>
+                  <dd className="mt-1.5 text-[15px] leading-relaxed text-ink">
+                    {product.fabric}
+                  </dd>
+                </div>
+              )}
+              {care && (
+                <div>
+                  <dt className="font-heading text-sm uppercase tracking-wider text-ink-muted">
+                    Care
+                  </dt>
+                  <dd className="mt-1.5 text-[15px] leading-relaxed">
+                    <a
+                      href="#material-care"
+                      className="text-ink underline decoration-ink/25 underline-offset-4 transition-colors hover:decoration-terracotta"
+                    >
+                      How to look after it
+                    </a>
+                  </dd>
+                </div>
+              )}
+            </dl>
           )}
           </div>
         </div>
