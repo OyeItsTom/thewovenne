@@ -6,6 +6,7 @@ import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, Heart, Menu, Search, ShoppingBag, X } from "lucide-react";
 import { useCartStore } from "@/lib/store";
+import { useHydrated } from "@/lib/useHydrated";
 import AccountEntry from "@/components/account/AccountEntry";
 import SearchField from "@/components/shop/SearchField";
 
@@ -50,7 +51,12 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
   const triggers = useRef(new Map<string, HTMLButtonElement>());
   const desktopNav = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
-  const totalItems = useCartStore((s) => s.totalItems());
+  // The server has no saved cart, so the badge it renders is always empty;
+  // the first client render must match it (lib/useHydrated). The real count
+  // follows in the same tick hydration finishes.
+  const hydrated = useHydrated();
+  const cartCount = useCartStore((s) => s.totalItems());
+  const totalItems = hydrated ? cartCount : 0;
   const toggleCart = useCartStore((s) => s.toggleCart);
 
   const openNow = (href: string) => {
