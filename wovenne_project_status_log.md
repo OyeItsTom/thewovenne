@@ -2454,3 +2454,26 @@ failed on a clean `main`; it now carries the same invariant guards as the other
 AI suites (0059 is the AI phase's only migration, no later migration touches an
 `ai_`/`chat_`/`eval_` object, 0058 is the settlement migration, and no two
 migrations share a number).
+
+## Schema rebuild hardening (#182) — 5 October 2026
+
+The 5 October production-vs-replay audit found that production's schema matches a
+replay of 0001–0063 everywhere except two things, both of which make a REBUILD
+less safe than production:
+
+- `site_pages` had RLS on in production only. **0064** encodes it: RLS on, no
+  policy, and no direct anon/authenticated writes (SELECT kept). Applied to
+  production 17:23 UTC with `scripts/run-migration.mjs` (ledger 64 rows, latest
+  0064). The self-check passed. Data was unchanged (7 pages, 37 versions). The
+  only change in production was that ACL: anon `rDxtm`→`r`, authenticated
+  `arwdDxtm`→`r`.
+- Production never had Supabase's broad default grants, and the migrations
+  assume that. **`supabase/bootstrap/privilege_baseline.sql`** now establishes it
+  on a new project before 0001. The test harness builds every database that way.
+- **`supabase/security-posture.json`** is the intended posture, generated from a
+  clean replay. After 0064, `scripts/security-posture.ts --production` (read-only)
+  says **MATCHES**.
+
+Still open (separate, reviewed change): production's project defaults give
+anon/authenticated TRUNCATE/REFERENCES/TRIGGER/MAINTAIN on 27 tables. These are
+not reachable through the Data API.
