@@ -1,6 +1,7 @@
 import { getBrowserSupabase } from "./supabase";
 import { useCartStore } from "./store";
 import { cPath } from "./country";
+import { profileUpdateResult } from "./profileUpdate";
 
 /**
  * Customer-facing auth.
@@ -239,6 +240,29 @@ export async function setDefaultAddress(
     };
   }
   return { ok: true, error: null };
+}
+
+/**
+ * Change the signed-in customer's name.
+ *
+ * The row is asked for back so that success means the row really changed — see
+ * profileUpdateResult. 0004 grants UPDATE on a fixed set of columns that does
+ * not include is_admin, so this cannot reach it however the request is shaped.
+ */
+export async function saveProfileName(name: string): Promise<AuthResult> {
+  const supabase = getBrowserSupabase();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You need to be logged in." };
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .update({ full_name: name.trim() })
+    .eq("id", user.id)
+    .select("id");
+
+  return profileUpdateResult(data, error);
 }
 
 export async function setMarketingConsent(

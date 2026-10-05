@@ -110,7 +110,10 @@ ok("JSON-LD material is still the stored fabric, untouched",
   !read("lib/structuredData.ts").includes("catalogueFacets"));
 ok("meta descriptions and Ask Wovenne still read the stored fabric",
   !read("lib/metadata.ts").includes("catalogueFacets") && !read("lib/chatTools.ts").includes("catalogueFacets"));
-ok("no migration ships with this change", !fs.readdirSync("supabase/migrations").some((f) => f.startsWith("0063")));
+// An invariant, not a pinned number: facets are derived in code, so no
+// migration — present or future — should be about them.
+ok("no migration ships with this change",
+  !fs.readdirSync("supabase/migrations").some((f) => /facet/i.test(f) || /facet/i.test(read(`supabase/migrations/${f}`))));
 
 // ── 3. group eligibility ─────────────────────────────────────────────────────
 

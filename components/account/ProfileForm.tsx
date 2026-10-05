@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
-import { getBrowserSupabase } from "@/lib/supabase";
+import { saveProfileName } from "@/lib/customerAuth";
 import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
 import Button from "@/components/ui/Button";
@@ -35,24 +35,11 @@ export default function ProfileForm({
     setError(null);
     setSaved(false);
 
-    const supabase = getBrowserSupabase();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      setBusy(false);
-      return setError("You need to be logged in.");
-    }
-
-    // 0004 grants UPDATE on (email, full_name, marketing_consent) only, so this
-    // cannot reach is_admin however the request is shaped.
-    const { error: saveError } = await supabase
-      .from("profiles")
-      .update({ full_name: name.trim() })
-      .eq("id", user.id);
-
+    // Success only when the row came back changed — a request that "worked"
+    // but matched nothing is a failure (see lib/profileUpdate.ts).
+    const result = await saveProfileName(name);
     setBusy(false);
-    if (saveError) return setError(saveError.message);
+    if (!result.ok) return setError(result.error);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   }
