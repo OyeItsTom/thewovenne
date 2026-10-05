@@ -307,7 +307,40 @@ check("OnlineStore, the subtype Google names for ecommerce", org["@type"], "Onli
 check("name", org.name, "THE WOVENNE");
 check("url is the site root, not a market inside it", org.url, "https://www.thewovenne.com/");
 check("SITE_URL constant agrees", SITE_URL, "https://www.thewovenne.com/");
-check("logo is absolute and public", org.logo, "https://www.thewovenne.com/logo_illustrated.png");
+check("logo is absolute and public", org.logo, "https://www.thewovenne.com/logo_emblem_white_bg.png");
+
+// The logo file itself: Google's minimum is 112x112, and it must look right on
+// white. A PNG's IHDR carries width/height at bytes 16-23 and colour type at 25.
+const logoFile = fs.readFileSync("public/logo_emblem_white_bg.png");
+check("logo file is a PNG", logoFile.subarray(1, 4).toString(), "PNG");
+ok("logo is at least 112x112 (Google's minimum)",
+  logoFile.readUInt32BE(16) >= 112 && logoFile.readUInt32BE(20) >= 112);
+check("logo has no alpha channel — it is the emblem on white, as Google previews it",
+  logoFile[25], 2);
+ok("logo is not the share flyer with the handle and URL printed on it",
+  !String(org.logo).includes("logo_illustrated"));
+
+console.log("\n=== FAVICON ===");
+
+// Google: square, larger than 48x48 recommended, crawlable at a stable URL.
+// app/icon.png is Next's file convention — the file IS the declared icon, so
+// the file is what is checked. public/favicon.ico is served at /favicon.ico for
+// consumers that request it blind, but deliberately NOT in app/: Next would
+// then declare it as a second rel=icon, sized by its first entry (16x16), and a
+// search engine choosing between declared icons could take the smallest.
+const icon = fs.readFileSync("app/icon.png");
+check("icon.png is a PNG", icon.subarray(1, 4).toString(), "PNG");
+check("icon.png is square", icon.readUInt32BE(16), icon.readUInt32BE(20));
+ok("icon.png is larger than 48x48, as Google recommends", icon.readUInt32BE(16) > 48);
+const ico = fs.readFileSync("public/favicon.ico");
+check("favicon.ico is an ICO (reserved 0, type 1)", [ico.readUInt16LE(0), ico.readUInt16LE(2)], [0, 1]);
+const icoSizes = Array.from({ length: ico.readUInt16LE(4) }, (_, i) => ico[6 + 16 * i]);
+check("favicon.ico carries 16, 32 and 48", icoSizes, [16, 32, 48]);
+ok("favicon.ico is not in app/, where Next would declare it as a 16x16 rel=icon",
+  !fs.existsSync("app/favicon.ico"));
+const countrySrc = fs.readFileSync("lib/country.ts", "utf8");
+ok("both stay outside the market redirect",
+  countrySrc.includes('"/favicon.ico"') && countrySrc.includes('"/icon.png"'));
 check("email is the customer address", org.email, "hello@thewovenne.com");
 check("telephone", org.telephone, "+91 7736749305");
 check("address is the confirmed trading address", org.address, {
