@@ -14,23 +14,20 @@
  *   node scripts/reset-admin-mfa.mjs --delete             # remove them all
  *   node scripts/reset-admin-mfa.mjs --email a@b.com      # a different user
  *
- * Reads NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from .env.local.
+ * Reads NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from .env.local
+ * (production: needs --production) or --env-file=<path>.
  * The service role key bypasses RLS — never expose this script to the browser.
  */
-import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
+import { loadScriptEnv } from "./lib/scriptEnv.mjs";
 
-for (const line of readFileSync(new URL("../.env.local", import.meta.url), "utf8").split("\n")) {
-  const i = line.indexOf("=");
-  if (i > 0 && !line.trim().startsWith("#")) {
-    process.env[line.slice(0, i).trim()] ??= line.slice(i + 1).trim();
-  }
-}
+// Refuses production unless --production was passed — see scripts/lib/scriptEnv.mjs.
+loadScriptEnv();
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!url || !key) {
-  console.error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.local");
+  console.error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in the env file");
   process.exit(1);
 }
 

@@ -1,7 +1,10 @@
 # Database
 
-Ordered migrations. Run them **in number order** in the Supabase SQL editor
-(Project → SQL Editor → New query): open a file, Select All, paste, Run.
+Ordered migrations, applied with `scripts/run-migration.mjs`: staging first
+(`--env-file=.env.staging`), then production, which needs `--production`. A
+fresh staging project gets all of them from `node scripts/staging.mjs
+bootstrap`. See `docs/staging.md`. (Originally they were run in number order in
+the Supabase SQL editor, as described below.)
 
 | File | What it does |
 |---|---|

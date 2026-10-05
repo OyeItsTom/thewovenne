@@ -1,4 +1,12 @@
 import { withSentryConfig } from "@sentry/nextjs";
+import { assertAppEnvironment } from "./lib/envSafety.mjs";
+
+// A Preview (or any declared non-production) build configured with the
+// production Supabase project fails here, before anything is compiled. The
+// public URL and anon key are inlined into the client bundle at build time, so
+// this is the check that actually decides what a deployment talks to.
+// See lib/envSafety.mjs and docs/staging.md.
+assertAppEnvironment(process.env);
 
 // Sentry is fully optional: it only turns on when a *real* DSN is configured
 // (a URL, not the "your-sentry-dsn" placeholder from .env.local.example). With

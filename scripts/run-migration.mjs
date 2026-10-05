@@ -1,7 +1,12 @@
 /**
  * Apply one migration file to the database named by SUPABASE_DB_URL.
  *
- *   node scripts/run-migration.mjs supabase/migrations/0044_whatever.sql
+ *   node scripts/run-migration.mjs supabase/migrations/0044_whatever.sql --env-file=.env.staging
+ *   node scripts/run-migration.mjs supabase/migrations/0044_whatever.sql --production
+ *
+ * PRODUCTION NEEDS --production. With the default .env.local (which names the
+ * production project) and no flag, nothing is run and the exit status is 2.
+ * Apply to staging first; then to production, deliberately.
  *
  * Runs the whole file in ONE transaction: a migration that fails halfway is
  * the worst outcome available, because everything after it is then written
@@ -21,27 +26,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import pg from "pg";
+import { loadScriptEnv } from "./lib/scriptEnv.mjs";
 
 const args = process.argv.slice(2);
 const force = args.includes("--force");
-const file = args.find((a) => !a.startsWith("--"));
+const file = args.find((a, i) => !a.startsWith("--") && !["--env-file", "--env"].includes(args[i - 1]));
 if (!file) {
-  console.error("usage: node scripts/run-migration.mjs <path-to-sql> [--force]");
+  console.error("usage: node scripts/run-migration.mjs <path-to-sql> [--env-file=<path>] [--production] [--force]");
   process.exit(1);
 }
 
-const env = Object.fromEntries(
-  fs.readFileSync(".env.local", "utf8")
-    .split("\n")
-    .filter((l) => l.trim() && !l.trim().startsWith("#") && l.includes("="))
-    .map((l) => {
-      const i = l.indexOf("=");
-      return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^["']|["']$/g, "")];
-    })
-);
+// Refuses production unless --production was passed — see scripts/lib/scriptEnv.mjs.
+const env = loadScriptEnv({ argv: args });
 
 if (!env.SUPABASE_DB_URL) {
-  console.error("SUPABASE_DB_URL is not set in .env.local");
+  console.error("SUPABASE_DB_URL is not set in the env file");
   process.exit(1);
 }
 

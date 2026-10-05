@@ -62,6 +62,7 @@ import {
   type OrphanManifest,
 } from "../lib/imageOrphans";
 import { enumerateAllObjects, type StorageEntry } from "../lib/storagePrefixes";
+import { guardProcessEnv } from "./lib/scriptEnv.mjs";
 
 const BUCKET = "product-images";
 const LEDGER_DIR = "reports/c5-orphan-delete";
@@ -256,6 +257,7 @@ class C5Stopped extends Error {
 /* ──────────────────────────────── entry point ──────────────────────────── */
 
 async function main() {
+  guardProcessEnv(); // production needs --production — see scripts/lib/scriptEnv.mjs
   const { batchId, manifestPath } = assertC5Flags(process.argv.slice(2));
 
   /* ── manifest integrity, before any network call ── */

@@ -25,16 +25,9 @@
  */
 import fs from "node:fs";
 import pg from "pg";
+import { loadScriptEnv } from "./lib/scriptEnv.mjs";
 
-const env = Object.fromEntries(
-  fs.readFileSync(".env.local", "utf8")
-    .split("\n")
-    .filter((l) => l.trim() && !l.trim().startsWith("#") && l.includes("="))
-    .map((l) => {
-      const i = l.indexOf("=");
-      return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^["']|["']$/g, "")];
-    })
-);
+const env = loadScriptEnv(); // refuses production without --production
 
 /** slug -> the value the audit log says was erased. */
 const RESTORE = [

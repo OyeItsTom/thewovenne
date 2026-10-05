@@ -62,6 +62,7 @@ import {
   type VersionRow,
   type Visibility,
 } from "../lib/imageVisibility";
+import { guardProcessEnv } from "./lib/scriptEnv.mjs";
 
 /** The planner's required batch-id flag; the executor's lives in EXECUTE_FLAGS. */
 const BATCH_ID_FLAG = "--batch-id";
@@ -548,6 +549,7 @@ function countByTable(applied: Array<{ table: string }>): Record<string, number>
 async function main() {
   const argv = process.argv.slice(2);
   if (argv.includes("--execute")) {
+    guardProcessEnv(); // production needs --production — see scripts/lib/scriptEnv.mjs
     const { batchId, manifestPath } = assertExecuteFlags(argv);
     await execute(batchId, manifestPath);
     return;

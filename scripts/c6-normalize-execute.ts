@@ -71,6 +71,7 @@ import {
 } from "../lib/imageNormalize";
 import { ImageReferenceGraph, type TableRows } from "../lib/imageReferences";
 import { enumerateAllObjects, type StorageEntry } from "../lib/storagePrefixes";
+import { guardProcessEnv } from "./lib/scriptEnv.mjs";
 
 const BUCKET = "product-images";
 const LEDGER_DIR = "reports/c6-normalize";
@@ -211,6 +212,7 @@ class C6Stopped extends Error {
 /* ──────────────────────────────── entry point ──────────────────────────── */
 
 async function main() {
+  guardProcessEnv(); // production needs --production — see scripts/lib/scriptEnv.mjs
   const { batchId, manifestPath } = assertC6Flags(process.argv.slice(2));
 
   /* ── manifest integrity, before any network call ── */

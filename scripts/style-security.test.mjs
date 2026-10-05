@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import pg from "pg";
+import { loadScriptEnv } from "./lib/scriptEnv.mjs";
 /**
  * The rules that decide whose photograph appears on a public page.
  *
@@ -9,7 +10,7 @@ import pg from "pg";
  *
  *   node scripts/style-security.test.mjs
  */
-const env=Object.fromEntries(fs.readFileSync(".env.local","utf8").split("\n").filter(l=>l.trim()&&!l.trim().startsWith("#")&&l.includes("=")).map(l=>{const i=l.indexOf("=");return[l.slice(0,i).trim(),l.slice(i+1).trim().replace(/^["']|["']$/g,"")]}));
+const env = loadScriptEnv(); // refuses production without --production
 const c=new pg.Client({connectionString:env.SUPABASE_DB_URL, ssl:{rejectUnauthorized:false}});
 let ok=0,bad=0; const t=(n,p,d="")=>{console.log(`  ${p?"PASS":"FAIL"}  ${n}${d?"  — "+d:""}`);p?ok++:bad++;};
 const sp=async(label,fn)=>{await c.query(`savepoint ${label}`);try{const r=await fn();await c.query(`release savepoint ${label}`);return{ok:true,r};}catch(e){await c.query(`rollback to savepoint ${label}`);return{ok:false,e:e.message};}};

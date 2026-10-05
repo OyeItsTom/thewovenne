@@ -19,23 +19,21 @@
  * Prints the temporary password once. Share it over something better than
  * email or chat, and have them change it at /admin/account after first login.
  *
- * Reads credentials from .env.local. The service role key bypasses RLS.
+ * Reads credentials from .env.local, or --env-file=<path>. Production (which
+ * .env.local names) needs --production; staging is --env-file=.env.staging.
+ * The service role key bypasses RLS.
  */
-import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { loadScriptEnv } from "./lib/scriptEnv.mjs";
 
-for (const line of readFileSync(new URL("../.env.local", import.meta.url), "utf8").split("\n")) {
-  const i = line.indexOf("=");
-  if (i > 0 && !line.trim().startsWith("#")) {
-    process.env[line.slice(0, i).trim()] ??= line.slice(i + 1).trim();
-  }
-}
+// Refuses production unless --production was passed — see scripts/lib/scriptEnv.mjs.
+loadScriptEnv();
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!url || !key) {
-  console.error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.local");
+  console.error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in the env file");
   process.exit(1);
 }
 
@@ -151,6 +149,6 @@ console.log(`Granted admin (profiles.is_admin = true)\n`);
 console.log(`  Email:              ${email}`);
 console.log(`  Temporary password: ${password}\n`);
 console.log("They should:");
-console.log("  1. Sign in at https://www.thewovenne.com/admin/login");
+console.log(`  1. Sign in at ${process.env.NEXT_PUBLIC_SITE_URL || "https://www.thewovenne.com"}/admin/login`);
 console.log("  2. Enrol their own authenticator when prompted (their phone, not yours)");
 console.log("  3. Change this password at /admin/account\n");

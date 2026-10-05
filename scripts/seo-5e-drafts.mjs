@@ -40,6 +40,7 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
+import { loadScriptEnv } from "./lib/scriptEnv.mjs";
 
 /** This project, and no other. */
 const EXPECTED_PROJECT_REF = "wxumlixnmwgeqswknhpw";
@@ -244,18 +245,7 @@ async function main() {
   const asFlag = process.argv.indexOf("--as");
   const AS_EMAIL = asFlag !== -1 ? process.argv[asFlag + 1] : "";
   if (!AS_EMAIL || AS_EMAIL.startsWith("--")) throw new Error("pass --as <your admin email>");
-  const envFlag = process.argv.indexOf("--env");
-  const ENV_PATH = envFlag !== -1 ? process.argv[envFlag + 1] : ".env.local";
-  if (!fs.existsSync(ENV_PATH)) throw new Error(`no env file at ${ENV_PATH}. Pass --env <path>`);
-  const env = Object.fromEntries(
-    fs.readFileSync(ENV_PATH, "utf8")
-      .split("\n")
-      .filter((l) => l.trim() && !l.trim().startsWith("#") && l.includes("="))
-      .map((l) => {
-        const i = l.indexOf("=");
-        return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^["']|["']$/g, "")];
-      })
-  );
+  const env = loadScriptEnv(); // refuses production without --production
   if (!(env.NEXT_PUBLIC_SUPABASE_URL ?? "").includes(EXPECTED_PROJECT_REF)) {
     throw new Error(`this is not the Wovenne project (${EXPECTED_PROJECT_REF})`);
   }

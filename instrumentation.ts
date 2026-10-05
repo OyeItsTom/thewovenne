@@ -6,6 +6,12 @@ const sentryEnabled =
   isDsn(process.env.SENTRY_DSN) || isDsn(process.env.NEXT_PUBLIC_SENTRY_DSN);
 
 export async function register() {
+  // The build already refused a non-production deployment pointed at the
+  // production database; this is the same rule at server start, for a process
+  // whose runtime env differs from the one it was built with.
+  const { assertAppEnvironment } = await import("./lib/envSafety.mjs");
+  assertAppEnvironment(process.env);
+
   if (!sentryEnabled) return;
   if (process.env.NEXT_RUNTIME === "nodejs") {
     await import("./sentry.server.config");

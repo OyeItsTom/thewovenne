@@ -58,6 +58,7 @@ import {
 } from "../lib/imageDeletion";
 import { NORMALIZER_VERSION } from "../lib/imageNormalize";
 import { ImageReferenceGraph, type TableRows } from "../lib/imageReferences";
+import { guardProcessEnv } from "./lib/scriptEnv.mjs";
 
 const BUCKET = "product-images";
 const LEDGER_DIR = "reports/image-backfill";
@@ -183,6 +184,7 @@ class DeletionStopped extends Error {
 }
 
 async function main() {
+  guardProcessEnv(); // production needs --production — see scripts/lib/scriptEnv.mjs
   const argv = process.argv.slice(2);
   const { batchId, manifestPath } = assertDeleteFlags(argv);
 

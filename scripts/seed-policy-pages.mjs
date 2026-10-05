@@ -39,6 +39,7 @@
  */
 import fs from "node:fs";
 import pg from "pg";
+import { envFilePath, loadScriptEnv } from "./lib/scriptEnv.mjs";
 
 const APPLY = process.argv.includes("--apply");
 
@@ -104,22 +105,7 @@ const BODIES = {
 };
 
 // ── env ──────────────────────────────────────
-const envFlag = process.argv.indexOf("--env");
-const ENV_PATH = envFlag !== -1 ? process.argv[envFlag + 1] : ".env.local";
-if (!fs.existsSync(ENV_PATH)) {
-  console.error(`\n  ERROR: no env file at ${ENV_PATH}. Pass --env <path/to/.env.local>\n`);
-  process.exit(1);
-}
-
-const env = Object.fromEntries(
-  fs.readFileSync(ENV_PATH, "utf8")
-    .split("\n")
-    .filter((l) => l.trim() && !l.trim().startsWith("#") && l.includes("="))
-    .map((l) => {
-      const i = l.indexOf("=");
-      return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^["']|["']$/g, "")];
-    })
-);
+const env = loadScriptEnv(); // refuses production without --production
 
 let failed = 0;
 const fail = (msg) => { console.error(`\n  REFUSING: ${msg}\n`); failed++; };
@@ -155,14 +141,14 @@ async function main() {
       `this is not the Wovenne project — NEXT_PUBLIC_SUPABASE_URL does not contain ${EXPECTED_PROJECT_REF}`
     );
   }
-  if (!env.SUPABASE_DB_URL) throw new Error("SUPABASE_DB_URL is not set in .env.local");
+  if (!env.SUPABASE_DB_URL) throw new Error("SUPABASE_DB_URL is not set in the env file");
 
   await client.connect();
   await client.query("begin");
 
   console.log(`\n  MODE: ${APPLY ? "APPLY — drafts will be COMMITTED" : "DRY RUN — everything is rolled back"}`);
   console.log(`  project: ${EXPECTED_PROJECT_REF}`);
-  console.log(`  env    : ${ENV_PATH}\n`);
+  console.log(`  env    : ${envFilePath(process.argv.slice(2))}\n`);
 
   // ── borrow an admin claim, exactly as cancel-guard.verify.mjs does ──
   const { rows: admins } = await client.query(
