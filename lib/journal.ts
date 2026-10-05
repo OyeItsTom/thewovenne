@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import type { JournalPost } from "./types";
 import { ANON_CTX, preferDraft, statesFor, type ReadCtx } from "./readCtx";
+import { factsFromVersions } from "./adminStatus";
 
 /**
  * Journal reads come from PUBLISHED versions. Two different "published" are in
@@ -86,28 +87,41 @@ export async function getPostBySlug(
 /**
  * Every post for the admin list, with drafts superseding their published
  * counterparts. Includes unpublished posts, which the storefront never sees.
+ *
+ * Each post carries where it stands (lib/adminStatus), read from BOTH
+ * versions — the merged row's `published` flag is the draft's, not what
+ * customers see. Throws on a failed read: its only caller is the Journal
+ * screen, where an empty list would say "No journal posts yet".
  */
 export async function getAdminPosts(
   client: SupabaseClient = supabase
 ): Promise<JournalPost[]> {
   const { data, error } = await client
     .from("journal_versions")
-    .select(`${JOURNAL_SELECT}, state`)
+    .select(`${JOURNAL_SELECT}, state, pending_delete`)
     .in("state", ["published", "draft"])
     .order("created_at", { ascending: false });
 
   if (error) {
     console.error("getAdminPosts:", error.message);
-    return [];
+    throw new Error(error.message);
   }
 
-  const rows = (data as unknown as (JournalVersionRow & { state: string })[]) ?? [];
-  const byPost = new Map<string, JournalVersionRow & { state: string }>();
+  type Row = JournalVersionRow & { state: string; pending_delete: boolean | null };
+  const rows = (data as unknown as Row[]) ?? [];
+  const byPost = new Map<string, Row>();
+  const versions = new Map<string, { state: string; pending_delete: boolean; visible: boolean }[]>();
   for (const row of rows) {
     const seen = byPost.get(row.journal_id);
     if (!seen || row.state === "draft") byPost.set(row.journal_id, row);
+    const list = versions.get(row.journal_id) ?? [];
+    list.push({ state: row.state, pending_delete: !!row.pending_delete, visible: !!row.published });
+    versions.set(row.journal_id, list);
   }
-  return [...byPost.values()].map(mapPost);
+  return [...byPost.values()].map((r) => ({
+    ...mapPost(r),
+    publication: factsFromVersions(versions.get(r.journal_id) ?? []),
+  }));
 }
 
 /** Post ids with unpublished changes. */

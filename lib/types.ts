@@ -86,6 +86,24 @@ export interface Product {
    * shows no image navigation at all.
    */
   images?: string[];
+  /** Admin only: where this product stands (lib/adminStatus). Never on a storefront payload. */
+  publication?: PublicationFacts;
+}
+
+/**
+ * Where an admin-listed item stands in draft/publish (migration 0011), read
+ * from its versions rather than from the merged row — whose on/off flag is the
+ * DRAFT's, not what customers see. See lib/adminStatus.
+ */
+export interface PublicationFacts {
+  /** A published version exists. False = never published. */
+  hasPublished: boolean;
+  /** A draft version exists (unpublished work). */
+  hasDraft: boolean;
+  /** The draft deletes the item at the next publish. */
+  pendingDelete: boolean;
+  /** The PUBLISHED version's own on/off flag is on. */
+  liveVisible: boolean;
 }
 
 /** Exact public payload required by ProductCard and product URL construction. */
@@ -170,6 +188,8 @@ export interface JournalPost {
   image_url: string | null;
   published: boolean;
   created_at: string;
+  /** Admin only (getAdminPosts): where this post stands. */
+  publication?: PublicationFacts;
 }
 
 // Editable homepage content (site_content table, keyed JSON).

@@ -9,6 +9,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import Image from "next/image";
@@ -20,7 +21,8 @@ import { getBrowserSupabase } from "@/lib/supabase";
 import { youtubeId } from "@/lib/youtube";
 import { getAllCategories } from "@/lib/categories";
 import { getDraftProductImages } from "@/lib/products";
-import { newProductDraft, productDraftId, settleDraft } from "@/lib/drafts";
+import { newProductDraft, productDraftId, settleDraft, updateDraftVersion } from "@/lib/drafts";
+import { adminErrorMessage, draftSavedMessage, isDirty } from "@/lib/adminStatus";
 import { setProductStock, type LoadedSize } from "@/lib/inventory";
 import { uploadProductImage } from "@/lib/storage";
 import {
@@ -128,9 +130,13 @@ export default function ProductModal({
   onClose: () => void;
   /** Present = edit that product; absent/null = create a new one. */
   product?: Product | null;
-  onSaved: (product: Product, isNew: boolean) => void;
+  /** `message` says what the save did — always a draft, never "published". */
+  onSaved: (product: Product, isNew: boolean, message: string) => void;
 }) {
   const isEdit = !!product;
+  // Whether customers can see SOME version of this product right now. A new
+  // product, or one that was never published, has nothing live to fall back to.
+  const hasPublished = isEdit && (product!.publication?.hasPublished ?? true);
 
   const [form, setForm] = useState<FormState>(emptyForm);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -161,6 +167,17 @@ export default function ProductModal({
   const [otherProducts, setOtherProducts] = useState<ContentInput["otherProducts"]>([]);
   const [ignoredFindings, setIgnoredFindings] = useState<Set<string>>(new Set());
   const [checkOpen, setCheckOpen] = useState(false);
+
+  // ── Unsaved changes ──
+  // What each part of the form held when it finished loading. null = still
+  // loading, which never counts as a change (lib/adminStatus isDirty), so the
+  // photos or sizes arriving late cannot trigger a warning on their own.
+  const [baseForm, setBaseForm] = useState<FormState | null>(null);
+  const [baseImages, setBaseImages] = useState<string[] | null>(null);
+  const [baseSizes, setBaseSizes] = useState<SizeDraft[] | null>(null);
+  const [baseSub, setBaseSub] = useState<string | null>(null);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const keepEditingRef = useRef<HTMLButtonElement>(null);
 
   // Shows the admin the actual outcome before saving, using the same function
   // the storefront renders with, so the preview cannot disagree with the site.
@@ -215,11 +232,15 @@ export default function ProductModal({
     if (!product?.id) {
       setSizes([]);
       setLoadedSizes([]);
+      setBaseSizes([]);
       return;
     }
+    setBaseSizes(null);
     void getProductSizes(product.id, getBrowserSupabase()).then((rows) => {
-      setLoadedSizes(rows.map((r) => ({ id: r.id, label: r.label, stock_quantity: r.stock_quantity })));
-      setSizes(rows.map((r) => ({ id: r.id, label: r.label, stock_quantity: r.stock_quantity })));
+      const loaded = rows.map((r) => ({ id: r.id, label: r.label, stock_quantity: r.stock_quantity }));
+      setLoadedSizes(loaded);
+      setSizes(loaded);
+      setBaseSizes(loaded);
     });
   }, [isOpen, product?.id]);
 
@@ -254,7 +275,11 @@ export default function ProductModal({
     // In edit mode the slug is already published, so it must never be silently
     // rewritten by editing the name.
     setSlugTouched(isEdit);
-    setForm(product ? formFromProduct(product) : emptyForm);
+    const opening = product ? formFromProduct(product) : emptyForm;
+    setForm(opening);
+    setBaseForm(opening);
+    setConfirmClose(false);
+    setBaseSub(null);
 
     loadCategories().then((cats) => {
       const current = product?.category_id
@@ -262,6 +287,7 @@ export default function ProductModal({
         : undefined;
       setSubCategoryId(current?.id ?? "");
       setParentId(current?.parent_id ?? "");
+      setBaseSub(current?.id ?? "");
     });
 
     // Slugs must be unique among published AND draft versions — a draft slug
@@ -281,15 +307,62 @@ export default function ProductModal({
       });
 
     if (product) {
-      getDraftProductImages(product.id, getBrowserSupabase()).then((urls) =>
+      setBaseImages(null);
+      getDraftProductImages(product.id, getBrowserSupabase()).then((urls) => {
         // Fall back to the cover column if the gallery hasn't been populated,
         // so an existing product never opens looking photo-less.
-        setImages(urls.length ? urls : product.image_url ? [product.image_url] : [])
-      );
+        const opening = urls.length ? urls : product.image_url ? [product.image_url] : [];
+        setImages(opening);
+        setBaseImages(opening);
+      });
     } else {
       setImages([]);
+      setBaseImages([]);
     }
   }, [isOpen, product, isEdit, loadCategories]);
+
+  const dirty =
+    isDirty(baseForm, form) ||
+    isDirty(baseImages, images) ||
+    isDirty(baseSizes, sizes) ||
+    isDirty(baseSub, subCategoryId);
+
+  // Leaving the page (reload, closing the tab, typing a new address) with
+  // edits in the form gets the browser's own "leave site?" question. Only when
+  // something changed — an untouched form never asks.
+  useEffect(() => {
+    if (!isOpen || !dirty) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [isOpen, dirty]);
+
+  // The question takes focus when it appears, on its safe answer.
+  useEffect(() => {
+    if (confirmClose) keepEditingRef.current?.focus();
+  }, [confirmClose]);
+
+  /**
+   * Every way out of the dialog — Close, Escape, the backdrop — comes here.
+   * With nothing changed it just closes. With unsaved edits it asks first;
+   * asking again (a second Escape) keeps the question up rather than throwing
+   * the work away.
+   */
+  const requestClose = () => {
+    if (saving) return;
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    if (confirmClose) {
+      keepEditingRef.current?.focus();
+      return;
+    }
+    setConfirmClose(true);
+  };
 
   const parents = categories.filter((c) => c.parent_id === null);
   const subCategories = categories.filter((c) => c.parent_id === parentId);
@@ -513,33 +586,41 @@ export default function ProductModal({
 
     if (draftError || !versionId) {
       setSaving(false);
-      setError(draftError ?? "Could not start a draft for this product.");
+      setError(adminErrorMessage(draftError, "start a draft for this product"));
       return;
     }
 
     // Stock is NOT part of an existing product's draft: a draft is content, and
     // publishing it never changes what is on the shelf (0060). A new product's
     // figure is its opening stock, which goes live when it is first published.
-    const { data, error: saveError } = await client
-      .from("product_versions")
-      .update(
-        isEdit
-          ? payload
-          : { ...payload, is_active: true, stock_quantity: Number(form.stock_quantity) || 0 }
-      )
-      .eq("id", versionId)
-      .select("product_id, name, slug, description, price_inr, cost_price_inr, sku, video_youtube_id, heritage_note, craft_note, care_note, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at")
-      .single();
+    //
+    // Verified: saved only if exactly one DRAFT row changed. A draft published
+    // or discarded by someone else in the meantime is refused, not overwritten
+    // — and never confused with the live version.
+    const saved = await updateDraftVersion<Record<string, unknown> & { product_id: string }>(
+      client,
+      "product_versions",
+      versionId,
+      isEdit
+        ? payload
+        : { ...payload, is_active: true, stock_quantity: Number(form.stock_quantity) || 0 },
+      {
+        select:
+          "product_id, name, slug, description, price_inr, cost_price_inr, sku, video_youtube_id, heritage_note, craft_note, care_note, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at",
+        action: "save this draft",
+      }
+    );
 
-    if (saveError) {
+    if (!saved.ok) {
       setSaving(false);
       setError(
-        saveError.code === "23505"
-          ? "That web address is already used by another product — change the slug."
-          : saveError.message
+        saved.reason === "duplicate"
+          ? "Nothing was saved — that web address is already used by another product. Change the slug and try again."
+          : saved.message
       );
       return;
     }
+    const data = saved.row;
 
     // Rewrite the gallery wholesale: simpler than diffing, and the row count is
     // small. Runs after the product exists so a new product has an id to hang
@@ -554,7 +635,7 @@ export default function ProductModal({
     if (galleryError) {
       setSaving(false);
       setError(
-        `Product saved, but its photos didn't: ${galleryError}. Reopen and try the photos again.`
+        `The details are saved as a draft, but the photos were not. ${adminErrorMessage(galleryError, "save the photos")}`
       );
       return;
     }
@@ -612,7 +693,19 @@ export default function ProductModal({
     // Only now is the save complete — scalars AND photos. Before this point
     // "did anything change?" has no answer, because a photo-only edit leaves
     // every scalar identical.
-    await settleDraft(client, "product", versionId);
+    const settled = await settleDraft(client, "product", versionId);
+
+    // What the admin is told. A save is a DRAFT: the sentence is about what
+    // customers still see, never "published". Stock and sizes are the
+    // exception that went live just now, so they are named when they moved.
+    const stockMoved =
+      isDirty(baseSizes, sizes) ||
+      (isEdit && sizes.length === 0 && typedStock !== product!.stock_quantity);
+    const message =
+      settled && hasPublished && stockMoved
+        ? `Stock for “${form.name}” updated on the shop. No other changes, so nothing is waiting to publish.`
+        : draftSavedMessage({ noun: "product", name: form.name, hasPublished, settled }) +
+          (stockMoved && hasPublished ? " Your stock change is already live on the shop." : "");
 
     // Version rows carry product_id; the table wants the Product shape keyed by
     // the stable id, with the category name resolved locally.
@@ -627,7 +720,8 @@ export default function ProductModal({
         category: cat?.name ?? null,
         category_slug: cat?.slug ?? null,
       },
-      !isEdit
+      !isEdit,
+      message
     );
     onClose();
   };
@@ -637,9 +731,43 @@ export default function ProductModal({
   return (
     <Modal
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={requestClose}
       title={isEdit ? `Edit ${product!.name}` : "Add New Product"}
     >
+      {confirmClose && (
+        <div
+          role="group"
+          aria-labelledby="product-unsaved-question"
+          className="mb-6 rounded-xl border border-terracotta/40 bg-terracotta/10 p-4"
+        >
+          <p id="product-unsaved-question" className="text-sm font-medium text-ink">
+            You have unsaved changes. Close without saving them?
+          </p>
+          <p className="mt-1 text-xs text-ink/70">
+            Nothing in this form has been saved. Customers aren&apos;t affected either way.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-3">
+            <button
+              ref={keepEditingRef}
+              type="button"
+              onClick={() => setConfirmClose(false)}
+              className="rounded-full bg-ink px-4 py-2 text-xs font-medium text-cream hover:bg-ink-light"
+            >
+              Keep editing
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmClose(false);
+                onClose();
+              }}
+              className="rounded-full border border-terracotta-deep px-4 py-2 text-xs font-medium text-terracotta-deep hover:bg-terracotta/10"
+            >
+              Discard changes
+            </button>
+          </div>
+        </div>
+      )}
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Name" required value={form.name} onChange={updateName} />
@@ -1096,7 +1224,10 @@ export default function ProductModal({
             </div>
           )}
 
-          <label className="mt-3 inline-block cursor-pointer rounded-full border border-ink/15 px-4 py-2 text-sm text-ink transition-colors hover:border-terracotta">
+          {/* sr-only, not display:none: a hidden input can't take focus, so
+              the photo upload was unreachable from the keyboard. The ring on
+              the label shows where focus is. */}
+          <label className="mt-3 inline-block cursor-pointer rounded-full border border-ink/15 px-4 py-2 text-sm text-ink transition-colors focus-within:ring-2 focus-within:ring-terracotta focus-within:ring-offset-2 hover:border-terracotta">
             {uploading
               ? "Uploading…"
               : images.length
@@ -1110,7 +1241,7 @@ export default function ProductModal({
               accept="image/jpeg,image/png,image/webp,image/avif,image/gif"
               onChange={handleFile}
               disabled={uploading}
-              className="hidden"
+              className="sr-only"
             />
           </label>
           <p className="mt-1 text-xs text-ink/50">
@@ -1126,7 +1257,7 @@ export default function ProductModal({
             onIgnore={(id) => setIgnoredFindings((prev) => new Set(prev).add(id))}
             onRestoreIgnored={() => setIgnoredFindings(new Set())}
             onUse={acceptSuggestion}
-            saveLabel={isEdit ? "Save Changes" : "Add Product"}
+            saveLabel="Save draft"
           />
         ) : (
           <button
@@ -1138,16 +1269,31 @@ export default function ProductModal({
           </button>
         )}
 
-        {error && <p className="text-sm text-terracotta-dark">{error}</p>}
+        {error && (
+          <p role="alert" className="whitespace-pre-line text-sm text-terracotta-dark">
+            {error}
+          </p>
+        )}
 
-        <Button
-          type="submit"
-          disabled={saving || uploading}
-          size="lg"
-          className="w-full"
-        >
-          {saving ? "Saving…" : isEdit ? "Save Changes" : "Add Product"}
-        </Button>
+        <div>
+          <Button
+            type="submit"
+            disabled={saving || uploading}
+            size="lg"
+            className="w-full"
+            aria-describedby="product-save-meaning"
+          >
+            {saving ? "Saving draft…" : "Save draft"}
+          </Button>
+          {/* What Save does, said where it is pressed. Publishing is a separate
+              step in the bar at the top of the dashboard. */}
+          <p id="product-save-meaning" className="mt-2 text-center text-xs text-ink/70">
+            {dirty && <span className="font-medium text-ink">Unsaved changes · </span>}
+            {hasPublished
+              ? "Saves a draft — customers keep seeing the live version until you publish. Stock and sizes are the exception: they change on the shop as soon as you save."
+              : "Saves a draft — customers can't see this product until you publish it."}
+          </p>
+        </div>
       </form>
     </Modal>
   );
