@@ -9,6 +9,7 @@ import { ANON_CTX, preferDraft, statesFor, type ReadCtx } from "./readCtx";
 import { withinPriceCeiling } from "./pricing";
 import { colourOptions, fabricOptions, matchesColour, matchesFabric } from "./catalogueFacets";
 import { promotable } from "./merchandising";
+import { factsFromVersions } from "./adminStatus";
 import type { Category, Product, ProductListing } from "./types";
 
 // Storefront reads come from PUBLISHED versions, never the identity tables.
@@ -376,7 +377,10 @@ export async function getProductImages(
  * view all products" policy requires is_admin().
  */
 export async function getAdminProducts(
-  client: SupabaseClient = supabase
+  client: SupabaseClient = supabase,
+  // "throw" for the Products screen: an empty list there reads as "No products
+  // yet", which is a lie when the read failed.
+  { onError = "empty" }: { onError?: "empty" | "throw" } = {}
 ): Promise<Product[]> {
   const cats = await categoryMap(client);
   const { data, error } = await client
@@ -387,6 +391,7 @@ export async function getAdminProducts(
 
   if (error) {
     console.error("getAdminProducts:", error.message);
+    if (onError === "throw") throw new Error(error.message);
     return [];
   }
 
@@ -395,10 +400,14 @@ export async function getAdminProducts(
   const rows = (data as unknown as AdminProductRow[]) ?? [];
   const byProduct = new Map<string, AdminProductRow>();
   const liveStock = new Map<string, number>();
+  const versions = new Map<string, { state: string; pending_delete: boolean; visible: boolean }[]>();
   for (const row of rows) {
     const seen = byProduct.get(row.product_id);
     if (!seen || row.state === "draft") byProduct.set(row.product_id, row);
     if (row.state === "published") liveStock.set(row.product_id, row.stock_quantity);
+    const list = versions.get(row.product_id) ?? [];
+    list.push({ state: row.state, pending_delete: !!row.pending_delete, visible: !!row.is_active });
+    versions.set(row.product_id, list);
   }
   // …except stock. A draft's stock is a copy taken when it was opened, and
   // publishing never applies it (migration 0060), so the shelf is the published
@@ -412,7 +421,13 @@ export async function getAdminProducts(
 
   // A product whose only draft deletes it is still live, so it stays listed —
   // marked, not hidden. Hiding it would make the pending deletion invisible.
-  return [...byProduct.values()].map((r) => mapAdminProduct(r, cats));
+  //
+  // Each row also carries where it stands, read from BOTH versions: the merged
+  // row's is_active is the draft's, which is not what customers see.
+  return [...byProduct.values()].map((r) => ({
+    ...mapAdminProduct(r, cats),
+    publication: factsFromVersions(versions.get(r.product_id) ?? []),
+  }));
 }
 
 /** Product ids with unpublished changes — for "not yet live" markers. */

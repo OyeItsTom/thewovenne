@@ -11,14 +11,21 @@ import {
   Trash2,
 } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
-import { getAllCategories, getDraftCategoryIds } from "@/lib/categories";
+import { getAllCategories } from "@/lib/categories";
 import { categoryLiveStatus, type LiveStatus } from "@/lib/categoryStatus";
-import { categoryDraftId, markPendingDelete, newCategoryDraft, settleDraft } from "@/lib/drafts";
+import {
+  categoryDraftId,
+  markPendingDelete,
+  newCategoryDraft,
+  settleDraft,
+  updateDraftVersion,
+} from "@/lib/drafts";
+import { adminErrorMessage, factsFromVersions, deleteConfirmText } from "@/lib/adminStatus";
 import { cn, uniqueSlug } from "@/lib/utils";
-import type { Category } from "@/lib/types";
+import type { Category, PublicationFacts } from "@/lib/types";
 import Button from "@/components/ui/Button";
 import NameEditor from "./NameEditor";
-import DraftBadge from "./DraftBadge";
+import StatusBadges from "./StatusBadges";
 
 export default function CategoryManager({ onChange }: { onChange?: () => void }) {
   const [categories, setCategories] = useState<Category[] | null>(null);
@@ -26,8 +33,11 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [draftIds, setDraftIds] = useState<Set<string>>(new Set());
+  // Where each category stands, read from its versions (lib/adminStatus).
+  const [facts, setFacts] = useState<Map<string, PublicationFacts>>(new Map());
   const [neverPublished, setNeverPublished] = useState<Set<string>>(new Set());
+  // What the last action really did, for the live region.
+  const [notice, setNotice] = useState<string | null>(null);
   const [pageMissing, setPageMissing] = useState<Set<string>>(new Set());
   const [newParentName, setNewParentName] = useState("");
   const [newChild, setNewChild] = useState<{ parentId: string; name: string }>({
@@ -51,15 +61,23 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
     }
     setCounts(tally);
     setCategories(cats);
-    setDraftIds(await getDraftCategoryIds(getBrowserSupabase()));
 
-    // A category with no published version has never reached the site at all.
-    const { data: publishedRows } = await getBrowserSupabase()
+    // Both versions of every category: which are live, which have a draft,
+    // which drafts delete it. A category with no published version has never
+    // reached the site at all.
+    const { data: versionRows } = await getBrowserSupabase()
       .from("category_versions")
-      .select("category_id")
-      .eq("state", "published");
-    const published = new Set((publishedRows ?? []).map((r) => r.category_id as string));
-    setNeverPublished(new Set(cats.filter((c) => !published.has(c.id)).map((c) => c.id)));
+      .select("category_id, state, pending_delete, is_visible")
+      .in("state", ["published", "draft"]);
+    const byCategory = new Map<string, { state: string; pending_delete: boolean; visible: boolean }[]>();
+    for (const r of versionRows ?? []) {
+      const list = byCategory.get(r.category_id as string) ?? [];
+      list.push({ state: r.state as string, pending_delete: !!r.pending_delete, visible: !!r.is_visible });
+      byCategory.set(r.category_id as string, list);
+    }
+    const next = new Map(cats.map((c) => [c.id, factsFromVersions(byCategory.get(c.id) ?? [])]));
+    setFacts(next);
+    setNeverPublished(new Set(cats.filter((c) => !next.get(c.id)?.hasPublished).map((c) => c.id)));
 
     // "Needs a deploy" cannot be inferred — top-level pages are generated at
     // build time. Ask the site whether the page exists rather than guessing.
@@ -86,50 +104,76 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
     (categories ?? []).filter((c) => c.parent_id === id);
   const allSlugs = (categories ?? []).map((c) => c.slug);
 
-  /** Wrap a mutation with busy state + error surfacing + reload. */
-  const run = async (key: string, fn: () => Promise<{ error: unknown }>) => {
+  /**
+   * Wrap a mutation with busy state + error surfacing + reload. `fn` returns a
+   * readable failure, or null when the write really landed — and only then is
+   * `success` shown.
+   */
+  const run = async (
+    key: string,
+    fn: () => Promise<string | null>,
+    success: string | (() => string)
+  ) => {
     setBusy(key);
     setError(null);
-    const { error: opError } = await fn();
-    if (opError) {
-      setError(
-        opError instanceof Error
-          ? opError.message
-          : (opError as { message?: string }).message ?? "Something went wrong."
-      );
+    setNotice(null);
+    let failure: string | null;
+    try {
+      failure = await fn();
+    } catch (err) {
+      failure = adminErrorMessage(err instanceof Error ? err.message : String(err), "save this change");
     }
+    if (failure) setError(failure);
     await load();
     setBusy(null);
-    // Tell the dashboard an edit landed so the publish count re-reads.
-    if (!opError) onChange?.();
+    if (!failure) {
+      setNotice(typeof success === "function" ? success() : success);
+      // Tell the dashboard an edit landed so the publish count re-reads.
+      onChange?.();
+    }
   };
 
   /** Resolve the draft version for a category, then apply a patch to it. */
   const patchDraft = async (
     cat: Category,
     patch: Record<string, unknown>
-  ): Promise<{ error: unknown }> => {
+  ): Promise<string | null> => {
     const client = getBrowserSupabase();
     const { id: versionId, error } = await categoryDraftId(client, cat.id);
     if (error || !versionId) {
-      return { error: { message: error ?? "Could not start a draft." } };
+      return adminErrorMessage(error, `change ${cat.name}`);
     }
-    const result = await client
-      .from("category_versions")
-      .update(patch)
-      .eq("id", versionId);
+    // Verified: only a real change to the DRAFT row counts as saved.
+    const result = await updateDraftVersion(client, "category_versions", versionId, patch, {
+      action: `change ${cat.name}`,
+    });
+    if (!result.ok) return result.message;
 
     // Hiding a section and showing it again is a round trip to nowhere; don't
     // leave it queued as a change.
-    if (!result.error) await settleDraft(client, "category", versionId);
-    return result;
+    await settleDraft(client, "category", versionId);
+    return null;
   };
 
+  /** "…when you publish", said in terms of what customers see meanwhile. */
+  const untilPublish = (cat: Category) =>
+    facts.get(cat.id)?.hasPublished === false
+      ? "It isn't on the site yet — customers see nothing until you publish it."
+      : "Customers see the current live version until you publish.";
+
   const toggleVisible = (cat: Category) =>
-    run(cat.id, () => patchDraft(cat, { is_visible: !cat.is_visible }));
+    run(
+      cat.id,
+      () => patchDraft(cat, { is_visible: !cat.is_visible }),
+      () => `${cat.name} will be ${cat.is_visible ? "hidden" : "visible"} after you publish. ${untilPublish(cat)}`
+    );
 
   const rename = (cat: Category, name: string) =>
-    run(cat.id, () => patchDraft(cat, { name }));
+    run(
+      cat.id,
+      () => patchDraft(cat, { name }),
+      () => `Renamed to “${name}” in the draft. ${untilPublish(cat)}`
+    );
 
   /** Swap sort_order with the adjacent sibling so ordering is stable. */
   const move = (cat: Category, direction: -1 | 1) => {
@@ -138,25 +182,35 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
     const swapWith = siblings[index + direction];
     if (!swapWith) return;
 
-    return run(cat.id, async () => {
-      const a = await patchDraft(cat, { sort_order: swapWith.sort_order });
-      if (a.error) return a;
-      return patchDraft(swapWith, { sort_order: cat.sort_order });
-    });
+    return run(
+      cat.id,
+      async () => {
+        const a = await patchDraft(cat, { sort_order: swapWith.sort_order });
+        if (a) return a;
+        return patchDraft(swapWith, { sort_order: cat.sort_order });
+      },
+      `Moved ${cat.name} in the draft order. Customers see the current order until you publish.`
+    );
   };
 
   // Staged, not immediate: the section stays live until the next publish.
   const remove = (cat: Category) =>
-    run(cat.id, async () => {
-      setConfirmDelete(null);
-      const client = getBrowserSupabase();
-      const { id: versionId, error } = await categoryDraftId(client, cat.id);
-      if (error || !versionId) {
-        return { error: { message: error ?? "Could not stage this deletion." } };
-      }
-      const message = await markPendingDelete(client, "category_versions", versionId);
-      return { error: message ? { message } : null };
-    });
+    run(
+      cat.id,
+      async () => {
+        setConfirmDelete(null);
+        const client = getBrowserSupabase();
+        const { id: versionId, error } = await categoryDraftId(client, cat.id);
+        if (error || !versionId) {
+          return adminErrorMessage(error, `stage the deletion of ${cat.name}`);
+        }
+        return markPendingDelete(client, "category_versions", versionId);
+      },
+      () =>
+        facts.get(cat.id)?.hasPublished === false
+          ? `${cat.name} will be removed when you next publish. It was never published, so customers aren't affected.`
+          : `${cat.name} will be deleted when you publish. It stays on the site until then.`
+    );
 
   const addCategory = async (name: string, parentId: string | null) => {
     const slug = uniqueSlug(name, allSlugs);
@@ -169,18 +223,23 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
       ? Math.max(...siblings.map((c) => c.sort_order)) + 1
       : 1;
 
-    await run("new", async () => {
-      // New sections start hidden AND unpublished — two independent gates, so a
-      // half-built section cannot reach the site by either route.
-      const { error } = await newCategoryDraft(
-        getBrowserSupabase(),
-        name.trim(),
-        slug,
-        parentId,
-        sort_order
-      );
-      return { error: error ? { message: error } : null };
-    });
+    await run(
+      "new",
+      async () => {
+        // New sections start hidden AND unpublished — two independent gates, so a
+        // half-built section cannot reach the site by either route.
+        const { id, error } = await newCategoryDraft(
+          getBrowserSupabase(),
+          name.trim(),
+          slug,
+          parentId,
+          sort_order
+        );
+        if (error) return adminErrorMessage(error, `add ${name.trim()}`);
+        return id ? null : adminErrorMessage(null, `add ${name.trim()}`);
+      },
+      `Added “${name.trim()}” as a hidden draft. Customers can't see it until you make it visible and publish.`
+    );
   };
 
   const handleAddParent = (e: FormEvent) => {
@@ -210,10 +269,13 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
       </p>
 
       {error && (
-        <p className="rounded-lg bg-terracotta/10 px-4 py-3 text-sm text-terracotta-dark">
+        <p role="alert" className="rounded-lg bg-terracotta/10 px-4 py-3 text-sm text-terracotta-dark">
           {error}
         </p>
       )}
+      <p role="status" className={notice ? "rounded-lg bg-linen/70 px-4 py-3 text-sm text-ink" : "sr-only"}>
+        {notice}
+      </p>
 
       <div className="space-y-4">
         {parents.map((parent, pIndex) => {
@@ -225,7 +287,7 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
             >
               <Row
                 cat={parent}
-                isDraft={draftIds.has(parent.id)}
+                facts={facts.get(parent.id)}
                 status={categoryLiveStatus(parent, {
                   all: categories ?? [],
                   productCounts: counts,
@@ -253,7 +315,7 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
                   <Row
                     key={child.id}
                     cat={child}
-                    isDraft={draftIds.has(child.id)}
+                    facts={facts.get(child.id)}
                     status={categoryLiveStatus(child, {
                       all: categories ?? [],
                       productCounts: counts,
@@ -323,7 +385,7 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
 
 function Row({
   cat,
-  isDraft = false,
+  facts,
   status,
   productCount,
   effectivelyVisible,
@@ -342,7 +404,7 @@ function Row({
   onConfirmDelete,
 }: {
   cat: Category;
-  isDraft?: boolean;
+  facts?: PublicationFacts;
   status?: LiveStatus;
   productCount: number;
   effectivelyVisible: boolean;
@@ -373,18 +435,33 @@ function Row({
           onSave={onRename}
           className={isParent ? "font-heading text-lg" : "text-sm"}
         />
-        {isDraft && (
-          <span className="ml-2 align-middle">
-            <DraftBadge />
+        {facts && (
+          <StatusBadges
+            // With no draft, the status below describes the live section too,
+            // so a published, switched-on section that the shop still drops
+            // (no products, hidden parent) must not read "Live".
+            facts={!facts.hasDraft && status && !status.live ? { ...facts, liveVisible: false } : facts}
+            noun="category"
+            className="ml-2 align-middle"
+          />
+        )}
+        {facts?.hasPublished && !facts.pendingDelete && cat.is_visible !== facts.liveVisible && (
+          <span className="ml-2 align-middle text-xs text-ink/70">
+            {cat.is_visible ? "Visible after you publish" : "Hidden after you publish"}
           </span>
         )}
-        <p className="mt-0.5 text-xs text-ink/40">
+        <p className="mt-0.5 text-xs text-ink/60">
           /{cat.slug} · {productCount} {productCount === 1 ? "product" : "products"}
         </p>
-        {status && !status.live && (
+        {/* The status is worked out from the DRAFT's settings. With changes
+            waiting, it describes the site after publishing — so it says so,
+            instead of claiming the live section is already off the site. */}
+        {status && !status.live && !facts?.pendingDelete && (
           <p className="mt-1 text-xs text-terracotta-dark">
-            <span className="font-medium">Not on the site — {status.reason}.</span>{" "}
-            <span className="text-ink/60">{status.fix}</span>
+            <span className="font-medium">
+              {facts?.hasDraft && facts.hasPublished ? "After you publish: not on the site" : "Not on the site"} — {status.reason}.
+            </span>{" "}
+            <span className="text-ink/70">{status.fix}</span>
           </p>
         )}
       </div>
@@ -392,6 +469,7 @@ function Row({
       <button
         onClick={onToggle}
         disabled={busy}
+        aria-label={`${cat.name} is ${effectivelyVisible ? "visible" : "hidden"} in the draft. ${cat.is_visible ? "Hide" : "Show"} it — takes effect when you publish`}
         className={cn(
           "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium uppercase tracking-wider transition-colors disabled:opacity-50",
           effectivelyVisible
@@ -429,25 +507,31 @@ function Row({
       </div>
 
       {confirming ? (
-        <div className="flex items-center gap-2 text-xs">
+        <div
+          role="group"
+          aria-label={`Confirm deleting ${cat.name}`}
+          className="flex w-full flex-wrap items-center gap-2 text-xs sm:w-auto sm:max-w-md"
+        >
           <span className="text-terracotta-dark">
+            {deleteConfirmText("category", cat.name, facts?.hasPublished ?? true)}
             {isParent && childCount > 0
-              ? `Deletes ${childCount} sub-categor${childCount === 1 ? "y" : "ies"} too.`
+              ? ` Its ${childCount} sub-categor${childCount === 1 ? "y goes" : "ies go"} too.`
               : productCount > 0
-                ? `${productCount} product${productCount === 1 ? "" : "s"} will be left uncategorised and hidden.`
-                : "Delete?"}
+                ? ` Its ${productCount} product${productCount === 1 ? "" : "s"} will be left uncategorised and hidden from customers.`
+                : ""}
           </span>
           <button
+            type="button"
             onClick={onConfirmDelete}
-            className="rounded-full bg-terracotta px-3 py-1 font-medium text-cream"
+            className="rounded-full bg-terracotta-deep px-3 py-1 font-medium text-cream"
           >
-            Delete
+            Delete at publish
           </button>
-          <button onClick={onCancelDelete} className="text-ink/50 hover:text-ink">
+          <button type="button" autoFocus onClick={onCancelDelete} className="text-ink/70 hover:text-ink">
             Cancel
           </button>
         </div>
-      ) : (
+      ) : facts?.pendingDelete ? null : (
         <button
           onClick={onAskDelete}
           disabled={busy}

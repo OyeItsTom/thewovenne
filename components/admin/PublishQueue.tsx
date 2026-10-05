@@ -10,6 +10,7 @@ import {
   type QueueItem,
   type DraftKind,
 } from "@/lib/drafts";
+import { adminErrorMessage, discardOneText, publishedMessage } from "@/lib/adminStatus";
 
 /**
  * The pre-flight review before publishing.
@@ -103,6 +104,11 @@ function show(v: unknown): string {
   return j.length > 80 ? `${j.slice(0, 80)}…` : j;
 }
 
+/** The item's name as the queue shows it. */
+function itemName(item: QueueItem): string {
+  return item.kind === "content" ? contentLabel(item.label) : item.label;
+}
+
 export default function PublishQueue({
   onChange,
   onEdit,
@@ -116,10 +122,18 @@ export default function PublishQueue({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState<string | null>(null);
+  // What the last publish/discard really did (only set after the RPC succeeded).
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(async () => {
-    const rows = await getPendingQueue(getBrowserSupabase());
-    setItems(rows);
+    try {
+      setItems(await getPendingQueue(getBrowserSupabase()));
+      setLoadFailed(false);
+    } catch {
+      setLoadFailed(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -133,6 +147,7 @@ export default function PublishQueue({
   async function handleDiscard(item: QueueItem) {
     setBusy(rowId(item));
     setError(null);
+    setNotice(null);
     const message = await discardOne(
       getBrowserSupabase(),
       item.kind,
@@ -142,9 +157,14 @@ export default function PublishQueue({
     setBusy(null);
     setConfirmDiscard(null);
     if (message) {
-      setError(message);
+      setError(adminErrorMessage(message, "discard that change"));
       return;
     }
+    setNotice(
+      item.is_new
+        ? `Discarded “${itemName(item)}”. It was never published, so it has been removed; customers weren't affected.`
+        : `Discarded the changes to “${itemName(item)}”. Customers still see the same live version.`
+    );
     await load();
     onChange?.();
   }
@@ -152,6 +172,7 @@ export default function PublishQueue({
   async function handlePublish(item: QueueItem) {
     setBusy(rowId(item));
     setError(null);
+    setNotice(null);
     try {
       await publishOne(
         getBrowserSupabase(),
@@ -159,22 +180,49 @@ export default function PublishQueue({
         item.entity_id,
         item.kind === "content" ? item.label : undefined
       );
+      // Only reached when publish_one returned without raising.
+      setNotice(publishedMessage({ name: itemName(item), pendingDelete: item.pending_delete }));
       await load();
       onChange?.();
     } catch (e) {
-      // Reasons are written for the admin, e.g. "Publish its category first".
-      setError(e instanceof Error ? e.message : "Could not publish that item.");
+      // Reasons are written for the admin, e.g. "Publish its category first";
+      // anything else is translated rather than shown raw.
+      setError(
+        adminErrorMessage(e as Error, "publish that item") +
+          " Customers still see the previous live version."
+      );
     } finally {
       setBusy(null);
     }
+  }
+
+  if (loadFailed) {
+    // Not "Nothing waiting": a failed read says nothing about what is pending.
+    return (
+      <p role="alert" className="rounded-lg bg-terracotta/10 px-4 py-3 text-sm text-terracotta-dark">
+        Couldn&apos;t load the publish queue, so it can&apos;t say what is
+        waiting. Reload the page, signing in again if asked.{" "}
+        <button type="button" onClick={() => void load()} className="font-medium underline">
+          Try again
+        </button>
+      </p>
+    );
   }
 
   if (items === null) {
     return <p className="text-ink/60">Loading the queue…</p>;
   }
 
+  const status = (
+    <p role="status" className={notice ? "mb-4 rounded-lg bg-linen/70 px-4 py-3 text-sm text-ink" : "sr-only"}>
+      {notice}
+    </p>
+  );
+
   if (items.length === 0) {
     return (
+      <>
+      {status}
       <div className="rounded-2xl border border-ink/10 bg-linen/40 p-10 text-center">
         <p className="font-heading text-2xl text-ink">Nothing waiting</p>
         <p className="mx-auto mt-2 max-w-md text-sm text-ink/60">
@@ -182,11 +230,13 @@ export default function PublishQueue({
           before they reach the site, so you can check them first.
         </p>
       </div>
+      </>
     );
   }
 
   return (
     <div className="space-y-4">
+      {status}
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="font-heading text-2xl text-ink">
           {items.length} change{items.length === 1 ? "" : "s"} waiting to go live
@@ -197,7 +247,7 @@ export default function PublishQueue({
       </div>
 
       {error && (
-        <p className="flex items-start gap-2 rounded-lg bg-terracotta/10 px-4 py-3 text-sm text-terracotta-dark">
+        <p role="alert" className="flex items-start gap-2 rounded-lg bg-terracotta/10 px-4 py-3 text-sm text-terracotta-dark">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           {error}
         </p>
@@ -240,20 +290,27 @@ export default function PublishQueue({
                 )}
 
                 {confirmDiscard === id ? (
-                  <span className="flex items-center gap-2 text-xs">
-                    <span className="text-terracotta-dark">Discard?</span>
+                  <span
+                    role="group"
+                    aria-label={`Confirm discarding ${itemName(item)}`}
+                    className="flex max-w-sm flex-wrap items-center gap-2 text-xs"
+                  >
+                    <span className="text-terracotta-dark">{discardOneText(itemName(item), item.is_new)}</span>
                     <button
+                      type="button"
                       onClick={() => handleDiscard(item)}
                       disabled={working}
                       className="font-medium text-terracotta-dark underline"
                     >
-                      Yes
+                      Discard
                     </button>
                     <button
+                      type="button"
+                      autoFocus
                       onClick={() => setConfirmDiscard(null)}
-                      className="text-ink/50"
+                      className="text-ink/70"
                     >
-                      No
+                      Cancel
                     </button>
                   </span>
                 ) : (

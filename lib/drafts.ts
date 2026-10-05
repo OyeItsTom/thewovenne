@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { adminErrorMessage, checkDraftWrite, type DraftWrite } from "./adminStatus";
 
 /**
  * Every admin write goes through here.
@@ -96,24 +97,63 @@ export async function newPageDraft(
   return { id: (data as string) ?? null, error: error?.message ?? null };
 }
 
+type VersionTable =
+  | "product_versions"
+  | "category_versions"
+  | "journal_versions"
+  | "site_page_versions";
+
+/**
+ * Write to a DRAFT version, and report success only if exactly one draft row
+ * changed (lib/adminStatus checkDraftWrite).
+ *
+ * Two guards, both new:
+ *  - `state = 'draft'`: the id came from ensure_*_draft a moment ago, but
+ *    another admin can publish in between, turning that row into the LIVE
+ *    version. Without the filter this update would then edit what customers
+ *    see — the one thing this module exists to prevent.
+ *  - the returned rows: an UPDATE that matches nothing (draft published or
+ *    discarded meanwhile, or rights lost under RLS) is not an error to
+ *    PostgREST, and used to be reported as saved.
+ *
+ * `action` finishes the failure sentence: "Couldn't <action> — …".
+ */
+export async function updateDraftVersion<T = { id: string }>(
+  client: SupabaseClient,
+  table: VersionTable,
+  versionId: string,
+  patch: Record<string, unknown>,
+  { select = "id", action = "save this draft" }: { select?: string; action?: string } = {}
+): Promise<DraftWrite<T>> {
+  try {
+    const { data, error } = await client
+      .from(table)
+      .update(patch)
+      .eq("id", versionId)
+      .eq("state", "draft")
+      .select(select);
+    return checkDraftWrite<T>({ error, data: data as T[] | null }, action);
+  } catch (err) {
+    // fetch itself threw — offline, DNS, a dropped connection.
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: "network", message: adminErrorMessage(message, action) };
+  }
+}
+
 /**
  * Mark an entity for deletion at the next publish. It stays live until then,
  * which is what "nothing changes until I publish" has to mean for deletes.
+ * Returns a readable failure, or null only when the mark really landed.
  */
 export async function markPendingDelete(
   client: SupabaseClient,
-  table:
-    | "product_versions"
-    | "category_versions"
-    | "journal_versions"
-    | "site_page_versions",
+  table: VersionTable,
   draftVersionId: string
 ): Promise<string | null> {
-  const { error } = await client
-    .from(table)
-    .update({ pending_delete: true })
-    .eq("id", draftVersionId);
-  return error?.message ?? null;
+  const result = await updateDraftVersion(client, table, draftVersionId, { pending_delete: true }, {
+    action: "stage this deletion",
+  });
+  return result.ok ? null : result.message;
 }
 
 /** The kinds of thing the versioning system tracks. */
@@ -147,6 +187,14 @@ export async function settleDraft(
   return data === true;
 }
 
+/**
+ * An Error that keeps PostgREST's code, so lib/adminStatus can tell our own
+ * readable RAISE reasons (P0001, shown as written) from internals (translated).
+ */
+function rpcError(error: { message: string; code?: string }): Error & { code?: string } {
+  return Object.assign(new Error(error.message), { code: error.code });
+}
+
 /** One row of the publish queue. */
 export interface QueueItem {
   kind: DraftKind;
@@ -166,9 +214,10 @@ export async function getPendingQueue(
   client: SupabaseClient
 ): Promise<QueueItem[]> {
   const { data, error } = await client.rpc("pending_queue");
+  // Thrown, not emptied: an empty queue reads "Every change is already live".
   if (error) {
     console.error("getPendingQueue:", error.message);
-    return [];
+    throw rpcError(error);
   }
   return (data as QueueItem[]) ?? [];
 }
@@ -179,13 +228,13 @@ export async function discardOne(
   kind: DraftKind,
   entityId: string | null,
   key?: string
-): Promise<string | null> {
+): Promise<{ message: string; code?: string } | null> {
   const { error } = await client.rpc("discard_one", {
     p_kind: kind,
     p_id: entityId,
     p_key: key ?? null,
   });
-  return error?.message ?? null;
+  return error ? { message: error.message, code: error.code } : null;
 }
 
 /** Publish one item on its own. Throws with a readable reason if blocked. */
@@ -200,7 +249,7 @@ export async function publishOne(
     p_id: entityId,
     p_key: key ?? null,
   });
-  if (error) throw new Error(error.message);
+  if (error) throw rpcError(error);
 }
 
 export interface PendingChanges {
@@ -221,9 +270,10 @@ export async function getPendingChanges(
     | Omit<PendingChanges, "total">
     | undefined;
 
-  if (error || !row) {
-    return { products: 0, categories: 0, journal: 0, content: 0, pages: 0, total: 0 };
-  }
+  // Thrown, not zeroed: zero is a real answer ("everything is published"), and
+  // the publish bar used to give it whenever this read failed.
+  if (error) throw new Error(error.message);
+  if (!row) throw new Error("pending_changes returned nothing");
   return {
     ...row,
     // pages is absent until migration 0015 runs; treat it as zero rather than
@@ -239,12 +289,12 @@ export async function publishAll(
   client: SupabaseClient
 ): Promise<PendingChanges> {
   const { data, error } = await client.rpc("publish_all");
-  if (error) throw new Error(error.message);
+  if (error) throw rpcError(error);
   return data as PendingChanges;
 }
 
 /** Throw away every pending change and go back to what is live. */
 export async function discardDrafts(client: SupabaseClient): Promise<void> {
   const { error } = await client.rpc("discard_drafts");
-  if (error) throw new Error(error.message);
+  if (error) throw rpcError(error);
 }

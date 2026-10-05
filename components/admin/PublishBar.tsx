@@ -9,6 +9,7 @@ import {
   publishAll,
   type PendingChanges,
 } from "@/lib/drafts";
+import { adminErrorMessage, discardAllText } from "@/lib/adminStatus";
 
 type State = "idle" | "publishing" | "published" | "discarding" | "error";
 
@@ -49,9 +50,19 @@ export default function PublishBar({
   const [state, setState] = useState<State>("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // The count could not be read. Said as such — it used to read as zero, i.e.
+  // "Everything is published", which is exactly the wrong reassurance.
+  const [countFailed, setCountFailed] = useState(false);
 
   const refresh = useCallback(async () => {
-    const next = await getPendingChanges(getBrowserSupabase());
+    let next: PendingChanges;
+    try {
+      next = await getPendingChanges(getBrowserSupabase());
+    } catch {
+      setCountFailed(true);
+      return;
+    }
+    setCountFailed(false);
     setPending(next);
     // Once new work is waiting, the previous "Successfully published" is stale
     // and would otherwise keep rendering in place of the pending count.
@@ -71,12 +82,14 @@ export default function PublishBar({
     try {
       const result = await publishAll(getBrowserSupabase());
       setState("published");
+      // The counts come back from publish_all itself, so this reports what
+      // the database actually released — not what was on screen beforehand.
       setMessage(
         result.total === 0
           ? "Nothing was waiting — the site is already up to date."
-          : `Successfully published — ${summarise(result)} ${
+          : `Published — ${summarise(result)} ${
               result.total === 1 ? "is" : "are"
-            } now live.`
+            } now live. Customers can see ${result.total === 1 ? "this change" : "these changes"} now.`
       );
       await refresh();
       setTimeout(() => setState("idle"), 8000);
@@ -84,7 +97,10 @@ export default function PublishBar({
       setState("error");
       // publish_all raises a readable message for the cases it refuses, e.g. a
       // product sitting in a category that would not exist afterwards.
-      setMessage(err instanceof Error ? err.message : "Publishing failed.");
+      setMessage(
+        adminErrorMessage(err as Error, "publish") +
+          " Customers still see the previous live version."
+      );
     }
   };
 
@@ -96,10 +112,10 @@ export default function PublishBar({
       await discardDrafts(getBrowserSupabase());
       await refresh();
       setState("idle");
-      setMessage("Pending changes discarded. The admin now matches the live site.");
+      setMessage("Unpublished changes discarded. The admin now matches the live site; customers weren't affected.");
     } catch (err) {
       setState("error");
-      setMessage(err instanceof Error ? err.message : "Could not discard drafts.");
+      setMessage(adminErrorMessage(err as Error, "discard the changes"));
     }
   };
 
@@ -109,15 +125,22 @@ export default function PublishBar({
   return (
     <div className="mb-8 rounded-2xl border border-ink/10 bg-linen/50 px-5 py-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0 text-sm">
+        <div className="min-w-0 text-sm" role="status">
           {state === "published" || (state === "idle" && message) ? (
             <span className="font-medium text-ink">{message}</span>
+          ) : countFailed ? (
+            <span className="font-medium text-terracotta-dark">
+              Couldn&apos;t check what&apos;s waiting to publish. Reload the
+              page, signing in again if asked.
+            </span>
+          ) : pending === null ? (
+            <span className="text-ink/60">Checking for unpublished changes…</span>
           ) : total > 0 ? (
             <>
               <span className="font-medium text-ink">
                 {total} unpublished {total === 1 ? "change" : "changes"}
               </span>
-              <span className="text-ink/60"> — {summarise(pending!)}. Not on the site yet.</span>
+              <span className="text-ink/70"> — {summarise(pending!)}. Customers still see the live version until you publish.</span>
             </>
           ) : (
             <span className="text-ink/60">
@@ -125,20 +148,26 @@ export default function PublishBar({
               you publish them.
             </span>
           )}
-          {state === "error" && message && (
-            <p className="mt-1 text-terracotta-dark">{message}</p>
-          )}
         </div>
+        {state === "error" && message && (
+          <p role="alert" className="basis-full text-sm text-terracotta-dark">
+            {message}
+          </p>
+        )}
 
         <div className="flex items-center gap-3">
           {total > 0 &&
             (confirmDiscard ? (
-              <span className="flex items-center gap-2 text-xs">
-                <span className="text-terracotta-dark">Discard all {total}?</span>
-                <button onClick={discard} className="font-medium text-terracotta-dark underline">
-                  Discard
+              <span
+                role="group"
+                aria-label="Confirm discarding all unpublished changes"
+                className="flex max-w-md flex-wrap items-center gap-2 text-xs"
+              >
+                <span className="text-terracotta-dark">{discardAllText(total)}</span>
+                <button type="button" onClick={discard} className="font-medium text-terracotta-dark underline">
+                  Discard all
                 </button>
-                <button onClick={() => setConfirmDiscard(false)} className="text-ink/50">
+                <button type="button" autoFocus onClick={() => setConfirmDiscard(false)} className="text-ink/70">
                   Cancel
                 </button>
               </span>
