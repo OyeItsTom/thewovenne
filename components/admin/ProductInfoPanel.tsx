@@ -19,10 +19,13 @@ import { profileLabel, type InfoAssessment, type InfoLevel } from "@/lib/product
 export default function ProductInfoPanel({
   info,
   hidden,
+  categoryChosen,
 }: {
   info: InfoAssessment;
   /** The product is hidden: 0065 does not judge hidden versions at publish. */
   hidden: boolean;
+  /** Until a sub-category is picked the type is unknown, not "General". */
+  categoryChosen: boolean;
 }) {
   const { missingRequired, missingRecommended, percent, publishable } = info;
   return (
@@ -35,7 +38,13 @@ export default function ProductInfoPanel({
           Product completeness {percent}%
         </h3>
         <p className="text-xs text-ink/60">
-          Type: <span className="font-medium text-ink/80">{profileLabel(info.profile)}</span> — set by the category
+          {categoryChosen ? (
+            <>
+              Type: <span className="font-medium text-ink/80">{profileLabel(info.profile)}</span> — set by the category
+            </>
+          ) : (
+            "Choose a category to see which details apply"
+          )}
         </p>
       </div>
       <div

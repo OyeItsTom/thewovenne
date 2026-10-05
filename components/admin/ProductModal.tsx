@@ -58,6 +58,7 @@ import {
   type InfoLevel,
 } from "@/lib/productInfo";
 import { productSeo, PRODUCT_TITLE_SUFFIX } from "@/lib/metadata";
+import { cPath } from "@/lib/country";
 import type { Category, Product } from "@/lib/types";
 
 const emptyForm = {
@@ -234,8 +235,9 @@ export default function ProductModal({
       ? categories.find((c) => c.id === child.parent_id)
       : null;
     const slug = form.slug || "…";
+    // With the country prefix, exactly as productHref builds the canonical.
     return parent && child
-      ? `/${parent.slug}/${child.slug}/${slug}`
+      ? cPath(`/${parent.slug}/${child.slug}/${slug}`)
       : `/in/product/${slug}`;
   })();
 
@@ -888,7 +890,11 @@ export default function ProductModal({
       <form onSubmit={handleSubmit} className="space-y-8">
         {/* Where this product stands, before any field: what publishing needs
             and what would make it better. Saving a draft is never blocked. */}
-        <ProductInfoPanel info={info} hidden={!!product && !product.is_active} />
+        <ProductInfoPanel
+          info={info}
+          hidden={!!product && !product.is_active}
+          categoryChosen={!!subCategoryId}
+        />
 
         {/* ── BASIC INFORMATION ─────────────────────────────── */}
         <FormSection title="Basic information">
@@ -1037,7 +1043,7 @@ export default function ProductModal({
               <Field
                 label={labelOf("weave")}
                 level={levelOf("weave")}
-                placeholder="Handloom, Jamdani — only if known"
+                placeholder="e.g. Handloom"
                 maxLength={FACT_MAX.weave}
                 value={form.weave}
                 onChange={update("weave")}
@@ -1083,7 +1089,7 @@ export default function ProductModal({
             <Field
               label="Origin"
               level={levelOf("origin")}
-              placeholder="Chendamangalam, Kerala — only if known"
+              placeholder="e.g. Chendamangalam, Kerala"
               maxLength={FACT_MAX.origin}
               value={form.origin}
               onChange={update("origin")}
@@ -1335,8 +1341,8 @@ export default function ProductModal({
                           onChange={(e) => setAlt(i, e.target.value)}
                           placeholder={
                             i === 0
-                              ? "What a customer would see: e.g. Off-white cotton saree with a red border, draped"
-                              : "What this photo shows that the others don't: e.g. Close-up of the zari border"
+                              ? "e.g. Off-white saree with a red border, draped"
+                              : "e.g. Close-up of the zari border"
                           }
                           className="mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
                         />
