@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useCartStore } from "@/lib/store";
+import { useHydrated } from "@/lib/useHydrated";
 import { formatINR } from "@/lib/utils";
 import { type OrderDetails, type DeliveryChannel } from "@/lib/orderDetails";
 import { quoteShipping, type ShippingConfig } from "@/lib/shipping";
@@ -54,6 +55,7 @@ export default function CheckoutForm({
   const router = useRouter();
   const items = useCartStore((s) => s.items);
   const clearCart = useCartStore((s) => s.clearCart);
+  const hydrated = useHydrated();
   const [form, setForm] = useState<OrderDetails>({
     email: identity.email,
     name: identity.name,
@@ -170,6 +172,12 @@ export default function CheckoutForm({
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
     }
+  }
+
+  // Same reason as the cart page: the server cannot see the saved bag, so
+  // nothing that depends on it is printed until hydration is done.
+  if (!hydrated) {
+    return <div className="mt-10 min-h-[24rem]" aria-busy="true" />;
   }
 
   if (items.length === 0) {

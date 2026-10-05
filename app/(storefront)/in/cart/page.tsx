@@ -3,18 +3,25 @@
 import Link from "next/link";
 import { ShoppingBag } from "lucide-react";
 import { useCartStore } from "@/lib/store";
+import { useHydrated } from "@/lib/useHydrated";
 import { buttonClassName } from "@/components/ui/Button";
 import CartItem from "@/components/cart/CartItem";
 import CartSummary from "@/components/cart/CartSummary";
 
 export default function CartPage() {
   const items = useCartStore((s) => s.items);
+  // The bag lives in this browser, not on the server: until hydration is
+  // done, render what the server could — neither "empty" (untrue for anyone
+  // with a saved bag) nor the items (a hydration mismatch). lib/useHydrated.
+  const hydrated = useHydrated();
 
   return (
     <div className="container-wovenne section-padding">
       <h1 className="font-heading text-4xl text-ink sm:text-5xl">Your Cart</h1>
 
-      {items.length === 0 ? (
+      {!hydrated ? (
+        <div className="mt-10 min-h-[16rem]" aria-busy="true" />
+      ) : items.length === 0 ? (
         <div className="mt-16 flex flex-col items-center text-center text-ink/60">
           <ShoppingBag className="mb-4 h-12 w-12" strokeWidth={1.5} />
           <p>Your bag is empty.</p>
