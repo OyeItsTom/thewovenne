@@ -1,3 +1,5 @@
+import type { ProductProfile } from "./productInfo";
+
 // A catalogue category. Two levels: parents (Men/Women, parent_id = null) and
 // sub-categories (Sarees, Shirts…, parent_id = the parent's id).
 export interface Category {
@@ -8,6 +10,11 @@ export interface Category {
   is_visible: boolean;
   sort_order: number;
   created_at: string;
+  /**
+   * Which product facts apply to products filed here (migration 0065). Null
+   * inherits the parent's; see effectiveProfile in lib/productInfo.
+   */
+  product_profile?: ProductProfile | null;
 }
 
 // A visible parent with its visible children — used to render shop nav/filters.
@@ -52,6 +59,25 @@ export interface Product {
   heritage_note?: string | null;
   craft_note?: string | null;
   care_note?: string | null;
+  /**
+   * Search title and snippet, written by hand (migration 0065). Null means the
+   * page composes its own from the product's name and facts — see productSeo in
+   * lib/metadata. On the storefront product query, because generateMetadata
+   * reads them.
+   */
+  seo_title?: string | null;
+  meta_description?: string | null;
+  /**
+   * Structured facts (migration 0065), each null until somebody who knows says
+   * so. Admin editor only on this type; the product page reads them through
+   * getBrandKnowledge with the notes, one piece at a time.
+   */
+  dimensions?: string | null;
+  blouse_piece?: "included" | "not_included" | null;
+  fit_note?: string | null;
+  finish?: string | null;
+  weave?: string | null;
+  origin?: string | null;
   category_id: string | null;
   // Derived from the joined categories row (name/slug) — not stored on products.
   // Kept so display code can show the category name without a second lookup.
@@ -139,6 +165,15 @@ export interface ProductImage {
   url: string;
   sort_order: number;
   created_at: string;
+  /** What the photo shows (migration 0065). Null = not written; see productImageAlt. */
+  alt_text: string | null;
+}
+
+/** One photo as the gallery and the admin editor handle it: where it is, what it shows. */
+export interface GalleryPhoto {
+  url: string;
+  /** Null = nobody has described this photo yet. */
+  alt: string | null;
 }
 
 /**

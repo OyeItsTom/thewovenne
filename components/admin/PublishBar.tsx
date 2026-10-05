@@ -9,7 +9,7 @@ import {
   publishAll,
   type PendingChanges,
 } from "@/lib/drafts";
-import { adminErrorMessage, discardAllText } from "@/lib/adminStatus";
+import { adminErrorMessage, withLiveNote, discardAllText } from "@/lib/adminStatus";
 
 type State = "idle" | "publishing" | "published" | "discarding" | "error";
 
@@ -98,8 +98,7 @@ export default function PublishBar({
       // publish_all raises a readable message for the cases it refuses, e.g. a
       // product sitting in a category that would not exist afterwards.
       setMessage(
-        adminErrorMessage(err as Error, "publish") +
-          " Customers still see the previous live version."
+        withLiveNote(adminErrorMessage(err as Error, "publish"))
       );
     }
   };
@@ -150,7 +149,7 @@ export default function PublishBar({
           )}
         </div>
         {state === "error" && message && (
-          <p role="alert" className="basis-full text-sm text-terracotta-dark">
+          <p role="alert" className="basis-full whitespace-pre-line text-sm text-terracotta-dark">
             {message}
           </p>
         )}

@@ -17,6 +17,7 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
 import ProductContentCheck from "@/components/admin/ProductContentCheck";
+import ProductInfoPanel, { LevelTag } from "@/components/admin/ProductInfoPanel";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { youtubeId } from "@/lib/youtube";
 import { getAllCategories } from "@/lib/categories";
@@ -40,6 +41,23 @@ import {
   type ContentInput,
   type Suggestion,
 } from "@/lib/productContent";
+import {
+  ALT_TEXT_MAX,
+  BLOUSE_PIECE_LABEL,
+  FACT_MAX,
+  META_DESCRIPTION_LIMIT,
+  SEO_TITLE_MAX,
+  altTextAdvice,
+  assessProductInfo,
+  effectiveProfile,
+  fieldLabel,
+  fieldLevel,
+  publishBlockers,
+  type InfoInput,
+  type InfoKey,
+  type InfoLevel,
+} from "@/lib/productInfo";
+import { productSeo, PRODUCT_TITLE_SUFFIX } from "@/lib/metadata";
 import type { Category, Product } from "@/lib/types";
 
 const emptyForm = {
@@ -52,6 +70,16 @@ const emptyForm = {
   heritage_note: "",
   craft_note: "",
   care_note: "",
+  // Product facts (migration 0065). Blank = not known, saved as NULL.
+  dimensions: "",
+  blouse_piece: "",
+  fit_note: "",
+  finish: "",
+  weave: "",
+  origin: "",
+  // Search & discovery. Blank = the page composes its own (lib/metadata productSeo).
+  seo_title: "",
+  meta_description: "",
   fabric: "",
   colour: "",
   stock_quantity: "",
@@ -65,14 +93,20 @@ const emptyForm = {
 type FormState = typeof emptyForm;
 
 /**
- * Replace a product's gallery with `urls`, in order. Delete-then-insert rather
+ * One photo as the form edits it. Alt text is a string here ("" = not written)
+ * and NULL in the database, so a blank box never stores whitespace (0065).
+ */
+type Photo = { url: string; alt: string };
+
+/**
+ * Replace a product's gallery with `photos` (and their alt text), in order. Delete-then-insert rather
  * than diffing: the row count is tiny and this can't leave stale ordering.
  * Returns an error message, or null on success.
  */
 async function replaceGallery(
   versionId: string,
   productId: string,
-  urls: string[]
+  photos: Photo[]
 ): Promise<{ error: string | null }> {
   // Scoped to the DRAFT version, so the live gallery is untouched until publish.
   const { error: clearError } = await getBrowserSupabase()
@@ -81,14 +115,17 @@ async function replaceGallery(
     .eq("product_version_id", versionId);
   if (clearError) return { error: clearError.message };
 
-  if (urls.length === 0) return { error: null };
+  if (photos.length === 0) return { error: null };
 
   const { error: insertError } = await getBrowserSupabase().from("product_images").insert(
-    urls.map((url, i) => ({
+    photos.map((photo, i) => ({
       product_version_id: versionId,
       product_id: productId,
-      url,
+      url: photo.url,
       sort_order: i,
+      // Alt text rides with its photo: written here, drafted and published
+      // with the gallery (0065). Blank is NULL, never "".
+      alt_text: photo.alt.trim() || null,
     }))
   );
   return { error: insertError?.message ?? null };
@@ -104,6 +141,14 @@ const formFromProduct = (p: Product): FormState => ({
   heritage_note: p.heritage_note ?? "",
   craft_note: p.craft_note ?? "",
   care_note: p.care_note ?? "",
+  dimensions: p.dimensions ?? "",
+  blouse_piece: p.blouse_piece ?? "",
+  fit_note: p.fit_note ?? "",
+  finish: p.finish ?? "",
+  weave: p.weave ?? "",
+  origin: p.origin ?? "",
+  seo_title: p.seo_title ?? "",
+  meta_description: p.meta_description ?? "",
   fabric: p.fabric ?? "",
   colour: p.colour ?? "",
   stock_quantity: String(p.stock_quantity),
@@ -149,7 +194,7 @@ export default function ProductModal({
   const [uploading, setUploading] = useState(false);
   // Gallery is edited locally and written on save, so cancelling leaves the
   // existing gallery untouched.
-  const [images, setImages] = useState<string[]>([]);
+  const [images, setImages] = useState<Photo[]>([]);
   /** What the admin is told while a photograph is on its way in. */
   const [stage, setStage] = useState<string | null>(null);
   // Sizes live OUTSIDE draft/publish — see migration 0021. Loaded and saved
@@ -173,7 +218,7 @@ export default function ProductModal({
   // loading, which never counts as a change (lib/adminStatus isDirty), so the
   // photos or sizes arriving late cannot trigger a warning on their own.
   const [baseForm, setBaseForm] = useState<FormState | null>(null);
-  const [baseImages, setBaseImages] = useState<string[] | null>(null);
+  const [baseImages, setBaseImages] = useState<Photo[] | null>(null);
   const [baseSizes, setBaseSizes] = useState<SizeDraft[] | null>(null);
   const [baseSub, setBaseSub] = useState<string | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
@@ -308,10 +353,14 @@ export default function ProductModal({
 
     if (product) {
       setBaseImages(null);
-      getDraftProductImages(product.id, getBrowserSupabase()).then((urls) => {
+      getDraftProductImages(product.id, getBrowserSupabase()).then((photos) => {
         // Fall back to the cover column if the gallery hasn't been populated,
         // so an existing product never opens looking photo-less.
-        const opening = urls.length ? urls : product.image_url ? [product.image_url] : [];
+        const opening: Photo[] = photos.length
+          ? photos.map((p) => ({ url: p.url, alt: p.alt ?? "" }))
+          : product.image_url
+            ? [{ url: product.image_url, alt: "" }]
+            : [];
         setImages(opening);
         setBaseImages(opening);
       });
@@ -390,6 +439,54 @@ export default function ProductModal({
         : null,
     [checkOpen, deferredForm, deferredSizes, selectedSubCategory?.name, parentCategoryName, otherProducts]
   );
+
+  // ── Product information (lib/productInfo, migration 0065) ──
+  // Which facts apply is the sub-category's type. The same assessment drives
+  // the completeness panel, the Required/Recommended/Optional tags and the
+  // "before it can be published" line after a save — and the database enforces
+  // the required half at publish, from the same rule.
+  const profile = effectiveProfile(subCategoryId || null, categories);
+  const levelOf = (key: InfoKey): InfoLevel => fieldLevel(key, profile);
+  const labelOf = (key: InfoKey): string => fieldLabel(key, profile);
+  const infoInput = (f: FormState, photos: Photo[]): InfoInput => ({
+    profile,
+    name: f.name,
+    slug: f.slug,
+    price: f.price_inr,
+    hasCategory: !!subCategoryId,
+    description: f.description,
+    fabric: f.fabric,
+    colour: f.colour,
+    dimensions: f.dimensions,
+    blouse_piece: f.blouse_piece,
+    finish: f.finish,
+    weave: f.weave,
+    origin: f.origin,
+    heritage: f.heritage_note,
+    craft: f.craft_note,
+    care: f.care_note,
+    fit: f.fit_note,
+    images: photos,
+    seo_title: f.seo_title,
+    meta_description: f.meta_description,
+    isActive: product ? product.is_active : true,
+  });
+  const deferredImages = useDeferredValue(images);
+  const info = useMemo(
+    () => assessProductInfo(infoInput(deferredForm, deferredImages)),
+    // infoInput reads profile and subCategoryId, both listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [deferredForm, deferredImages, profile, subCategoryId, product]
+  );
+  // What the search result will say, from the function the page renders with.
+  const seo = productSeo({
+    name: form.name || "Product name",
+    description: form.description,
+    categoryName: selectedSubCategory?.name ?? null,
+    fabric: form.fabric,
+    seoTitle: form.seo_title,
+    metaDescription: form.meta_description,
+  });
 
   /**
    * "Use suggestion": one field of the unsaved form, nothing else. No save, no
@@ -474,7 +571,7 @@ export default function ProductModal({
     }
     setStage(null);
 
-    if (uploaded.length) setImages((prev) => [...prev, ...uploaded]);
+    if (uploaded.length) setImages((prev) => [...prev, ...uploaded.map((url) => ({ url, alt: "" }))]);
     if (failures.length) setError(failures.join("\n"));
 
     setUploading(false);
@@ -494,6 +591,9 @@ export default function ProductModal({
 
   const removeImage = (index: number) =>
     setImages((prev) => prev.filter((_, i) => i !== index));
+
+  const setAlt = (index: number, alt: string) =>
+    setImages((prev) => prev.map((p, i) => (i === index ? { ...p, alt } : p)));
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -557,12 +657,23 @@ export default function ProductModal({
       heritage_note: form.heritage_note.trim() || null,
       craft_note: form.craft_note.trim() || null,
       care_note: form.care_note.trim() || null,
+      // Facts (0065): as typed, trimmed, or NULL for "not known". Never filled
+      // in for the admin — an empty box is an honest answer.
+      dimensions: form.dimensions.trim() || null,
+      blouse_piece: form.blouse_piece || null,
+      fit_note: form.fit_note.trim() || null,
+      finish: form.finish.trim() || null,
+      weave: form.weave.trim() || null,
+      origin: form.origin.trim() || null,
+      // Blank keeps the automatic title/snippet; only a written one is stored.
+      seo_title: form.seo_title.replace(/\s+/g, " ").trim() || null,
+      meta_description: form.meta_description.replace(/\s+/g, " ").trim() || null,
       category_id: subCategoryId,
       fabric: form.fabric || null,
       colour: form.colour || null,
       // Cover image stays denormalised on the product so listings, cart and the
       // concierge keep reading one column instead of joining the gallery.
-      image_url: images[0] ?? null,
+      image_url: images[0]?.url ?? null,
       collection: form.collection.trim() ? slugify(form.collection) : null,
       // A discount is all-or-nothing: clearing the type clears the whole thing,
       // which matches the check constraint in migration 0016.
@@ -606,7 +717,9 @@ export default function ProductModal({
         : { ...payload, is_active: true, stock_quantity: Number(form.stock_quantity) || 0 },
       {
         select:
-          "product_id, name, slug, description, price_inr, cost_price_inr, sku, video_youtube_id, heritage_note, craft_note, care_note, category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at",
+          "product_id, name, slug, description, price_inr, cost_price_inr, sku, video_youtube_id, heritage_note, craft_note, care_note, " +
+          "dimensions, blouse_piece, fit_note, finish, weave, origin, seo_title, meta_description, " +
+          "category_id, fabric, colour, stock_quantity, image_url, is_active, created_at, collection, discount_type, discount_value, discount_starts_at, discount_ends_at",
         action: "save this draft",
       }
     );
@@ -701,11 +814,15 @@ export default function ProductModal({
     const stockMoved =
       isDirty(baseSizes, sizes) ||
       (isEdit && sizes.length === 0 && typedStock !== product!.stock_quantity);
+    // A saved draft that publishing would refuse says so now, by name, rather
+    // than leaving the admin to find out from the publish bar (0065).
+    const blockers = settled ? [] : publishBlockers(infoInput(form, images));
     const message =
       settled && hasPublished && stockMoved
         ? `Stock for “${form.name}” updated on the shop. No other changes, so nothing is waiting to publish.`
         : draftSavedMessage({ noun: "product", name: form.name, hasPublished, settled }) +
-          (stockMoved && hasPublished ? " Your stock change is already live on the shop." : "");
+          (stockMoved && hasPublished ? " Your stock change is already live on the shop." : "") +
+          (blockers.length ? ` Before it can be published, complete: ${blockers.join(", ")}.` : "");
 
     // Version rows carry product_id; the table wants the Product shape keyed by
     // the stable id, with the category name resolved locally.
@@ -768,122 +885,256 @@ export default function ProductModal({
           </div>
         </div>
       )}
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Name" required value={form.name} onChange={updateName} />
-          <div>
-            <Field
-              label="Slug (web address)"
-              required
-              placeholder="indigo-handloom-shirt"
-              value={form.slug}
-              onChange={updateSlug}
-            />
-            <p className="mt-1 text-xs text-ink/50">
-              {previewPath}
-              {!isEdit &&
-                " — filled in from the name; edit if you want something different."}
-            </p>
-            {slugChanged && (
-              <p className="mt-1 text-xs text-ink/60">
-                The old address keeps working — it will redirect here
-                automatically, so anything already shared or saved is safe.
+      <form onSubmit={handleSubmit} className="space-y-8">
+        {/* Where this product stands, before any field: what publishing needs
+            and what would make it better. Saving a draft is never blocked. */}
+        <ProductInfoPanel info={info} hidden={!!product && !product.is_active} />
+
+        {/* ── BASIC INFORMATION ─────────────────────────────── */}
+        <FormSection title="Basic information">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Name" level="required" required value={form.name} onChange={updateName} />
+            <div>
+              <Field
+                label="Slug (web address)"
+                level="required"
+                required
+                placeholder="indigo-handloom-shirt"
+                value={form.slug}
+                onChange={updateSlug}
+              />
+              <p className="mt-1 text-xs text-ink/50">
+                {previewPath}
+                {!isEdit &&
+                  " — filled in from the name; edit if you want something different."}
               </p>
-            )}
+              {slugChanged && (
+                <p className="mt-1 text-xs text-ink/60">
+                  The old address keeps working — it will redirect here
+                  automatically, so anything already shared or saved is safe.
+                </p>
+              )}
+            </div>
           </div>
-        </div>
 
-        <Field
-          as="textarea"
-          label="Description"
-          value={form.description}
-          onChange={update("description")}
-        />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block text-sm">
+              <span className="font-medium text-ink/70">
+                Category
+                <LevelTag level="required" />
+              </span>
+              <select
+                required
+                value={parentId}
+                onChange={(e) => {
+                  setParentId(e.target.value);
+                  setSubCategoryId("");
+                }}
+                className="mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
+              >
+                <option value="">Select…</option>
+                {parents.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm">
+              <span className="font-medium text-ink/70">
+                Sub-category
+                <LevelTag level="required" />
+              </span>
+              <select
+                required
+                value={subCategoryId}
+                onChange={(e) => setSubCategoryId(e.target.value)}
+                disabled={!parentId}
+                className="mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none disabled:opacity-50"
+              >
+                <option value="">
+                  {parentId ? "Select…" : "Pick a category first"}
+                </option>
+                {subCategories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {c.is_visible ? "" : " (hidden)"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label="Selling price (₹ INR)"
-            type="number"
-            step="0.01"
-            min="0"
-            required
-            value={form.price_inr}
-            onChange={update("price_inr")}
-          />
-          <div>
+          {/* Filing a product under a hidden category is legitimate — staging it
+              ahead of launch — but it must not look like the product vanished. */}
+          {selectedSubCategory && !isPubliclyVisible(selectedSubCategory) && (
+            <p className="rounded-lg bg-linen/60 px-3 py-2 text-xs text-ink/70">
+              This category is currently hidden, so the product won&apos;t appear on
+              the site until you make it visible.
+            </p>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-2">
             <Field
-              label="Cost price (₹ INR)"
+              label="Selling price (₹ INR)"
+              level="required"
               type="number"
               step="0.01"
               min="0"
-              placeholder="What it costs us"
-              value={form.cost_price_inr}
-              onChange={update("cost_price_inr")}
+              required
+              value={form.price_inr}
+              onChange={update("price_inr")}
             />
-            {/* Worked out as you type, because a cost entered a decimal place
-                out is invisible as a number and obvious as a margin. Left
-                blank deliberately means "not costed yet" — see the payload. */}
-            <p className="mt-1 text-xs text-ink/50">{marginHint}</p>
+            <div>
+              <Field
+                label="Cost price (₹ INR)"
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="What it costs us"
+                value={form.cost_price_inr}
+                onChange={update("cost_price_inr")}
+              />
+              {/* Worked out as you type, because a cost entered a decimal place
+                  out is invisible as a number and obvious as a margin. Left
+                  blank deliberately means "not costed yet" — see the payload. */}
+              <p className="mt-1 text-xs text-ink/50">{marginHint}</p>
+            </div>
           </div>
-        </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
+          <Field
+            as="textarea"
+            label="Description"
+            level={levelOf("description")}
+            value={form.description}
+            onChange={update("description")}
+          />
+        </FormSection>
+
+        {/* ── PRODUCT DETAILS ───────────────────────────────── */}
+        <FormSection
+          title="Product details"
+          note="Facts about this piece. Fill in only what you know for certain — an empty box shows nothing on the shop, and is better than a guess."
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
             <Field
-              label="Product video (optional)"
-              placeholder="Paste the YouTube link"
-              value={form.video_youtube_id}
-              onChange={update("video_youtube_id")}
+              label={labelOf("fabric")}
+              level={levelOf("fabric")}
+              placeholder={profile === "jewellery" ? "Brass" : "Handloom Cotton-Linen"}
+              value={form.fabric}
+              onChange={update("fabric")}
             />
-            <p className="mt-1 text-xs text-ink/50">{videoHint}</p>
+            {levelOf("colour") !== "na" && (
+              <Field
+                label="Colour"
+                level={levelOf("colour")}
+                placeholder="Indigo"
+                value={form.colour}
+                onChange={update("colour")}
+              />
+            )}
+            {levelOf("weave") !== "na" && (
+              <Field
+                label={labelOf("weave")}
+                level={levelOf("weave")}
+                placeholder="Handloom, Jamdani — only if known"
+                maxLength={FACT_MAX.weave}
+                value={form.weave}
+                onChange={update("weave")}
+              />
+            )}
+            {levelOf("finish") !== "na" && (
+              <Field
+                label="Finish"
+                level={levelOf("finish")}
+                placeholder="14K gold plated"
+                maxLength={FACT_MAX.finish}
+                value={form.finish}
+                onChange={update("finish")}
+              />
+            )}
+            {levelOf("dimensions") !== "na" && (
+              <Field
+                label="Dimensions"
+                level={levelOf("dimensions")}
+                placeholder={profile === "jewellery" ? "Adjustable · 18 mm band" : "5.5 m × 1.15 m"}
+                maxLength={FACT_MAX.dimensions}
+                value={form.dimensions}
+                onChange={update("dimensions")}
+              />
+            )}
+            {levelOf("blouse_piece") !== "na" && (
+              <label className="block text-sm">
+                <span className="font-medium text-ink/70">
+                  Blouse piece
+                  <LevelTag level={levelOf("blouse_piece")} />
+                </span>
+                <select
+                  value={form.blouse_piece}
+                  onChange={(e) => setForm((f) => ({ ...f, blouse_piece: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
+                >
+                  <option value="">Not recorded</option>
+                  <option value="included">{BLOUSE_PIECE_LABEL.included}</option>
+                  <option value="not_included">{BLOUSE_PIECE_LABEL.not_included}</option>
+                </select>
+              </label>
+            )}
+            <Field
+              label="Origin"
+              level={levelOf("origin")}
+              placeholder="Chendamangalam, Kerala — only if known"
+              maxLength={FACT_MAX.origin}
+              value={form.origin}
+              onChange={update("origin")}
+            />
           </div>
-          <Field
-            label="Fabric"
-            placeholder="Handloom Cotton-Linen"
-            value={form.fabric}
-            onChange={update("fabric")}
-          />
-        </div>
 
-        {/* BRAND KNOWLEDGE — its own section, not three more fields in the row
-            above, because this is the only part of the form that is writing
-            rather than filling in. Three boxes with room to think in, each
-            labelled with the question it answers.
+          {/* BRAND KNOWLEDGE — writing rather than filling in, so boxes with
+              room to think in, each labelled with the question it answers.
 
-            Nothing here is generated or suggested. The concierge quotes this
-            text to customers as fact about the cloth, so a placeholder somebody
-            forgot to replace would be a claim the shop cannot stand behind. */}
-        <div className="space-y-4 rounded-xl border border-ink/10 bg-linen/30 p-4">
-          <div>
-            <h3 className="font-heading text-lg text-ink">Brand knowledge</h3>
-            <p className="mt-1 text-xs text-ink/55">
-              What the description can&apos;t carry. Shown on the product page
-              under &ldquo;Heritage &amp; care&rdquo;, and it is what Ask Wovenne
-              answers questions out of — so write it as you would say it. Leave a
-              box empty and nothing is shown or claimed for it.
-            </p>
+              Nothing here is generated or suggested. The concierge quotes this
+              text to customers as fact about the cloth, so a placeholder somebody
+              forgot to replace would be a claim the shop cannot stand behind. */}
+          <div className="space-y-4 rounded-xl border border-ink/10 bg-linen/30 p-4">
+            <div>
+              <h4 className="font-heading text-base text-ink">Story — heritage &amp; craft</h4>
+              <p className="mt-1 text-xs text-ink/55">
+                Shown on the product page under &ldquo;Heritage &amp; care&rdquo;,
+                and it is what Ask Wovenne answers questions out of — so write it as
+                you would say it. Leave a box empty and nothing is shown or claimed
+                for it.
+              </p>
+            </div>
+            <Field
+              as="textarea"
+              rows={3}
+              label="Heritage — where it comes from"
+              level={levelOf("heritage")}
+              placeholder="The weaving tradition, the region, what it is called locally."
+              value={form.heritage_note}
+              onChange={update("heritage_note")}
+            />
+            <Field
+              as="textarea"
+              rows={3}
+              label="Craft — how it was made"
+              level={levelOf("craft")}
+              placeholder="The loom, the technique, what makes this piece distinctive."
+              value={form.craft_note}
+              onChange={update("craft_note")}
+            />
           </div>
-          <Field
-            as="textarea"
-            rows={3}
-            label="Heritage — where it comes from"
-            placeholder="The weaving tradition, the region, what it is called locally."
-            value={form.heritage_note}
-            onChange={update("heritage_note")}
-          />
-          <Field
-            as="textarea"
-            rows={3}
-            label="Craft — how it was made"
-            placeholder="The loom, the technique, what makes this piece distinctive."
-            value={form.craft_note}
-            onChange={update("craft_note")}
-          />
+        </FormSection>
+
+        {/* ── CARE & FIT ────────────────────────────────────── */}
+        <FormSection title="Care & fit">
           <div>
             <Field
               as="textarea"
               rows={3}
-              label="Care — how to look after it"
+              label="Care instructions"
+              level={levelOf("care")}
               placeholder="Washing, drying, ironing, storing."
               value={form.care_note}
               onChange={update("care_note")}
@@ -897,195 +1148,335 @@ export default function ProductModal({
                 : "Empty: the product page shows no care advice for this piece."}
             </p>
           </div>
-        </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="block text-sm">
-            <span className="font-medium text-ink/70">Category</span>
-            <select
-              required
-              value={parentId}
-              onChange={(e) => {
-                setParentId(e.target.value);
-                setSubCategoryId("");
-              }}
-              className="mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
-            >
-              <option value="">Select…</option>
-              {parents.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block text-sm">
-            <span className="font-medium text-ink/70">Sub-category</span>
-            <select
-              required
-              value={subCategoryId}
-              onChange={(e) => setSubCategoryId(e.target.value)}
-              disabled={!parentId}
-              className="mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none disabled:opacity-50"
-            >
-              <option value="">
-                {parentId ? "Select…" : "Pick a category first"}
-              </option>
-              {subCategories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                  {c.is_visible ? "" : " (hidden)"}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        {/* Filing a product under a hidden category is legitimate — staging it
-            ahead of launch — but it must not look like the product vanished. */}
-        {selectedSubCategory && !isPubliclyVisible(selectedSubCategory) && (
-          <p className="rounded-lg bg-linen/60 px-3 py-2 text-xs text-ink/70">
-            This category is currently hidden, so the product won&apos;t appear on
-            the site until you make it visible.
-          </p>
-        )}
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label="Colour"
-            placeholder="Indigo"
-            value={form.colour}
-            onChange={update("colour")}
-          />
-          {/* DERIVED, NOT TYPED, once a product has sizes (migration 0056).
-              The database overwrites whatever this field sends with the sum of
-              the sizes, so leaving it editable would be offering a control that
-              silently does nothing — which is how 001 came to claim 2 units
-              while holding 13. Stock is managed in one place: below. */}
-          {sizes.length > 0 ? (
-            <label className="block">
-              <span className="text-sm font-medium text-ink/70">Stock Quantity</span>
-              <input
-                type="text"
-                readOnly
-                tabIndex={-1}
-                value={sizes.reduce((n, sz) => n + (Number(sz.stock_quantity) || 0), 0)}
-                className="mt-1 w-full cursor-not-allowed rounded-lg border border-ink/10 bg-linen/50 px-3 py-2 text-ink/60"
-              />
-              <span className="mt-1 block text-xs text-ink/55">
-                Added up from the sizes below — edit it there.
-              </span>
-            </label>
-          ) : (
-            <div>
-              <Field
-                label={isEdit ? "Stock on the shelf" : "Opening stock"}
-                type="number"
-                min="0"
-                required
-                value={form.stock_quantity}
-                onChange={update("stock_quantity")}
-              />
-              {/* Said plainly: this is the one field in the form that is not a
-                  draft. Stock is live inventory, and Publish never changes it
-                  (migration 0060). */}
-              <span className="mt-1 block text-xs text-ink/55">
-                {isEdit
-                  ? `Live inventory, not part of the draft: a change here goes live when you press Save, not at Publish. It is checked against the ${product!.stock_quantity} shown when you opened this, so a sale in the meantime is never overwritten.`
-                  : "Goes live when the product is first published. After that, stock is changed here or in the table and saves immediately."}
-              </span>
-            </div>
+          {levelOf("fit") !== "na" && (
+            <Field
+              as="textarea"
+              rows={2}
+              label="Fit & sizing"
+              level={levelOf("fit")}
+              placeholder="Relaxed fit. Between sizes, choose the larger."
+              maxLength={FACT_MAX.fit_note}
+              value={form.fit_note}
+              onChange={update("fit_note")}
+            />
           )}
-        </div>
 
-        <fieldset className="rounded-lg border border-ink/10 p-4">
-          <legend className="px-2 text-sm font-medium text-ink/70">
-            Sizes &amp; stock
-          </legend>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {/* DERIVED, NOT TYPED, once a product has sizes (migration 0056).
+                The database overwrites whatever this field sends with the sum of
+                the sizes, so leaving it editable would be offering a control that
+                silently does nothing — which is how 001 came to claim 2 units
+                while holding 13. Stock is managed in one place: below. */}
+            {sizes.length > 0 ? (
+              <label className="block">
+                <span className="text-sm font-medium text-ink/70">Stock Quantity</span>
+                <input
+                  type="text"
+                  readOnly
+                  tabIndex={-1}
+                  value={sizes.reduce((n, sz) => n + (Number(sz.stock_quantity) || 0), 0)}
+                  className="mt-1 w-full cursor-not-allowed rounded-lg border border-ink/10 bg-linen/50 px-3 py-2 text-ink/60"
+                />
+                <span className="mt-1 block text-xs text-ink/55">
+                  Added up from the sizes below — edit it there.
+                </span>
+              </label>
+            ) : (
+              <div className="sm:col-span-2">
+                <Field
+                  label={isEdit ? "Stock on the shelf" : "Opening stock"}
+                  type="number"
+                  min="0"
+                  required
+                  value={form.stock_quantity}
+                  onChange={update("stock_quantity")}
+                />
+                {/* Said plainly: this is the one field in the form that is not a
+                    draft. Stock is live inventory, and Publish never changes it
+                    (migration 0060). */}
+                <span className="mt-1 block text-xs text-ink/55">
+                  {isEdit
+                    ? `Live inventory, not part of the draft: a change here goes live when you press Save, not at Publish. It is checked against the ${product!.stock_quantity} shown when you opened this, so a sale in the meantime is never overwritten.`
+                    : "Goes live when the product is first published. After that, stock is changed here or in the table and saves immediately."}
+                </span>
+              </div>
+            )}
+          </div>
 
-          <p className="text-xs text-ink/60">
-            Leave empty for products sold in one size — sarees, home — which use
-            the single stock number above. Add sizes and this becomes the only
-            place stock is managed: the product total is added up from these, and
-            the field above turns into a read-out of that sum.
-          </p>
-          {/* Said plainly because it contradicts every other field in this
-              form, and an admin who assumed otherwise would oversell. */}
-          <p className="mt-2 rounded-lg bg-linen/60 px-3 py-2 text-xs text-ink/70">
-            Sizes and their stock save <strong>immediately</strong> — they
-            don&apos;t wait for Publish. Stock has to match what&apos;s really on
-            the shelf, and an order can&apos;t wait for a publish either. Only the
-            counts you change are saved, and only if nothing has sold or changed
-            since you opened this.
-          </p>
+          <fieldset className="rounded-lg border border-ink/10 p-4">
+            <legend className="px-2 text-sm font-medium text-ink/70">
+              Sizes &amp; stock
+            </legend>
 
-          {sizes.length > 0 && (
-            <div className="mt-4 space-y-2">
-              {sizes.map((sz, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <input
-                    value={sz.label}
-                    onChange={(e) =>
-                      setSizes((rows) =>
-                        rows.map((r, j) => (j === i ? { ...r, label: e.target.value } : r))
-                      )
-                    }
-                    placeholder="Size"
-                    aria-label={`Size ${i + 1} label`}
-                    className="w-28 rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    value={sz.stock_quantity}
-                    onChange={(e) =>
-                      setSizes((rows) =>
-                        rows.map((r, j) =>
-                          j === i ? { ...r, stock_quantity: Number(e.target.value) } : r
+            <p className="text-xs text-ink/60">
+              Leave empty for products sold in one size — sarees, home — which use
+              the single stock number above. Add sizes and this becomes the only
+              place stock is managed: the product total is added up from these, and
+              the field above turns into a read-out of that sum.
+            </p>
+            {/* Said plainly because it contradicts every other field in this
+                form, and an admin who assumed otherwise would oversell. */}
+            <p className="mt-2 rounded-lg bg-linen/60 px-3 py-2 text-xs text-ink/70">
+              Sizes and their stock save <strong>immediately</strong> — they
+              don&apos;t wait for Publish. Stock has to match what&apos;s really on
+              the shelf, and an order can&apos;t wait for a publish either. Only the
+              counts you change are saved, and only if nothing has sold or changed
+              since you opened this.
+            </p>
+
+            {sizes.length > 0 && (
+              <div className="mt-4 space-y-2">
+                {sizes.map((sz, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input
+                      value={sz.label}
+                      onChange={(e) =>
+                        setSizes((rows) =>
+                          rows.map((r, j) => (j === i ? { ...r, label: e.target.value } : r))
                         )
-                      )
-                    }
-                    aria-label={`${sz.label || `Size ${i + 1}`} stock`}
-                    className="w-24 rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
-                  />
-                  <span className="text-xs text-ink/50">
-                    {sz.stock_quantity <= 0 ? "sold out" : "in stock"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setSizes((rows) => rows.filter((_, j) => j !== i))}
-                    className="ml-auto text-xs text-terracotta-dark hover:underline"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+                      }
+                      placeholder="Size"
+                      aria-label={`Size ${i + 1} label`}
+                      className="w-28 rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      value={sz.stock_quantity}
+                      onChange={(e) =>
+                        setSizes((rows) =>
+                          rows.map((r, j) =>
+                            j === i ? { ...r, stock_quantity: Number(e.target.value) } : r
+                          )
+                        )
+                      }
+                      aria-label={`${sz.label || `Size ${i + 1}`} stock`}
+                      className="w-24 rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
+                    />
+                    <span className="text-xs text-ink/50">
+                      {sz.stock_quantity <= 0 ? "sold out" : "in stock"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSizes((rows) => rows.filter((_, j) => j !== i))}
+                      className="ml-auto text-xs text-terracotta-dark hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
 
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() =>
-                setSizes((rows) => [...rows, { label: "", stock_quantity: 0 }])
-              }
-              className="rounded-full border border-ink/20 px-4 py-2 text-xs text-ink transition-colors hover:border-ink"
-            >
-              Add a size
-            </button>
-            {sizes.length === 0 && (
+            <div className="mt-4 flex flex-wrap gap-3">
               <button
                 type="button"
                 onClick={() =>
-                  setSizes(DEFAULT_SIZE_RUN.map((label) => ({ label, stock_quantity: 0 })))
+                  setSizes((rows) => [...rows, { label: "", stock_quantity: 0 }])
                 }
                 className="rounded-full border border-ink/20 px-4 py-2 text-xs text-ink transition-colors hover:border-ink"
               >
-                Use {DEFAULT_SIZE_RUN.join(" · ")}
+                Add a size
               </button>
-            )}
+              {sizes.length === 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSizes(DEFAULT_SIZE_RUN.map((label) => ({ label, stock_quantity: 0 })))
+                  }
+                  className="rounded-full border border-ink/20 px-4 py-2 text-xs text-ink transition-colors hover:border-ink"
+                >
+                  Use {DEFAULT_SIZE_RUN.join(" · ")}
+                </button>
+              )}
+            </div>
+          </fieldset>
+        </FormSection>
+
+        {/* ── IMAGES ────────────────────────────────────────── */}
+        <FormSection
+          title="Images"
+          aside={stage ?? `${images.length} added${images.length > 1 ? " · first is the cover" : ""}`}
+        >
+          {images.length > 0 && (
+            <ol className="space-y-3">
+              {images.map((photo, i) => {
+                const advice = altTextAdvice(photo.alt, {
+                  productName: form.name,
+                  others: images.filter((_, j) => j !== i).map((p) => p.alt),
+                });
+                const altLevel: InfoLevel = i === 0 ? levelOf("cover_alt") : levelOf("gallery_alt");
+                return (
+                  <li key={photo.url} className="flex gap-3 rounded-lg border border-ink/10 p-2">
+                    <div className="relative aspect-[4/5] w-20 shrink-0 overflow-hidden rounded-md bg-linen">
+                      <Image
+                        src={photo.url}
+                        alt={photo.alt.trim() || `Photo ${i + 1}`}
+                        fill
+                        sizes="80px"
+                        className="object-cover"
+                      />
+                      {i === 0 && (
+                        <span className="absolute left-1 top-1 rounded bg-ink/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-cream">
+                          Cover
+                        </span>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <label className="block text-sm">
+                        <span className="font-medium text-ink/70">
+                          {i === 0 ? "Main image alt text" : `Photo ${i + 1} alt text`}
+                          <LevelTag level={altLevel} />
+                        </span>
+                        <input
+                          value={photo.alt}
+                          maxLength={ALT_TEXT_MAX}
+                          onChange={(e) => setAlt(i, e.target.value)}
+                          placeholder={
+                            i === 0
+                              ? "What a customer would see: e.g. Off-white cotton saree with a red border, draped"
+                              : "What this photo shows that the others don't: e.g. Close-up of the zari border"
+                          }
+                          className="mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none"
+                        />
+                      </label>
+                      <p className={`mt-1 text-xs ${advice ? "text-amber-700" : "text-ink/50"}`}>
+                        {advice ??
+                          (photo.alt.trim()
+                            ? "Read aloud to customers using a screen reader."
+                            : i === 0
+                              ? `Empty: the shop uses the product name — “${form.name || "…"}”.`
+                              : `Empty: the shop says “${form.name || "…"} — image ${i + 1} of ${images.length}”.`)}
+                      </p>
+                      <div className="mt-1 flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => moveImage(i, -1)}
+                          disabled={i === 0}
+                          aria-label={`Move photo ${i + 1} earlier`}
+                          className="rounded p-0.5 text-ink/40 hover:text-ink disabled:opacity-25"
+                        >
+                          <ChevronLeft className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveImage(i, 1)}
+                          disabled={i === images.length - 1}
+                          aria-label={`Move photo ${i + 1} later`}
+                          className="rounded p-0.5 text-ink/40 hover:text-ink disabled:opacity-25"
+                        >
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeImage(i)}
+                          aria-label={`Remove photo ${i + 1}`}
+                          className="ml-2 inline-flex items-center gap-1 rounded p-0.5 text-xs text-ink/45 hover:text-terracotta"
+                        >
+                          <X className="h-3.5 w-3.5" /> Remove
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+
+          {/* sr-only, not display:none: a hidden input can't take focus, so
+              the photo upload was unreachable from the keyboard. The ring on
+              the label shows where focus is. */}
+          <div>
+            <label className="inline-block cursor-pointer rounded-full border border-ink/15 px-4 py-2 text-sm text-ink transition-colors focus-within:ring-2 focus-within:ring-terracotta focus-within:ring-offset-2 hover:border-terracotta">
+              {uploading
+                ? "Uploading…"
+                : images.length
+                  ? "Add more photos"
+                  : "Upload photos"}
+              <input
+                type="file"
+                multiple
+                // Explicit list rather than image/* — on iOS this makes the
+                // picker hand over a JPEG instead of the original HEIC.
+                accept="image/jpeg,image/png,image/webp,image/avif,image/gif"
+                onChange={handleFile}
+                disabled={uploading}
+                className="sr-only"
+              />
+            </label>
+            <p className="mt-1 text-xs text-ink/50">
+              The first photo is used everywhere the product is listed. Alt text
+              describes each photo for people who can&apos;t see it — say what is
+              in the picture, not keywords. Removing a photo here leaves the file
+              in storage; it just stops being used.
+            </p>
           </div>
-        </fieldset>
+
+          <div>
+            <Field
+              label="Product video"
+              level="optional"
+              placeholder="Paste the YouTube link"
+              value={form.video_youtube_id}
+              onChange={update("video_youtube_id")}
+            />
+            <p className="mt-1 text-xs text-ink/50">{videoHint}</p>
+          </div>
+        </FormSection>
+
+        {/* ── SEARCH & DISCOVERY ────────────────────────────── */}
+        <FormSection
+          title="Search & discovery"
+          note="Optional. Leave blank and the shop writes these from the product's name and details — you only need to fill them in to say something better."
+        >
+          <div>
+            <Field
+              label="SEO title"
+              level={levelOf("seo_title")}
+              placeholder={form.name || "Product name"}
+              maxLength={SEO_TITLE_MAX}
+              value={form.seo_title}
+              onChange={update("seo_title")}
+            />
+            <p className="mt-1 text-xs text-ink/50">
+              <SourceTag custom={seo.titleSource === "custom"} />
+              {seo.titleSource === "custom"
+                ? `${form.seo_title.trim().length}/${SEO_TITLE_MAX}. “${PRODUCT_TITLE_SUFFIX.trim()}” is added for you.`
+                : "Using the product name. The shop name is added for you."}
+              {seo.title.length > 65 && " Long titles are cut short in search results."}
+            </p>
+          </div>
+          <div>
+            <Field
+              as="textarea"
+              rows={2}
+              label="Meta description"
+              level={levelOf("meta_description")}
+              placeholder={seo.descriptionSource === "auto" ? seo.description : undefined}
+              maxLength={META_DESCRIPTION_LIMIT}
+              value={form.meta_description}
+              onChange={update("meta_description")}
+            />
+            <p className="mt-1 text-xs text-ink/50">
+              <SourceTag custom={seo.descriptionSource === "custom"} />
+              {seo.descriptionSource === "custom"
+                ? `${form.meta_description.trim().length}/${META_DESCRIPTION_LIMIT}.`
+                : form.description.trim()
+                  ? "Taken from the description."
+                  : "Composed from the name, fabric and category — write a description, or one here, to say more."}
+            </p>
+          </div>
+
+          {/* What a search result will show, built by the function the product
+              page renders its <head> with — so the two cannot disagree. */}
+          <div className="rounded-lg border border-ink/10 bg-white px-4 py-3" aria-label="Search result preview">
+            <p className="text-[11px] uppercase tracking-wider text-ink/40">Search result preview</p>
+            <p className="mt-1 truncate text-[15px] text-[#1a0dab]">{seo.title}</p>
+            <p className="truncate text-xs text-emerald-800">thewovenne.com{previewPath}</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-ink/70">{seo.description}</p>
+          </div>
+        </FormSection>
 
         {/* Seasonal campaign — optional, collapsed visually so the common
             case (no campaign) stays out of the way. */}
@@ -1161,95 +1552,6 @@ export default function ProductModal({
           )}
         </fieldset>
 
-        <div>
-          <div className="flex items-baseline justify-between">
-            <span className="text-sm font-medium text-ink/70">Photos</span>
-            <span className="text-xs text-ink/40">
-              {stage ?? (
-                <>
-                  {images.length} added{images.length > 1 && " · first is the cover"}
-                </>
-              )}
-            </span>
-          </div>
-
-          {images.length > 0 && (
-            <div className="mt-2 grid grid-cols-4 gap-3 sm:grid-cols-5">
-              {images.map((url, i) => (
-                <div key={url} className="group relative">
-                  <div className="relative aspect-[4/5] overflow-hidden rounded-lg bg-linen">
-                    <Image
-                      src={url}
-                      alt={`Photo ${i + 1}`}
-                      fill
-                      sizes="120px"
-                      className="object-cover"
-                    />
-                    {i === 0 && (
-                      <span className="absolute left-1 top-1 rounded bg-ink/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-cream">
-                        Cover
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-1 flex items-center justify-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => moveImage(i, -1)}
-                      disabled={i === 0}
-                      aria-label={`Move photo ${i + 1} earlier`}
-                      className="rounded p-0.5 text-ink/40 hover:text-ink disabled:opacity-25"
-                    >
-                      <ChevronLeft className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeImage(i)}
-                      aria-label={`Remove photo ${i + 1}`}
-                      className="rounded p-0.5 text-ink/40 hover:text-terracotta"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => moveImage(i, 1)}
-                      disabled={i === images.length - 1}
-                      aria-label={`Move photo ${i + 1} later`}
-                      className="rounded p-0.5 text-ink/40 hover:text-ink disabled:opacity-25"
-                    >
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* sr-only, not display:none: a hidden input can't take focus, so
-              the photo upload was unreachable from the keyboard. The ring on
-              the label shows where focus is. */}
-          <label className="mt-3 inline-block cursor-pointer rounded-full border border-ink/15 px-4 py-2 text-sm text-ink transition-colors focus-within:ring-2 focus-within:ring-terracotta focus-within:ring-offset-2 hover:border-terracotta">
-            {uploading
-              ? "Uploading…"
-              : images.length
-                ? "Add more photos"
-                : "Upload photos"}
-            <input
-              type="file"
-              multiple
-              // Explicit list rather than image/* — on iOS this makes the
-              // picker hand over a JPEG instead of the original HEIC.
-              accept="image/jpeg,image/png,image/webp,image/avif,image/gif"
-              onChange={handleFile}
-              disabled={uploading}
-              className="sr-only"
-            />
-          </label>
-          <p className="mt-1 text-xs text-ink/50">
-            The first photo is used everywhere the product is listed. Removing a
-            photo here leaves the file in storage; it just stops being used.
-          </p>
-        </div>
-
         {checkOpen ? (
           <ProductContentCheck
             check={contentCheck}
@@ -1293,24 +1595,34 @@ export default function ProductModal({
               ? "Saves a draft — customers keep seeing the live version until you publish. Stock and sizes are the exception: they change on the shop as soon as you save."
               : "Saves a draft — customers can't see this product until you publish it."}
           </p>
+          {/* The same list as the panel at the top, said once more where the
+              decision is made. Saving still works; this is about Publish. */}
+          {!info.publishable && !(product && !product.is_active) && (
+            <p className="mt-1 text-center text-xs text-terracotta-dark">
+              Publishing will wait for: {info.missingRequired.join(", ")}.
+            </p>
+          )}
         </div>
       </form>
     </Modal>
   );
 }
 
-type FieldProps = { label: string } & (
+type FieldProps = { label: string; level?: InfoLevel } & (
   | ({ as: "textarea" } & TextareaHTMLAttributes<HTMLTextAreaElement>)
   | ({ as?: "input" } & InputHTMLAttributes<HTMLInputElement>)
 );
 
-function Field({ label, as = "input", ...props }: FieldProps) {
+function Field({ label, level, as = "input", ...props }: FieldProps) {
   const fieldClassName =
     "mt-1 w-full rounded-lg border border-ink/15 bg-cream px-3 py-2 text-sm text-ink focus:border-terracotta focus:outline-none";
 
   return (
     <label className="block text-sm">
-      <span className="font-medium text-ink/70">{label}</span>
+      <span className="font-medium text-ink/70">
+        {label}
+        {level && <LevelTag level={level} />}
+      </span>
       {as === "textarea" ? (
         <textarea
           rows={3}
@@ -1324,5 +1636,48 @@ function Field({ label, as = "input", ...props }: FieldProps) {
         />
       )}
     </label>
+  );
+}
+
+/**
+ * One titled group of the form. A heading and a rule rather than a box, so the
+ * form reads as a few clear sections instead of one wall of inputs.
+ */
+function FormSection({
+  title,
+  note,
+  aside,
+  children,
+}: {
+  title: string;
+  note?: string;
+  /** A short status on the right of the heading, e.g. the photo count. */
+  aside?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-4 border-t border-ink/10 pt-6 first:border-t-0 first:pt-0">
+      <div>
+        <div className="flex items-baseline justify-between gap-2">
+          <h3 className="font-heading text-xl text-ink">{title}</h3>
+          {aside && <span className="text-xs text-ink/40">{aside}</span>}
+        </div>
+        {note && <p className="mt-1 text-xs text-ink/55">{note}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** Whether the search text shown is the admin's own or the automatic fallback. */
+function SourceTag({ custom }: { custom: boolean }) {
+  return (
+    <span
+      className={`mr-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${
+        custom ? "bg-ink text-cream" : "bg-ink/10 text-ink/60"
+      }`}
+    >
+      {custom ? "Custom value" : "Auto-generated fallback"}
+    </span>
   );
 }

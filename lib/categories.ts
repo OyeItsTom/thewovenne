@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import type { Category, CategoryNode } from "./types";
 import { ANON_CTX, statesFor, type ReadCtx } from "./readCtx";
+import { isProductProfile, type ProductProfile } from "./productInfo";
 
 /** A category_versions row, flattened to the Category shape callers expect. */
 type CategoryVersionRow = {
@@ -12,6 +13,8 @@ type CategoryVersionRow = {
   is_visible: boolean;
   sort_order: number;
   created_at: string;
+  /** Migration 0065. Absent from a read that did not ask for it. */
+  product_profile?: string | null;
 };
 
 /**
@@ -27,6 +30,9 @@ function mapCategoryVersion(row: CategoryVersionRow): Category {
     is_visible: row.is_visible,
     sort_order: row.sort_order,
     created_at: row.created_at,
+    // Anything the database did not constrain to a known type reads as unset
+    // (inherit) rather than reaching effectiveProfile as an unknown string.
+    product_profile: isProductProfile(row.product_profile) ? (row.product_profile as ProductProfile) : null,
   };
 }
 
@@ -52,7 +58,7 @@ export async function getAllCategories(
   const withDrafts = drafts ?? false;
   const { data, error } = await read
     .from("category_versions")
-    .select("category_id, state, name, slug, parent_id, is_visible, sort_order, created_at")
+    .select("category_id, state, name, slug, parent_id, is_visible, sort_order, created_at, product_profile")
     .in("state", withDrafts ? ["published", "draft"] : ["published"])
     .order("sort_order", { ascending: true });
 

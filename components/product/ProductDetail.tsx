@@ -13,11 +13,12 @@ import ProductReviews from "@/components/product/ProductReviews";
 import DeliveryEstimator from "@/components/product/DeliveryEstimator";
 import Stars from "@/components/product/Stars";
 import { getReviews, getRating } from "@/lib/reviews";
-import { getBrandKnowledge } from "@/lib/storefront";
+import { getBrandKnowledge, getVisibleCategoryTree } from "@/lib/storefront";
 import { getDeliveryConfig } from "@/lib/delivery";
 import { DEFAULT_COUNTRY } from "@/lib/country";
 import { cPath } from "@/lib/country";
-import type { Product } from "@/lib/types";
+import type { GalleryPhoto, Product } from "@/lib/types";
+import { effectiveProfile, productFactRows } from "@/lib/productInfo";
 import type { ProductSize } from "@/lib/sizes";
 import { stockNote, stockState } from "@/lib/stock";
 import JsonLd from "@/components/seo/JsonLd";
@@ -43,7 +44,8 @@ export default async function ProductDetail({
   breadcrumb,
 }: {
   product: Product;
-  images: string[];
+  /** The published gallery, cover first, each with its written alt text (0065). */
+  images: GalleryPhoto[];
   related: Product[];
   /** Empty for single-stock products such as sarees. */
   sizes: ProductSize[];
@@ -72,12 +74,33 @@ export default async function ProductDetail({
   // A query of its own rather than a column on the listing payload — see
   // getBrandKnowledge. One extra read on the one page that shows it, instead of
   // three paragraphs per product on every category page.
-  const [reviews, rating, knowledge, deliveryConfig] = await Promise.all([
+  const [reviews, rating, knowledge, deliveryConfig, tree] = await Promise.all([
     getReviews(product.id),
     getRating(product.id),
     getBrandKnowledge({ productId: product.id }),
     getDeliveryConfig(),
+    getVisibleCategoryTree(),
   ]);
+
+  // Which facts apply is the category's type (0065): jewellery's material is
+  // "Material", a saree's is "Fabric", and a blouse piece is only a saree's.
+  const profile = effectiveProfile(
+    product.category_id,
+    tree.flatMap((parent) => [parent, ...parent.children])
+  );
+  // ONE LIST FOR THE PAGE AND THE MARKUP — see productFactRows. Only stored
+  // facts, so a piece with nothing written shows exactly what it did before.
+  const facts = productFactRows({
+    profile,
+    fabric: product.fabric,
+    dimensions: knowledge?.facts.dimensions,
+    blousePiece: knowledge?.facts.blousePiece,
+    fit: knowledge?.facts.fit,
+    finish: knowledge?.facts.finish,
+    weave: knowledge?.facts.weave,
+    origin: knowledge?.facts.origin,
+  });
+  const urls = images.map((i) => i.url);
 
   // Only a note written for this piece. Null means nothing approved to say, and
   // the Material & Care section is not rendered. See lib/care.
@@ -103,11 +126,13 @@ export default async function ProductDetail({
           // First-party optimizer URLs, not the raw storage ones Supabase marks
           // noindex. Order and count unchanged; the gallery below keeps the
           // stored URLs. See productImageUrl in lib/seo.
-          images: images.map((src) => productImageUrl(src, "jsonLd")),
+          images: urls.map((src) => productImageUrl(src, "jsonLd")),
           description: product.description,
           // The same column MaterialCare and the fabric line below render, so
           // the markup and the page cannot name two different materials.
           fabric: product.fabric,
+          // The rows printed below the price, word for word.
+          facts,
           price,
           soldOut: stock.soldOut,
           rating,
@@ -151,7 +176,7 @@ export default async function ProductDetail({
           of it was pushing the price off the first screen. On two columns from
           lg: up it is horizontal breathing room and keeps its original 16. */}
       <div className="grid gap-8 sm:gap-12 lg:grid-cols-2 lg:gap-16">
-        <ImageGallery images={images} alt={product.name} />
+        <ImageGallery images={urls} alts={images.map((i) => i.alt)} alt={product.name} />
 
         {/* STICKY ON DESKTOP, and it needs BOTH of these elements to work. A
             gallery is tall and a buy panel is short: without this, a piece with
@@ -251,7 +276,7 @@ export default async function ProductDetail({
             </div>
           )}
 
-          {(product.fabric || care) && (
+          {(facts.length > 0 || care) && (
             /* THE MATERIAL, LABELLED, after everything needed to buy. It was a
                lone line of small caps under the delivery check with no label —
                "HANDLOOM 120 COUNT MUL COTTON" on its own, easy to read as a
@@ -259,21 +284,23 @@ export default async function ProductDetail({
                rule-and-label as Quantity and Delivery above it, and the value
                is set as words, in the case it was stored in.
 
-               Only stored facts: the fabric column, and a pointer to the care
-               note when one was written for this piece. Colour is deliberately
-               absent — the stored colour does not yet reliably describe the
-               cloth (most pieces read "Off-white" whatever their border). */
+               Only stored facts: the fabric column and the facts of 0065 that
+               apply to this type (productFactRows — the same rows the Product
+               markup states), and a pointer to the care note when one was
+               written for this piece. Colour is deliberately absent — the
+               stored colour does not yet reliably describe the cloth (most
+               pieces read "Off-white" whatever their border). */
             <dl className="mt-6 space-y-5 border-t border-ink/10 pt-5">
-              {product.fabric && (
-                <div>
+              {facts.map((row) => (
+                <div key={row.key}>
                   <dt className="font-heading text-sm uppercase tracking-wider text-ink-muted">
-                    Fabric
+                    {row.label}
                   </dt>
-                  <dd className="mt-1.5 text-[15px] leading-relaxed text-ink">
-                    {product.fabric}
+                  <dd className="mt-1.5 whitespace-pre-line text-[15px] leading-relaxed text-ink">
+                    {row.value}
                   </dd>
                 </div>
-              )}
+              ))}
               {care && (
                 <div>
                   <dt className="font-heading text-sm uppercase tracking-wider text-ink-muted">

@@ -180,6 +180,13 @@ export interface ProductNodeInput {
    */
   fabric?: string | null;
   /**
+   * The labelled facts the page prints beside the price, from productFactRows()
+   * in lib/productInfo — the SAME rows ProductDetail renders. Each becomes one
+   * PropertyValue. The fabric row is left to `material` above rather than said
+   * twice. Absent or empty: no additionalProperty at all.
+   */
+  facts?: { key: string; label: string; value: string }[];
+  /**
    * When an active discount ends. The discounted price genuinely stops being
    * available then, which is what priceValidUntil means. Null the rest of the
    * time, and then no date is claimed.
@@ -207,6 +214,13 @@ export interface ProductNodeInput {
  * codebase knows. Jewellery has no fabric and so has no material, rather than
  * being described as cloth.
  *
+ * ADDITIONAL PROPERTIES ARE THE PAGE'S FACT ROWS OR NOTHING (0065). Weave,
+ * finish, dimensions, blouse piece, fit and origin are written by the admin,
+ * optional, and printed on the page; the markup restates exactly those rows.
+ * Colour is still NOT marked up: the stored colour does not yet reliably
+ * describe the cloth (most sarees read "Off-white" whatever their border), and
+ * the page does not print it either.
+ *
  * AVAILABILITY IS BINARY, and comes from the same stockState() call the page
  * renders from. A sized product is InStock when at least one size has stock,
  * which is exactly when its Add to Cart can succeed; a sizeless one follows its
@@ -229,6 +243,7 @@ export function productNode(input: ProductNodeInput) {
     // Trimmed so a whitespace-only cell is absent rather than an empty string:
     // prune() would drop "" anyway, and saying so here makes it deliberate.
     material: input.fabric?.trim() || undefined,
+    additionalProperty: factProperties(input.facts),
     brand: { "@type": "Brand", name: BRAND_NAME },
     offers: {
       "@type": "Offer",
@@ -243,6 +258,20 @@ export function productNode(input: ProductNodeInput) {
     },
     aggregateRating: aggregateRatingNode(input.rating),
   };
+}
+
+/**
+ * Stored facts as schema.org PropertyValues: weave, finish, dimensions, blouse
+ * piece, fit, origin — whichever were written for this piece and are printed on
+ * its page. Free text stays free text: "5.5 m × 1.15 m" is not parsed into a
+ * QuantitativeValue it might misread, and an origin like "Chendamangalam,
+ * Kerala" is not promoted to countryOfOrigin, which wants a country it would
+ * have to infer. Undefined when there is nothing, so prune() drops the key.
+ */
+function factProperties(facts: ProductNodeInput["facts"]) {
+  const rows = (facts ?? []).filter((f) => f.key !== "fabric" && f.value.trim());
+  if (rows.length === 0) return undefined;
+  return rows.map((f) => ({ "@type": "PropertyValue", name: f.label, value: f.value.trim() }));
 }
 
 /**

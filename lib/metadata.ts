@@ -287,6 +287,52 @@ export function productMetaDescription(input: ProductMetaInput): string | undefi
   return metaDescription(`${lead} From ${SITE_NAME}, ${CLOSING_CONTINUED}`);
 }
 
+/** The shop name every product title ends with — added here, never typed. */
+export const PRODUCT_TITLE_SUFFIX = ` | ${SITE_NAME}`;
+
+/** A custom meta description may use the whole of what 0065 allows. */
+export const CUSTOM_META_DESCRIPTION_MAX = 160;
+
+export interface ProductSeoInput extends ProductMetaInput {
+  /** product_versions.seo_title (0065). Null or blank = use the name. */
+  seoTitle?: string | null;
+  /** product_versions.meta_description (0065). Null or blank = compose one. */
+  metaDescription?: string | null;
+}
+
+export interface ProductSeo {
+  /** The <title>: the custom title or the name, then the shop name. */
+  title: string;
+  titleSource: "custom" | "auto";
+  /** The same words without the shop name, for og:title. */
+  heading: string;
+  description: string | undefined;
+  descriptionSource: "custom" | "auto";
+}
+
+/**
+ * What a product page tells a search engine — and what the admin form previews,
+ * from the same function, so the preview cannot disagree with the page.
+ *
+ * A CUSTOM VALUE WINS, a blank one falls back. Nobody has to retype the product
+ * name to get a title, or write a snippet for every piece: blank keeps the
+ * composed fallback productMetaDescription() has always produced. Custom text
+ * is used as written (whitespace collapsed), never reworded; its length is
+ * capped by 0065's CHECK, so nothing here has to cut it.
+ */
+export function productSeo(input: ProductSeoInput): ProductSeo {
+  const customTitle = input.seoTitle?.replace(/\s+/g, " ").trim();
+  const heading = customTitle || input.name;
+  const customDescription = metaDescription(input.metaDescription, CUSTOM_META_DESCRIPTION_MAX);
+  return {
+    title: `${heading}${PRODUCT_TITLE_SUFFIX}`,
+    titleSource: customTitle ? "custom" : "auto",
+    heading,
+    description: customDescription ?? productMetaDescription(input),
+    descriptionSource: customDescription ? "custom" : "auto",
+  };
+}
+
 /**
  * Whether a category page may be indexed, from how much is filed under it.
  *

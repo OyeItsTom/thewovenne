@@ -219,9 +219,11 @@ const qty = read("components/product/AddToCart.tsx");
 check("PDP category label uses ink-muted", /tracking-wider text-ink-muted">\s*\{product\.category\}/.test(detail));
 check("PDP stock note uses ink-muted", /tracking-\[0\.12em\] text-ink-muted">\s*<span aria-hidden className="h-1 w-1 rounded-full bg-gold" \/>\s*\{note\}/.test(detail));
 // PR 3: the fabric is now a labelled detail — the "Fabric" label is the quiet
-// ink-muted text and the value itself is full ink.
-check("PDP fabric label uses ink-muted", /text-ink-muted">\s*Fabric\s*<\/dt>/.test(detail));
-check("PDP fabric value is full ink", /text-ink">\s*\{product\.fabric\}/.test(detail));
+// ink-muted text and the value itself is full ink. Since 0065 the fabric is the
+// first of the fact rows (productFactRows), rendered by one loop, so the label
+// and value classes are checked on that loop.
+check("PDP fabric label uses ink-muted", /text-ink-muted">\s*\{row\.label\}\s*<\/dt>/.test(detail));
+check("PDP fabric value is full ink", /text-ink">\s*\{row\.value\}/.test(detail));
 check("card Sold out uses ink-muted", /text-ink-muted">\s*Sold out/.test(card));
 check("cart line size uses ink-muted", /text-ink-muted">\s*Size \{item\.size\}/.test(line));
 check("Size heading uses ink-muted", /text-ink-muted">\s*Size/.test(sizeSel));

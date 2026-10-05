@@ -299,7 +299,10 @@ const legacy = stripComments(read(ROW_ROUTES[1]));
 const journalPost = stripComments(read(ROW_ROUTES[3]));
 
 for (const [name, src] of [["hierarchical", hierarchical], ["legacy flat", legacy]] as const) {
-  ok(`the ${name} product route composes its description`, src.includes("productMetaDescription("));
+  // Since 0065 through productSeo(), which keeps productMetaDescription() as
+  // the fallback when no custom meta description is written.
+  ok(`the ${name} product route composes its description`, src.includes("productSeo(") &&
+    /description: customDescription \?\? productMetaDescription\(input\)/.test(read("lib/metadata.ts")));
   ok(`and no longer slices it by hand`, !/description\?\.slice\(/.test(src));
 }
 ok("the journal post route collapses its body", journalPost.includes("metaDescription(post.body)"));

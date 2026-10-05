@@ -10,9 +10,10 @@
  * set, and the thumbnails were "{name} thumbnail {i}". Share cards carried
  * og:image with no og:image:alt at all.
  *
- * THE RULE IS TRUTHFULNESS. The only facts we hold about a photograph are the
- * product it belongs to and its position in the set — product_images has no alt
- * column. So the cover is the product's name, every later image is
+ * THE RULE IS TRUTHFULNESS. Since 0065 a photo can carry alt text the admin
+ * wrote while looking at it, and that is used as written. Otherwise the only
+ * facts we hold about a photograph are the product it belongs to and its
+ * position in the set, so the cover is the product's name, every later image is
  * "{name} — image {i} of {n}", and nothing here may describe a colour, an angle
  * or a detail that nobody checked.
  *
@@ -191,13 +192,18 @@ for (const route of [
   "app/(storefront)/in/product/[slug]/page.tsx",
 ]) {
   const src = fs.readFileSync(route, "utf8");
-  ok(`${route}: og image alt is the product name`, src.includes("imageAlt: product.name,"));
+  // The cover's written alt text when it has one (0065), else the name as before.
+  ok(`${route}: og image alt is the cover's written alt, else the product name`,
+    src.includes("imageAlt: (cover?.url === product.image_url ? cover?.alt : null) ?? product.name,"));
   ok(
     `${route}: og:image selection is untouched`,
     src.includes('images: [product.image_url ? productImageUrl(product.image_url, "openGraph") : null],')
   );
 }
-ok("the gallery is still given the product name", fs.readFileSync("components/product/ProductDetail.tsx", "utf8").includes("<ImageGallery images={images} alt={product.name} />"));
+ok("the gallery is still given the product name, plus each photo's written alt",
+  fs.readFileSync("components/product/ProductDetail.tsx", "utf8").includes("<ImageGallery images={urls} alts={images.map((i) => i.alt)} alt={product.name} />"));
+check("a written alt replaces the fallback, as written", productImageAlt(NAME, 1, 4, " Close-up of the border "), "Close-up of the border");
+check("a blank written alt is no alt: the fallback stands", productImageAlt(NAME, 1, 4, "  "), `${NAME} — image 2 of 4`);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

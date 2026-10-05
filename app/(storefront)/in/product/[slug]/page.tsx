@@ -8,7 +8,7 @@ import {
 import { flatProductHistoryPath, resolveOldPath } from "@/lib/redirects";
 import { getProductSizes } from "@/lib/sizes";
 import { productHref } from "@/lib/urls";
-import { productMetaDescription } from "@/lib/metadata";
+import { productSeo } from "@/lib/metadata";
 import ProductDetail from "@/components/product/ProductDetail";
 import { openGraph, productImageUrl } from "@/lib/seo";
 
@@ -50,26 +50,32 @@ export async function generateMetadata({
    * a schema description states a fact about a piece, and the two must not
    * share a fallback. See lib/structuredData.
    */
-  const description = productMetaDescription({
+  // A hand-written title or snippet (0065) wins; a blank one falls back to the
+  // composed values above — the same function the admin form previews with.
+  const seo = productSeo({
     name: product.name,
     description: product.description,
     categoryName: product.category,
     fabric: product.fabric,
+    seoTitle: product.seo_title,
+    metaDescription: product.meta_description,
   });
+  // The cover's own alt text when somebody wrote one, else the name as before.
+  const cover = (await getProductImages(product.id))[0];
 
   return {
-    title: `${product.name} | THE WOVENNE`,
-    description,
+    title: seo.title,
+    description: seo.description,
     alternates: { canonical: productHref(product) },
     // "website", not "product": Next 14.2.5's OpenGraph union has no product
     // type and its generator throws on one. The Product facts a search engine
     // reads come from the JSON-LD node this page already emits. See lib/seo.
     openGraph: openGraph({
-      title: product.name,
-      description,
+      title: seo.heading,
+      description: seo.description,
       path: productHref(product),
       images: [product.image_url ? productImageUrl(product.image_url, "openGraph") : null],
-      imageAlt: product.name,
+      imageAlt: (cover?.url === product.image_url ? cover?.alt : null) ?? product.name,
     }),
   };
 }
@@ -100,9 +106,11 @@ export default async function LegacyProductPage({
     getProductSizes(product.id),
   ]);
 
-  const images = (gallery.length ? gallery : [product.image_url]).filter(
-    (src): src is string => Boolean(src)
-  );
+  const images = gallery.length
+    ? gallery
+    : product.image_url
+      ? [{ url: product.image_url, alt: null }]
+      : [];
 
   return <ProductDetail
       product={product}

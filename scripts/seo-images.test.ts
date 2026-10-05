@@ -230,8 +230,9 @@ const detail = read("components/product/ProductDetail.tsx");
 const childRoute = read("app/(storefront)/in/[slug]/[child]/[product]/page.tsx");
 const flatRoute = read("app/(storefront)/in/product/[slug]/page.tsx");
 ok("ProductDetail maps JSON-LD images through the helper",
-  /images:\s*images\.map\(\(src\)\s*=>\s*productImageUrl\(src,\s*"jsonLd"\)\)/.test(detail));
-ok("the gallery still renders the stored URLs", /<ImageGallery images=\{images\}/.test(detail));
+  /images:\s*urls\.map\(\(src\)\s*=>\s*productImageUrl\(src,\s*"jsonLd"\)\)/.test(detail) &&
+    /const urls = images\.map\(\(i\) => i\.url\);/.test(detail));
+ok("the gallery still renders the stored URLs", /<ImageGallery images=\{urls\}/.test(detail));
 for (const [label, route] of [["canonical route", childRoute], ["flat route", flatRoute]] as const) {
   ok(`${label}: og:image goes through the helper`,
     /images:\s*\[product\.image_url \? productImageUrl\(product\.image_url, "openGraph"\) : null\]/.test(route));

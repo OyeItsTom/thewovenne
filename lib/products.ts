@@ -10,7 +10,7 @@ import { withinPriceCeiling } from "./pricing";
 import { colourOptions, fabricOptions, matchesColour, matchesFabric } from "./catalogueFacets";
 import { promotable } from "./merchandising";
 import { factsFromVersions } from "./adminStatus";
-import type { Category, Product, ProductListing } from "./types";
+import type { Category, GalleryPhoto, Product, ProductListing } from "./types";
 
 // Storefront reads come from PUBLISHED versions, never the identity tables.
 // RLS only exposes state = 'published' to anon, so a mistake here cannot leak
@@ -20,6 +20,9 @@ export const PRODUCT_SELECT =
   "stock_quantity, image_url, is_active, created_at, collection, " +
   // Customer-facing, unlike cost and sku: the product page renders it.
   "video_youtube_id, " +
+  // The hand-written search title and snippet (0065), which generateMetadata
+  // reads from this same query. Two short strings, null on most rows.
+  "seo_title, meta_description, " +
   "discount_type, discount_value, discount_starts_at, discount_ends_at, " +
   // The gallery, embedded rather than fetched per card. Two URLs — the cover and
   // the one a card cross-fades to — are two short strings; the IMAGE BYTES are
@@ -122,6 +125,9 @@ export type ProductVersionRow = {
   discount_starts_at: string | null;
   discount_ends_at: string | null;
   video_youtube_id: string | null;
+  /** Migration 0065. Null = compose from the product's facts (lib/metadata productSeo). */
+  seo_title?: string | null;
+  meta_description?: string | null;
   /** The identity row's creation date, embedded for ordering. See NEWEST_PRODUCT_FIRST. */
   products?: { created_at: string } | null;
   /** Embedded gallery. Absent on queries that do not ask for it. */
@@ -229,6 +235,8 @@ export function mapProduct(row: ProductVersionRow, categories: Map<string, Categ
     // fields make an absent one type-check perfectly. scripts/product-mapping.test.ts
     // now fails if any of the three disagree.
     video_youtube_id: row.video_youtube_id ?? null,
+    seo_title: row.seo_title ?? null,
+    meta_description: row.meta_description ?? null,
     images: galleryImages(row.product_images, row.image_url),
   };
 }
@@ -274,7 +282,10 @@ export function galleryImages(
  * and there is no type that makes them — see mapAdminProduct.
  */
 export const ADMIN_ONLY_SELECT =
-  "cost_price_inr, sku, heritage_note, craft_note, care_note";
+  "cost_price_inr, sku, heritage_note, craft_note, care_note, " +
+  // Product facts (0065). Customer-facing, but read on the storefront through
+  // getBrandKnowledge, not on every listing — the same reasoning as the notes.
+  "dimensions, blouse_piece, fit_note, finish, weave, origin";
 
 export type AdminProductRow = ProductVersionRow & {
   state: string;
@@ -284,6 +295,12 @@ export type AdminProductRow = ProductVersionRow & {
   heritage_note: string | null;
   craft_note: string | null;
   care_note: string | null;
+  dimensions: string | null;
+  blouse_piece: "included" | "not_included" | null;
+  fit_note: string | null;
+  finish: string | null;
+  weave: string | null;
+  origin: string | null;
 };
 
 /**
@@ -313,6 +330,12 @@ export function mapAdminProduct(
     heritage_note: row.heritage_note ?? null,
     craft_note: row.craft_note ?? null,
     care_note: row.care_note ?? null,
+    dimensions: row.dimensions ?? null,
+    blouse_piece: row.blouse_piece ?? null,
+    fit_note: row.fit_note ?? null,
+    finish: row.finish ?? null,
+    weave: row.weave ?? null,
+    origin: row.origin ?? null,
     // The product's ORIGINAL creation date, already embedded for ordering
     // (PRODUCT_SELECT's products(created_at)). created_at above is the
     // version's, re-stamped by every edit; the Admin list sorts by age on this.
@@ -353,11 +376,12 @@ async function scopeToVisible(
 export async function getProductImages(
   productId: string,
   client: SupabaseClient = supabase
-): Promise<string[]> {
-  // Galleries hang off the version, so read the published version's images.
+): Promise<GalleryPhoto[]> {
+  // Galleries hang off the version, so read the published version's images —
+  // and what each one shows (0065), which drafts and publishes with the photo.
   const { data, error } = await client
     .from("product_images")
-    .select("url, product_versions!inner(product_id, state)")
+    .select("url, alt_text, product_versions!inner(product_id, state)")
     .eq("product_versions.product_id", productId)
     .eq("product_versions.state", "published")
     .order("sort_order", { ascending: true });
@@ -366,7 +390,10 @@ export async function getProductImages(
     console.error("getProductImages:", error.message);
     return [];
   }
-  return (data ?? []).map((row) => row.url as string);
+  return (data ?? []).map((row) => ({
+    url: row.url as string,
+    alt: (row.alt_text as string | null) ?? null,
+  }));
 }
 
 /**
@@ -448,10 +475,10 @@ export async function getDraftProductIds(
 export async function getDraftProductImages(
   productId: string,
   client: SupabaseClient = supabase
-): Promise<string[]> {
+): Promise<GalleryPhoto[]> {
   const { data, error } = await client
     .from("product_images")
-    .select("url, sort_order, product_versions!inner(product_id, state)")
+    .select("url, sort_order, alt_text, product_versions!inner(product_id, state)")
     .eq("product_versions.product_id", productId)
     .in("product_versions.state", ["draft", "published"])
     .order("sort_order", { ascending: true });
@@ -462,10 +489,11 @@ export async function getDraftProductImages(
   }
   const rows = (data ?? []) as unknown as {
     url: string;
+    alt_text: string | null;
     product_versions: { state: string };
   }[];
   const draft = rows.filter((r) => r.product_versions.state === "draft");
-  return (draft.length ? draft : rows).map((r) => r.url);
+  return (draft.length ? draft : rows).map((r) => ({ url: r.url, alt: r.alt_text ?? null }));
 }
 
 export async function getFeaturedProducts(
@@ -966,11 +994,27 @@ export interface BrandKnowledge {
   heritage: string | null;
   craft: string | null;
   care: string | null;
+  /**
+   * The structured facts (migration 0065), read with the notes because the same
+   * one page shows them. Each null until somebody who knows says so — the page
+   * and the markup print only what is here.
+   */
+  facts: ProductFacts;
 }
 
-/** The three columns, named once. Deliberately NOT part of PRODUCT_SELECT. */
+export interface ProductFacts {
+  dimensions: string | null;
+  blousePiece: "included" | "not_included" | null;
+  fit: string | null;
+  finish: string | null;
+  weave: string | null;
+  origin: string | null;
+}
+
+/** The notes and facts, named once. Deliberately NOT part of PRODUCT_SELECT. */
 export const BRAND_KNOWLEDGE_SELECT =
-  "product_id, name, slug, heritage_note, craft_note, care_note";
+  "product_id, name, slug, heritage_note, craft_note, care_note, " +
+  "dimensions, blouse_piece, fit_note, finish, weave, origin";
 
 export type BrandKnowledgeRow = {
   product_id: string;
@@ -979,7 +1023,16 @@ export type BrandKnowledgeRow = {
   heritage_note: string | null;
   craft_note: string | null;
   care_note: string | null;
+  dimensions?: string | null;
+  blouse_piece?: string | null;
+  fit_note?: string | null;
+  finish?: string | null;
+  weave?: string | null;
+  origin?: string | null;
 };
+
+/** Trimmed, or null: whitespace is not a fact (0065's CHECK says the same). */
+const fact = (v: string | null | undefined) => v?.trim() || null;
 
 export function mapBrandKnowledge(row: BrandKnowledgeRow): BrandKnowledge {
   return {
@@ -989,6 +1042,15 @@ export function mapBrandKnowledge(row: BrandKnowledgeRow): BrandKnowledge {
     heritage: row.heritage_note,
     craft: row.craft_note,
     care: row.care_note,
+    facts: {
+      dimensions: fact(row.dimensions),
+      blousePiece:
+        row.blouse_piece === "included" || row.blouse_piece === "not_included" ? row.blouse_piece : null,
+      fit: fact(row.fit_note),
+      finish: fact(row.finish),
+      weave: fact(row.weave),
+      origin: fact(row.origin),
+    },
   };
 }
 

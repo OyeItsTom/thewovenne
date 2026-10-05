@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { PRODUCT_PROFILES, profileLabel, type ProductProfile } from "@/lib/productInfo";
 import {
   ChevronDown,
   ChevronUp,
@@ -168,6 +169,19 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
       () => `${cat.name} will be ${cat.is_visible ? "hidden" : "visible"} after you publish. ${untilPublish(cat)}`
     );
 
+  /**
+   * The product type decides which facts the product form asks for, and which
+   * are required to publish (lib/productInfo, migration 0065). Null inherits
+   * the parent's. A draft change like any other, live at Publish.
+   */
+  const setProfile = (cat: Category, profile: ProductProfile | null, inherited: string) =>
+    run(
+      cat.id,
+      () => patchDraft(cat, { product_profile: profile }),
+      () =>
+        `${cat.name} will use “${profile ? profileLabel(profile) : inherited}” product details after you publish. ${untilPublish(cat)}`
+    );
+
   const rename = (cat: Category, name: string) =>
     run(
       cat.id,
@@ -303,6 +317,7 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
                 confirming={confirmDelete === parent.id}
                 childCount={children.length}
                 onToggle={() => toggleVisible(parent)}
+                onSetProfile={(p) => setProfile(parent, p, "General")}
                 onRename={(name) => rename(parent, name)}
                 onMove={(d) => move(parent, d)}
                 onAskDelete={() => setConfirmDelete(parent.id)}
@@ -329,6 +344,10 @@ export default function CategoryManager({ onChange }: { onChange?: () => void })
                     canMoveDown={cIndex < children.length - 1}
                     confirming={confirmDelete === child.id}
                     onToggle={() => toggleVisible(child)}
+                    inheritedProfile={parent.product_profile ?? "general"}
+                    onSetProfile={(p) =>
+                      setProfile(child, p, `Same as ${parent.name} (${profileLabel(parent.product_profile ?? "general")})`)
+                    }
                     onRename={(name) => rename(child, name)}
                     onMove={(d) => move(child, d)}
                     onAskDelete={() => setConfirmDelete(child.id)}
@@ -397,6 +416,8 @@ function Row({
   canMoveDown,
   confirming,
   onToggle,
+  inheritedProfile,
+  onSetProfile,
   onRename,
   onMove,
   onAskDelete,
@@ -416,6 +437,9 @@ function Row({
   canMoveDown: boolean;
   confirming: boolean;
   onToggle: () => void;
+  /** A sub-category's parent type, offered as "Same as parent". Absent for a parent. */
+  inheritedProfile?: ProductProfile;
+  onSetProfile: (profile: ProductProfile | null) => void;
   onRename: (name: string) => void;
   onMove: (direction: -1 | 1) => void;
   onAskDelete: () => void;
@@ -453,6 +477,26 @@ function Row({
         <p className="mt-0.5 text-xs text-ink/60">
           /{cat.slug} · {productCount} {productCount === 1 ? "product" : "products"}
         </p>
+        {/* Which details the product form asks for here — and which it needs
+            before publishing. A sub-category normally inherits its parent's. */}
+        <label className="mt-1 inline-flex items-center gap-2 text-xs text-ink/60">
+          Product type
+          <select
+            value={cat.product_profile ?? ""}
+            disabled={busy}
+            onChange={(e) => onSetProfile((e.target.value || null) as ProductProfile | null)}
+            className="rounded border border-ink/15 bg-cream px-2 py-0.5 text-xs text-ink focus:border-terracotta focus:outline-none disabled:opacity-50"
+          >
+            <option value="">
+              {inheritedProfile ? `Same as parent (${profileLabel(inheritedProfile)})` : "General (default)"}
+            </option>
+            {PRODUCT_PROFILES.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
         {/* The status is worked out from the DRAFT's settings. With changes
             waiting, it describes the site after publishing — so it says so,
             instead of claiming the live section is already off the site. */}

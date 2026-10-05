@@ -302,12 +302,22 @@ export function openGraph<T extends "website" | "article" = "website">(input: {
 /**
  * The alt text for one photograph in a product's gallery.
  *
- * The cover is the product's name, exactly as before. Every later photograph is
- * "{name} — image {i} of {n}": true of every image we hold, because the name
- * and the position are the only things we know about it. There is no per-image
- * alt in product_images, and guessing a colour, an angle or a detail from the
+ * WRITTEN FIRST. Since 0065 each photo can carry its own alt text, typed by the
+ * admin who can see it — that is what is used, as written.
+ *
+ * Otherwise, the fallback stays what it was: the cover is the product's name,
+ * and every later photograph is "{name} — image {i} of {n}". True of every
+ * image we hold, because the name and the position are the only things we know
+ * about an undescribed photo; guessing a colour, an angle or a detail from the
  * file would put a claim on the page that nobody checked.
  */
-export function productImageAlt(name: string, index: number, total: number): string {
+export function productImageAlt(
+  name: string,
+  index: number,
+  total: number,
+  written?: string | null
+): string {
+  const own = written?.trim();
+  if (own) return own;
   return index === 0 ? name : `${name} — image ${index + 1} of ${total}`;
 }
