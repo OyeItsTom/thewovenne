@@ -4,8 +4,10 @@
  * Starts a private cluster with `embedded-postgres` (real Postgres binaries, run
  * as a local process on a random port, deleted afterwards), lays a thin stand-in
  * for the parts of Supabase the migrations reference (roles, auth.uid(),
- * storage), and applies supabase/migrations in order, UNMODIFIED. Tests then run
- * the real functions, through the real grants, as the real roles.
+ * storage) with a STANDARD new project's default grants, applies Wovenne's
+ * privilege baseline (supabase/bootstrap/privilege_baseline.sql — the same file
+ * a real new project runs), then supabase/migrations in order, UNMODIFIED. Tests
+ * then run the real functions, through the real grants, as the real roles.
  *
  * Unlike PGlite this is a server: several connections, real row locks, real
  * lock waits and real deadlock detection — which is what a concurrency test
@@ -29,10 +31,18 @@ export type Client = pg.Client;
 
 const MIGRATIONS = path.join(process.cwd(), "supabase", "migrations");
 
+const BASELINE = path.join(process.cwd(), "supabase", "bootstrap", "privilege_baseline.sql");
+
 /**
  * Just enough Supabase for the migrations to apply and the functions to run.
  * auth.uid() reads the same setting PostgREST sets, so `asAdmin` below is how a
  * signed-in admin's request looks from inside the database.
+ *
+ * Its default grants are a STANDARD new Supabase project's — broad, to all
+ * three API roles — not production's. `database()` then applies the Wovenne
+ * privilege baseline, exactly as setting up a real project does, so a test
+ * database starts from production's posture and still proves the baseline
+ * does its job against Supabase's own defaults.
  */
 export const SUPABASE_SHIM = `
 do $$ begin create role anon nologin; exception when duplicate_object then null; end $$;
@@ -68,10 +78,10 @@ alter table storage.objects enable row level security;
 create or replace function storage.foldername(name text) returns text[] language sql immutable as
   $f$ select string_to_array(name, '/') $f$;
 grant usage on schema auth, storage to anon, authenticated, service_role;
--- Supabase's own grants, so permission tests mean something: every table,
--- function and sequence created in public is granted to the API roles unless a
--- migration revokes it, and — the worst case, not confirmed for this project —
--- the API roles may CREATE in public. Migrations must hold up against that.
+-- A standard new Supabase project's grants: every table, function and sequence
+-- created in public is granted to the API roles, and — the worst case — the API
+-- roles may CREATE in public. The privilege baseline removes all of it for
+-- anon and authenticated before the first migration.
 grant usage on schema public to anon, authenticated, service_role;
 grant create on schema public to anon, authenticated;
 alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
@@ -105,10 +115,23 @@ async function loadEmbedded(): Promise<EmbeddedPostgresCtor | null> {
   return null;
 }
 
+export interface DatabaseOptions {
+  /**
+   * Apply supabase/bootstrap/privilege_baseline.sql before the migrations, as a
+   * real new project does. Default true. False builds the database a standard
+   * Supabase project would get WITHOUT the baseline — only for tests proving
+   * the baseline matters.
+   */
+  baseline?: boolean;
+}
+
 export interface Engine {
   version: string;
-  /** A new database with the shim and migrations applied, up to and including `through`. */
-  database(name: string, through?: string): Promise<void>;
+  /**
+   * A new database: the Supabase shim, the privilege baseline (unless
+   * opts.baseline is false), then the migrations up to and including `through`.
+   */
+  database(name: string, through?: string, opts?: DatabaseOptions): Promise<void>;
   connect(name: string): Promise<Client>;
   stop(): Promise<void>;
 }
@@ -150,11 +173,18 @@ export async function startEngine(): Promise<Engine | null> {
 
   return {
     version,
-    async database(name, through) {
+    async database(name, through, opts = {}) {
       await root.query(`create database ${name}`);
       const c = await connect(name);
       try {
         await c.query(SUPABASE_SHIM);
+        if (opts.baseline !== false) {
+          try {
+            await c.query(fs.readFileSync(BASELINE, "utf8"));
+          } catch (e) {
+            throw new Error(`privilege_baseline.sql failed to apply: ${(e as Error).message}`);
+          }
+        }
         const files = fs.readdirSync(MIGRATIONS).filter((f) => /^\d{4}_.*\.sql$/.test(f)).sort();
         for (const f of files) {
           try {
@@ -251,7 +281,8 @@ export async function failureCode(fn: () => Promise<unknown>): Promise<string> {
  * superuser; everything else in these tests runs them as one. This hands a
  * database built through 0059 to an ordinary role — every object in public,
  * the database itself (so it acts for pg_database_owner, which owns public),
- * and Supabase-style default grants for what it creates — so 0060 can be
+ * and the Wovenne privilege baseline's default grants for what it creates
+ * (service_role everything, anon/authenticated nothing) — so 0060 can be
  * applied the way production will apply it.
  */
 export async function handToOwner(root: Client, db: string, owner: string) {
@@ -278,7 +309,7 @@ export async function handToOwner(root: Client, db: string, owner: string) {
       execute format('alter type %s owner to ${owner}', r.n);
     end loop;
   end $$`);
-  await root.query(`alter default privileges for role ${owner} in schema public grant all on tables to anon, authenticated, service_role;
-    alter default privileges for role ${owner} in schema public grant all on functions to anon, authenticated, service_role;
-    alter default privileges for role ${owner} in schema public grant all on sequences to anon, authenticated, service_role`);
+  await root.query(`alter default privileges for role ${owner} in schema public grant all on tables to service_role;
+    alter default privileges for role ${owner} in schema public grant all on functions to service_role;
+    alter default privileges for role ${owner} in schema public grant all on sequences to service_role`);
 }

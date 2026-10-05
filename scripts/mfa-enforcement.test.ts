@@ -119,8 +119,10 @@ async function main() {
       const C = rows["customer (aal1)"], An = rows["anonymous"];
       check(`${state}: customer unchanged — own profile only, no orders, no admin powers`,
         [C.is_admin, C.orders, C.profiles, C.stock_rpc, C.customers_rpc, C.draft_write], [false, 0, 1, "refused", "refused", "no rows"]);
+      // orders: "denied", not 0 rows — under the privilege baseline, as in
+      // production, anon holds no grant on orders at all, so RLS is never reached.
       check(`${state}: anonymous unchanged — storefront readable, nothing else`,
-        [An.storefront_read, An.orders, An.stock_rpc], ["rows", 0, "denied"]);
+        [An.storefront_read, An.orders, An.stock_rpc], ["rows", "denied", "denied"]);
       check(`${state}: service role still reads analytics`, svcAnalytics, true);
 
       // The login step, as each version of the app performs it: right after the

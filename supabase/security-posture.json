@@ -1,0 +1,2055 @@
+{
+  "publicSchemaCreate": {
+    "anon": false,
+    "authenticated": false,
+    "service_role": false
+  },
+  "tables": {
+    "admin_audit_log": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "ai_daily_spend": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "ai_spend_reservations": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "carts": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "categories": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "category_versions": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "chat_usage": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "coupon_redemptions": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "coupons": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "credit_notes": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "expenses": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "journal_posts": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "journal_versions": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "loyalty_ledger": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "marketing_sends": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "orders": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "product_images": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "product_reviews": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "DELETE",
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {
+        "authenticated": {
+          "INSERT": [
+            "body",
+            "product_id",
+            "rating",
+            "user_id"
+          ],
+          "UPDATE": [
+            "body",
+            "rating",
+            "updated_at"
+          ]
+        }
+      }
+    },
+    "product_sizes": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "product_url_history": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "product_versions": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "products": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "profiles": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {
+        "authenticated": {
+          "UPDATE": [
+            "default_address",
+            "default_phone",
+            "email",
+            "full_name",
+            "marketing_consent",
+            "marketing_consent_at"
+          ]
+        }
+      }
+    },
+    "public_style_submissions": {
+      "kind": "v",
+      "rls": false,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "razorpay_webhook_events": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "schema_migrations": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "site_content": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "site_page_versions": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "site_pages": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "stock_movements": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "stock_requests": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "style_submissions": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {
+        "authenticated": {
+          "UPDATE": [
+            "rejection_emailed_at",
+            "withdrawn_at"
+          ]
+        }
+      }
+    },
+    "wishlists": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "DELETE",
+          "INSERT",
+          "SELECT"
+        ],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    }
+  },
+  "sequences": {
+    "credit_note_number_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "SELECT",
+        "UPDATE",
+        "USAGE"
+      ]
+    },
+    "invoice_number_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "SELECT",
+        "UPDATE",
+        "USAGE"
+      ]
+    }
+  },
+  "functions": {
+    "admin_customers()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "admin_reviews(boolean)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "admin_style_submissions()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "ai_budget_finalize(uuid,numeric,integer,bigint,bigint,bigint,bigint)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "ai_budget_prune(integer)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "ai_budget_reserve(numeric,numeric,interval)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "ai_budget_today()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "ai_utc_day()": {
+      "securityDefiner": false,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "analytics_low_stock(integer)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "analytics_revenue(text,integer)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "analytics_signups(integer)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "analytics_summary(integer)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "analytics_top_products(integer,integer)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "analytics_wishlist(integer)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "assign_invoice_number(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "award_loyalty_points(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "can_read_analytics()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "cancel_order(uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "chat_consume(text,integer,interval)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "checkout_prices(uuid[])": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "claim_stock_request(uuid,uuid,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "claim_style_notification(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "create_category_draft(text,text,uuid,integer)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "create_journal_draft()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "create_page_draft(text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "create_product_draft()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "delete_my_account()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "derive_version_stock()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "discard_drafts()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "discard_one(text,uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "draft_is_noop(text,uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "effective_price(numeric,text,numeric,timestamp with time zone,timestamp with time zone)": {
+      "securityDefiner": false,
+      "searchPath": null,
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "ensure_category_draft(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "ensure_journal_draft(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "ensure_page_draft(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "ensure_product_draft(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "expense_totals(date,date)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "gallery_matches(uuid,uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "guard_live_stock()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "handle_new_user()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "has_purchased(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "is_admin()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "is_staff()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "issue_credit_note(uuid,text,numeric,text,jsonb)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "jsonb_diff(jsonb,jsonb)": {
+      "securityDefiner": false,
+      "searchPath": null,
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "log_admin_action()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "loyalty_balance(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "loyalty_settings()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "marketing_targets(text,integer)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "moderate_style(uuid,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "orders_cancel_needs_credit_note()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "pending_changes()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "pending_queue()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "product_path(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "product_rating(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "product_reviews_for(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "product_size_total(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "profit_and_loss(date,date)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "publish_all()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "publish_one(text,uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "publish_site_content()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "record_in_person_consent(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "record_marketing_send(uuid,text,text,text,uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "record_product_path()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "redeem_coupon(text,uuid,text,numeric)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "redeem_loyalty_points(uuid,integer,uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "release_stock(jsonb,uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "release_style_notification(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "require_images_to_publish()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "reserve_stock(jsonb,uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "resolve_product_path(text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "resubmit_style(uuid,text,integer,integer,text,text,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "resync_versions_from_sizes()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "save_product_sizes(uuid,jsonb,text,uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "set_product_stock(uuid,integer,integer,uuid,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "set_review_hidden(uuid,boolean)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "settle_draft(text,uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "sku_from_slug(text)": {
+      "securityDefiner": false,
+      "searchPath": null,
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "sync_published_product_extras()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "validate_publish()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "version_noise()": {
+      "securityDefiner": false,
+      "searchPath": null,
+      "execute": [
+        "anon",
+        "authenticated",
+        "service_role"
+      ]
+    }
+  },
+  "policies": {
+    "public.admin_audit_log.Admins can read the audit log": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.carts.Customers manage own cart": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(user_id = auth.uid())",
+      "check": "(user_id = auth.uid())"
+    },
+    "public.categories.Admins can delete categories": {
+      "cmd": "DELETE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.categories.Admins can insert categories": {
+      "cmd": "INSERT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "check": "is_admin()"
+    },
+    "public.categories.Admins can update categories": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.categories.Admins can view all categories": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.categories.Public can view visible categories": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "(is_visible = true)",
+      "check": null
+    },
+    "public.category_versions.Admins can view all category versions": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.category_versions.Admins can write category versions": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.category_versions.Public can view published category versions": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "(state = 'published'::text)",
+      "check": null
+    },
+    "public.coupon_redemptions.Admins read redemptions": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.coupons.Admins manage coupons": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.credit_notes.Admins read credit notes": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.credit_notes.Customers read their own credit notes": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(EXISTS ( SELECT 1\n   FROM orders o\n  WHERE ((o.id = credit_notes.order_id) AND (lower(o.customer_email) = lower(auth.email())))))",
+      "check": null
+    },
+    "public.expenses.Admins manage expenses": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.journal_posts.Admins can delete journal": {
+      "cmd": "DELETE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.journal_posts.Admins can insert journal": {
+      "cmd": "INSERT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "check": "is_admin()"
+    },
+    "public.journal_posts.Admins can update journal": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.journal_posts.Admins can view all journal": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.journal_posts.Public can view published journal": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "(published = true)",
+      "check": null
+    },
+    "public.journal_versions.Admins can view all journal versions": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.journal_versions.Admins can write journal versions": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.journal_versions.Public can view published journal versions": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "(state = 'published'::text)",
+      "check": null
+    },
+    "public.loyalty_ledger.Admins read all points": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.loyalty_ledger.Customers read own points": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(user_id = auth.uid())",
+      "check": null
+    },
+    "public.marketing_sends.Admins read marketing sends": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.orders.Admins can view orders": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.orders.Admins update orders": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.orders.Customers read own orders": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(lower(customer_email) = lower(auth.email()))",
+      "check": null
+    },
+    "public.product_images.Admins can delete product images": {
+      "cmd": "DELETE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.product_images.Admins can insert product images": {
+      "cmd": "INSERT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "check": "is_admin()"
+    },
+    "public.product_images.Admins can update product images": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.product_images.Admins can view all product images": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.product_images.Public can view images of active products": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "(EXISTS ( SELECT 1\n   FROM products p\n  WHERE ((p.id = product_images.product_id) AND p.is_active)))",
+      "check": null
+    },
+    "public.product_reviews.Admins moderate reviews": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.product_reviews.Admins read every review": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.product_reviews.Customers delete their own review": {
+      "cmd": "DELETE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(user_id = auth.uid())",
+      "check": null
+    },
+    "public.product_reviews.Customers edit their own review": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "((user_id = auth.uid()) AND (hidden_at IS NULL))",
+      "check": "(user_id = auth.uid())"
+    },
+    "public.product_reviews.Verified purchasers may review": {
+      "cmd": "INSERT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "check": "((user_id = auth.uid()) AND has_purchased(product_id))"
+    },
+    "public.product_reviews.Visible reviews are public": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "anon",
+        "authenticated"
+      ],
+      "using": "(hidden_at IS NULL)",
+      "check": null
+    },
+    "public.product_sizes.Admins manage sizes": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.product_sizes.Anyone can view sizes": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "true",
+      "check": null
+    },
+    "public.product_url_history.Anyone can read url history": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "true",
+      "check": null
+    },
+    "public.product_versions.Admins can view all product versions": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.product_versions.Admins can write product versions": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.product_versions.Public can view published product versions": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "(state = 'published'::text)",
+      "check": null
+    },
+    "public.products.Admins can delete products": {
+      "cmd": "DELETE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.products.Admins can insert products": {
+      "cmd": "INSERT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "check": "is_admin()"
+    },
+    "public.products.Admins can update products": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.products.Admins can view all products": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.products.Public can view active products": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "(is_active = true)",
+      "check": null
+    },
+    "public.profiles.Admins read all profiles": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.profiles.Admins update any profile": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.profiles.Users read own profile": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(id = auth.uid())",
+      "check": null
+    },
+    "public.profiles.Users update own profile": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(id = auth.uid())",
+      "check": "(id = auth.uid())"
+    },
+    "public.site_content.Admins can delete site content": {
+      "cmd": "DELETE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.site_content.Admins can insert site content": {
+      "cmd": "INSERT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "check": "is_admin()"
+    },
+    "public.site_content.Admins can update site content": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.site_content.Public can view site content": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "true",
+      "check": null
+    },
+    "public.site_page_versions.Admins can view all pages": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.site_page_versions.Admins can write pages": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.site_page_versions.Public can view published pages": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "(state = 'published'::text)",
+      "check": null
+    },
+    "public.stock_movements.Admins read stock movements": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.style_submissions.Admins moderate style": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": "is_admin()"
+    },
+    "public.style_submissions.Customers read their own style": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "((user_id = auth.uid()) OR is_admin())",
+      "check": null
+    },
+    "public.style_submissions.Customers withdraw their own style": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(user_id = auth.uid())",
+      "check": "(user_id = auth.uid())"
+    },
+    "public.style_submissions.Purchasers submit their own style": {
+      "cmd": "INSERT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "check": "((user_id = auth.uid()) AND has_purchased(product_id) AND (consented_at IS NOT NULL) AND (status = 'pending'::text))"
+    },
+    "public.wishlists.Customers manage own wishlist": {
+      "cmd": "ALL",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(user_id = auth.uid())",
+      "check": "(user_id = auth.uid())"
+    },
+    "storage.objects.Admin delete product images": {
+      "cmd": "DELETE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "((bucket_id = 'product-images'::text) AND is_admin())",
+      "check": null
+    },
+    "storage.objects.Admin update product images": {
+      "cmd": "UPDATE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "((bucket_id = 'product-images'::text) AND is_admin())",
+      "check": null
+    },
+    "storage.objects.Admin upload product images": {
+      "cmd": "INSERT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "check": "((bucket_id = 'product-images'::text) AND is_admin())"
+    },
+    "storage.objects.Admins remove style photos": {
+      "cmd": "DELETE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "((bucket_id = 'style-photos'::text) AND is_admin())",
+      "check": null
+    },
+    "storage.objects.Customers upload their own style photos": {
+      "cmd": "INSERT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "check": "((bucket_id = 'style-photos'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text))"
+    },
+    "storage.objects.Public read product images": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "(bucket_id = 'product-images'::text)",
+      "check": null
+    },
+    "storage.objects.Style photos are publicly readable": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "public"
+      ],
+      "using": "(bucket_id = 'style-photos'::text)",
+      "check": null
+    }
+  },
+  "buckets": {
+    "product-images": {
+      "public": true
+    },
+    "style-photos": {
+      "public": true
+    }
+  }
+}

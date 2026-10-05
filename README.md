@@ -46,27 +46,30 @@ npm install
 
 ### 2. Set up Supabase
 
+Follow **[`supabase/README.md` → "Setting up a new project"](supabase/README.md#setting-up-a-new-project)**
+exactly. In short:
+
 1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor → New query** and run the migrations in
-   [`supabase/migrations/`](supabase/migrations) **in number order**, one file
-   at a time — `0001` through `0007`. See
-   [`supabase/README.md`](supabase/README.md) for what each does. Together they
-   create the tables, admin identity, Row Level Security, role grants, the
-   public **`product-images`** Storage bucket, product galleries, and seed data.
-3. **Authentication → Users → Add user** — create your admin (email + password).
-   This is the account you log in with at `/admin`.
-4. Run [`0008_promote_admin.sql`](supabase/migrations/0008_promote_admin.sql)
-   with that user's email. **This is not optional** — without it `/admin` signs
-   you in and then shows an empty dashboard, because every admin policy returns
-   false.
-5. **Project Settings → API** — copy:
+2. Run [`supabase/bootstrap/privilege_baseline.sql`](supabase/bootstrap/privilege_baseline.sql)
+   **before any migration**. The migrations assume Wovenne's restricted default
+   grants; without it a new project silently gets far broader access for
+   `anon` and `authenticated` than production has.
+3. Run every migration in [`supabase/migrations/`](supabase/migrations) in
+   number order, as `postgres`.
+4. Check the result: `npx tsx scripts/security-posture.ts --production` must
+   say MATCHES.
+5. Create your admin (**Authentication → Users → Add user**), run the `update`
+   in [`0008_promote_admin.sql`](supabase/migrations/0008_promote_admin.sql)
+   with that email, then sign in at `/admin` and enrol two-factor
+   authentication — admin authority requires it. **This is not optional** —
+   without it `/admin` signs you in and then shows an empty dashboard.
+6. **Project Settings → API** — copy:
    - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
    - `anon` `public` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `service_role` key → `SUPABASE_SERVICE_ROLE_KEY` (server-side only — keep secret)
 
-> Every migration is idempotent — `if not exists`, `on conflict do nothing`,
-> and drop-then-create for policies — so re-running one is safe. Run them in
-> order: `0003` and `0005` depend on `is_admin()` from `0002`.
+> Run migrations in order: later files depend on earlier ones (`0003` and
+> `0005` on `is_admin()` from `0002`, and so on).
 
 ### 3. Set up Razorpay (checkout)
 
