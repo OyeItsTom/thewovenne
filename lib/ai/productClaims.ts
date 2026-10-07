@@ -22,6 +22,25 @@
  * edit, while a missed claim is the admin's to catch on review — which is why
  * nothing the assistant writes ever reaches the form without being read.
  *
+ * ══ PHOTOS ARE NOT PRODUCT TRUTH ══
+ *
+ * Alt text is written while looking at the photo, so it may say what any
+ * viewer can see: the colour of the piece, how it is folded or worn, a printed
+ * pattern. It may not let the photo decide facts about the product. Three
+ * checks hold that line, for alt text and copy alike:
+ *
+ *  - Decoration and construction — embroidery, embellishment, stitching, trim,
+ *    tassels, tie-dye — must be in what the admin entered. A photo cannot tell
+ *    a necklace laid on a pallu from beadwork on it.
+ *  - The colour of a named part — "cream pallu", "white stitching" — must be
+ *    traceable to the admin's words about THAT part. "Gold zari border" passes
+ *    when the description says the border is gold zari; "cream pallu" does not
+ *    because the saree is called cream somewhere else.
+ *  - Styling props — jewellery on a saree, flowers, a basket — may be named
+ *    only as styling ("styled with a necklace", "beside flowers"), never as
+ *    something the product has. On a jewellery product the jewellery is the
+ *    product, not a prop.
+ *
  * ══ "SUPPORTED" MEANS THE ADMIN SAID IT ══
  *
  * A term is supported when it appears in the text the admin entered: the
@@ -44,6 +63,8 @@ export type ClaimKind =
   | "measurement"
   | "blouse"
   | "colour"
+  | "detail"
+  | "prop"
   | "link";
 
 export interface ClaimIssue {
@@ -69,6 +90,14 @@ export interface ClaimContext {
    * a photo shows a sheen, not whether it is silk.
    */
   fromImage: boolean;
+  /** The product type. On "jewellery", jewellery words name the product, not a prop. */
+  profile?: string;
+  /**
+   * What the product IS: its name and category. A word here is the product, not
+   * a prop — "bag" on a tote, "necklace" on a necklace. Not the description,
+   * which may itself mention how the piece was styled.
+   */
+  identity?: string;
 }
 
 /** Lower-case, accents off, hyphens and punctuation to spaces, single-spaced. */
@@ -198,11 +227,26 @@ const RULES: Rule[] = [
   },
   {
     kind: "technique",
-    pattern: w(
-      "embroider(?:y|ed|ies)|sequin(?:s|ned|ed)?|mirror work|tie ?dye(?:d)?|block print(?:ed)?|printed|print|applique|beaded|beadwork|stone work|stonework"
-    ),
+    // How a pattern was made is a technique, even when the pattern is visible.
+    pattern: w("tie ?dye(?:d)?|block print(?:ed|ing)?|hand ?block|screen print(?:ed)?|digital print(?:ed)?"),
+    reason: "Names a technique that isn't in what you entered.",
+  },
+  {
+    kind: "technique",
+    // That there is a print is visible; how it was made is not (above).
+    pattern: w("printed|print|prints"),
     visual: true,
     reason: "Names decoration that isn't in what you entered.",
+  },
+  {
+    kind: "detail",
+    // Not visual: in a photo, a necklace across a pallu looks like beadwork, and
+    // a crease like a seam. Decoration is the admin's to state.
+    pattern: w(
+      "embellish(?:ed|ment|ments)?|adorn(?:ed|ment|ments)?|embroider(?:y|ed|ies)|sequin(?:s|ned|ed)?|mirror work|applique(?:d)?|beaded|beadwork|beads?|stone ?work|studded|encrusted|(?:running |hand |kantha )?stitch(?:es|ed|ing)?|trim(?:s|med|ming)?|tassels?|fringe(?:d)?|latkans?|pom ?poms?|lace|piping|threadwork|thread work"
+    ),
+    family: ["stitch", "stitches", "stitching", "stitched"],
+    reason: "Describes decoration or stitching that isn't in what you entered.",
   },
 
   // ── Care ──
@@ -232,6 +276,126 @@ const RULES: Rule[] = [
   },
 
 ];
+
+// ══ The colour of a named part ══
+
+const COLOUR_WORDS = new Set(
+  (
+    "red maroon crimson scarlet pink rose magenta fuchsia peach coral orange rust saffron mustard yellow cream ivory " +
+    "white beige sand tan brown chocolate coffee green olive mint teal turquoise blue navy indigo purple violet " +
+    "lavender lilac mauve plum wine black grey gray charcoal gold golden silver silvery copper bronze"
+  ).split(" ")
+);
+
+/** Parts of a garment whose colour a photo invites a guess at. Each with the words that name the same part. */
+const PART_GROUPS: string[][] = [
+  ["border", "borders", "edge", "edges", "selvedge", "selvage"],
+  ["pallu", "pallus", "pallav", "pallavu", "anchal", "aanchal"],
+  ["stitch", "stitches", "stitching"],
+  ["thread", "threads", "threadwork"],
+  ["motif", "motifs", "butta", "buttas", "butti", "buttis", "booti", "bootis"],
+  ["stripe", "stripes"],
+  ["trim", "trims", "piping", "hem"],
+  ["neckline", "neck", "collar", "yoke"],
+  ["sleeve", "sleeves", "cuff", "cuffs"],
+  ["tassel", "tassels", "latkan", "latkans"],
+];
+const PART_OF = new Map<string, string[]>(PART_GROUPS.flatMap((g) => g.map((word) => [word, g] as [string, string[]])));
+
+/** Words that may sit between a colour and its part: "gold zari border", "cream and red pallu". */
+const BETWEEN = new Set(
+  "and or zari kasavu woven contrast contrasting thin wide broad narrow light dark deep pale bright off tone toned coloured colored running".split(
+    " "
+  )
+);
+
+/** "gold" and "golden", "silver" and "silvery" — a short ending, not any word that starts the same. */
+const sameColour = (a: string, b: string) => {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return long.startsWith(short) && long.length - short.length <= 2;
+};
+
+/**
+ * Does the admin's text put this colour within a few words of this part, in
+ * the same sentence? "A cream saree. The pallu is gold zari." does not make
+ * the pallu cream.
+ */
+function partColourSupported(colour: string, group: string[], sentences: string[][]): boolean {
+  for (const tokens of sentences) {
+    for (let i = 0; i < tokens.length; i++) {
+      if (!group.includes(tokens[i])) continue;
+      for (let j = Math.max(0, i - 5); j <= Math.min(tokens.length - 1, i + 5); j++) {
+        if (sameColour(tokens[j], colour)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** "cream pallu", "pallu in cream", "white running stitch" — each colour given to a part. */
+function partColours(tokens: string[]): { colour: string; part: string; term: string }[] {
+  const out: { colour: string; part: string; term: string }[] = [];
+  tokens.forEach((tok, i) => {
+    if (!PART_OF.has(tok)) return;
+    for (let j = i - 1; j >= Math.max(0, i - 4); j--) {
+      if (COLOUR_WORDS.has(tokens[j])) {
+        out.push({ colour: tokens[j], part: tok, term: tokens.slice(j, i + 1).join(" ") });
+      } else if (!BETWEEN.has(tokens[j])) break;
+    }
+    // "pallu in cream", "border in gold and red"
+    if (tokens[i + 1] === "in") {
+      for (let j = i + 2; j < Math.min(tokens.length, i + 6); j++) {
+        if (COLOUR_WORDS.has(tokens[j])) out.push({ colour: tokens[j], part: tok, term: tokens.slice(i, j + 1).join(" ") });
+        else if (!BETWEEN.has(tokens[j])) break;
+      }
+    }
+  });
+  return out;
+}
+
+// ══ Styling props ══
+
+const JEWELLERY_PROPS =
+  "necklaces?|earrings?|jhumkas?|jhumkis?|bangles?|bracelets?|chokers?|anklets?|nose ?rings?|maang ?tikkas?|jewellery|jewelry|kada|kadas";
+const OTHER_PROPS =
+  "marigold flowers|flowers?|petals?|marigolds?|garlands?|bouquets?|leaves|plants?|baskets?|books?|vases?|candles?|diyas?|lamps?|chairs?|stools?|benches|bench|sofa|table|shoes|sandals|heels|footwear|juttis?|mojaris?|bags?|handbags?|clutch|potli|purses?|hangers?|cushions?|pillows?|rugs?|trays?|bowls?";
+
+/** A prop named within a few words of one of these is styling, not a feature. */
+const STAGING =
+  /\s(?:styled with|shown with|paired with|worn with|beside|next to|alongside|near|behind|against|among|around|surrounded by|in front of|bed of|placed|propped|resting on|laid on|displayed on|set on)\s/;
+/** Furniture and backgrounds: "folded on a table" is where it lies, not what it has. */
+const SURFACES = /^(?:tables?|chairs?|stools?|benches|bench|sofa|rugs?|trays?|cushions?|pillows?|hangers?)$/;
+const ON_SURFACE = /\s(?:on|in|over|across|against|from)\s/;
+/** …unless it is then called part of the product. */
+const AS_FEATURE = /^\s(?:details?|accents?|embellishments?|trim|decoration|features?|attached)\s/;
+/** "flower motifs", "leaf print": a pattern, not a prop. */
+const AS_PATTERN = /^\s(?:motifs?|prints?|patterns?|designs?|buttas?|buttis?|bootis?|shaped|shape)\s/;
+
+function propIssues(subject: string, profile: string | undefined, identity: string): ClaimIssue[] {
+  const nouns = profile === "jewellery" ? OTHER_PROPS : `${JEWELLERY_PROPS}|${OTHER_PROPS}`;
+  const re = w(nouns);
+  const own = new Set(normaliseClaimText(identity).trim().split(" ").filter(Boolean).map(singular));
+  const issues: ClaimIssue[] = [];
+  const seen = new Set<string>();
+  for (const m of Array.from(subject.matchAll(re))) {
+    const term = m[0].trim();
+    if (own.has(singular(term))) continue;
+    // The four words before the prop, padded so the patterns' spaces match.
+    const lead = ` ${subject.slice(0, m.index).trim().split(" ").slice(-4).join(" ")} `;
+    const after = subject.slice(m.index! + m[0].length);
+    if (AS_PATTERN.test(after)) continue;
+    const staged = (STAGING.test(lead) || (SURFACES.test(term) && ON_SURFACE.test(lead))) && !AS_FEATURE.test(after);
+    if (staged || seen.has(term)) continue;
+    seen.add(term);
+    issues.push({
+      kind: "prop",
+      term,
+      reason:
+        "Reads as part of the product. If it's a styling prop, leave it out, or say it's styling (\"styled with a necklace\").",
+    });
+  }
+  return issues;
+}
 
 /** Web addresses, matched on the raw text — normalising would take the dots out. */
 const LINK = /(?:https?:\/\/\S+|www\.\S+|\b[a-z0-9-]+\.(?:com|in|co|net|org|shop|store)\b\S*)/gi;
@@ -291,6 +455,30 @@ export function findUnsupportedClaims(text: string, ctx: ClaimContext): ClaimIss
       seen.add(key);
       issues.push({ kind: rule.kind, term, reason: rule.reason });
     }
+  }
+
+  // ── The colour of a named part must come from the admin's words about that part ──
+  const subjectTokens = subject.trim().split(" ").filter(Boolean);
+  const sentences = ctx.allowedText
+    .split(/[.;!?\n]+/)
+    .map((x) => normaliseClaimText(x).trim().split(" ").filter(Boolean));
+  for (const pc of partColours(subjectTokens)) {
+    if (partColourSupported(pc.colour, PART_OF.get(pc.part)!, sentences)) continue;
+    const key = compact(pc.term);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    issues.push({
+      kind: "colour",
+      term: pc.term,
+      reason: `Gives the colour of the ${pc.part}, and nothing you entered says what colour it is.`,
+    });
+  }
+
+  // ── Props named as if they were part of the product ──
+  for (const issue of propIssues(subject, ctx.profile, ctx.identity ?? "")) {
+    if (seen.has(compact(issue.term))) continue;
+    seen.add(compact(issue.term));
+    issues.push(issue);
   }
 
   for (const m of Array.from(text.matchAll(LINK))) {

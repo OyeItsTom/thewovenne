@@ -291,13 +291,29 @@ STYLE
 Clear, warm, specific, plain English for Indian shoppers. Useful to a person first. No hype, no exclamation marks, no emoji, no keyword lists, no ALL CAPS. Do not mention the shop's name.
 
 FIELDS
-Return "" for any field where you have nothing better and accurate to offer, including when the current copy is already good.
+Return "" for any field where you have nothing better and accurate to offer, including when the current copy is already good — except an empty SEO title or meta description, below.
 - name: a clear product name. Keep the product's identity: the colour, material and type the current name or facts give. Do not add adjectives like "elegant" or "exquisite". Up to 60 characters.
 - description: 2 to 4 sentences, roughly 30 to 90 words, built only from the facts and notes. It may say what the piece is, what it is made of, its colour, and how it can be worn or styled in general terms.
 - seoTitle: what a search result should show as the title. Up to 60 characters. Do not include the shop name; it is added automatically.
 - metaDescription: one or two sentences for a search result, about 120 to 155 characters, accurate and specific.
-- imageAlt: one entry per photo provided, by its number. Describe what is visible in that photo for someone who cannot see it: what the item is, how it is shown (worn, draped, folded, flat, close-up), and the visible colours and details. Say what differs between photos. Do not start with "Image of" or "Photo of". Do not state material, origin or how it was made from the photo; only the facts can say that. Up to 125 characters.
-- basis: for each suggestion, the inputs it relies on.`;
+- An empty seoTitle or metaDescription: write one. These are listed under "write" in the request. Build them from the name, the known facts and the current description; keep to what those say. Return "" only when there is genuinely too little to write anything accurate (for example no name and no facts). When the current one is already good, return "".
+- imageAlt: one entry per photo provided, by its number. See ALT TEXT below. Up to 125 characters.
+- basis: for each suggestion, the inputs it relies on.
+
+ALT TEXT
+Alt text is for someone who cannot see the photo. Accessibility first, not marketing.
+Where things come from, in this order, and a lower one never overrides a higher one:
+  1. KNOWN FACTS
+  2. CURRENT COPY and ADMIN NOTES
+  3. what you can see in the photo
+What the photo may tell you: what kind of item it is, how it is shown (worn, draped, folded, laid flat, close-up, front or back view), which part of the product is in frame (the border, the pallu, the clasp), the product's overall colour, and a visible pattern.
+What the photo may NOT tell you:
+- The colour of a part — the border, pallu, motifs, stitching, trim. Name it only if the facts or copy give that part's colour. If the description says "gold zari border" you may say "gold zari border"; if nothing says what colour the pallu is, say "the pallu", not "the cream pallu".
+- Decoration or construction: embroidery, embellishment, beadwork, sequins, stitching, trim, tassels, a technique. Only if the facts or copy say it.
+- Material, weave, origin, how it was made, care, what is included. Only the facts can say that.
+- A colour or detail that contradicts the facts or copy. If what you see seems to disagree with them, follow the facts and describe less.
+Styling props are not the product. Photos are often styled with jewellery, flowers, baskets, books, furniture, footwear, bags, background cloth or stands. Unless the prop is the product being sold (a necklace listing shows a necklace), never describe it as part of the product, a feature, decoration, trim, an embellishment or something included. Usually leave props out entirely. If one is needed to make sense of the picture, say it is styling: "styled with a necklace".
+When unsure, write less: "Parrot green saree folded to show the border and pallu" is better than a guess at colours, materials or decoration.`;
 
 /**
  * The user turn: each photo labelled, then the product data as one JSON block.
@@ -317,8 +333,8 @@ export function buildAssistantContent(req: AssistantRequest): Anthropic.ContentB
     current_copy: {
       name: req.copy.name || "(empty)",
       description: req.copy.description || "(empty)",
-      seo_title: req.copy.seo_title || "(empty — the shop uses the name)",
-      meta_description: req.copy.meta_description || "(empty — the shop composes one)",
+      seo_title: req.copy.seo_title || "(empty)",
+      meta_description: req.copy.meta_description || "(empty)",
     },
     admin_notes: {
       heritage: req.notes.heritage || "(empty)",
@@ -337,15 +353,37 @@ export function buildAssistantContent(req: AssistantRequest): Anthropic.ContentB
     content.push({ type: "image", source: { type: "url", url: img.url } });
   });
   const json = JSON.stringify(data, null, 2).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+  const write = expectedSuggestions(req);
   content.push({
     type: "text",
     text:
       `<product_data>\n${json}\n</product_data>\n\n` +
       (req.images.length
         ? "Suggest copy for this product, and alt text for each photo above."
-        : "Suggest copy for this product. There are no photos, so return an empty imageAlt list."),
+        : "Suggest copy for this product. There are no photos, so return an empty imageAlt list.") +
+      (write.length
+        ? `\nwrite: ${write.join(", ")} — empty now; suggest one for each from the product data.`
+        : ""),
   });
   return content;
+}
+
+/**
+ * Copy fields that are empty now and that the product data is enough to write.
+ *
+ * Only the SEO pair: an empty name or description is the admin's to fill, and
+ * the model already offers them. An empty SEO title or meta description has an
+ * automatic fallback on the shop, which once led the model to treat "empty" as
+ * "fine" and offer nothing. A name is enough for a title; a description needs
+ * the name and something else to say.
+ */
+export function expectedSuggestions(req: AssistantRequest): CopyField[] {
+  const out: CopyField[] = [];
+  const name = req.copy.name.trim();
+  const hasMore = Boolean(req.copy.description.trim()) || Object.keys(factSheet(req).known).length > 0;
+  if (!req.copy.seo_title.trim() && name) out.push("seoTitle");
+  if (!req.copy.meta_description.trim() && name && hasMore) out.push("metaDescription");
+  return out;
 }
 
 // ══ What may come back ════════════════════════
@@ -460,6 +498,11 @@ export interface AssistantSuggestions {
   sawImages: boolean;
   /** Suggestions the model returned that failed validation and were dropped. */
   dropped: number;
+  /**
+   * Fields that were empty, had enough to write from, and still came back with
+   * nothing usable. Shown to the admin so an omission is never silent.
+   */
+  missing: CopyField[];
 }
 
 /** What the admin wrote that copy may draw on — see productClaims. */
@@ -480,6 +523,8 @@ export function claimContext(req: AssistantRequest, fromImage = false): ClaimCon
     ].join("\n"),
     blousePiece: req.facts.blouse_piece,
     fromImage,
+    profile: req.profile,
+    identity: [req.copy.name, req.categoryName, req.parentCategoryName].join("\n"),
   };
 }
 
@@ -630,7 +675,8 @@ export function parseAssistantOutput(text: string, req: AssistantRequest): Parse
     });
   }
 
-  return { ok: true, value: { fields, alts, sawImages: req.images.length > 0, dropped } };
+  const missing = expectedSuggestions(req).filter((f) => !fields.some((s) => s.field === f));
+  return { ok: true, value: { fields, alts, sawImages: req.images.length > 0, dropped, missing } };
 }
 
 // ══ Into the form ═════════════════════════════
