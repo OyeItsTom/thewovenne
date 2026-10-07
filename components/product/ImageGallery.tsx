@@ -56,9 +56,12 @@ export const PDP_FRAME_SIZES = "(min-width: 1024px) 50vw, 100vw";
 export default function ImageGallery({
   images,
   alt,
+  alts,
 }: {
   images: string[];
   alt: string;
+  /** Each photo's written alt text (0065), by position. Null or absent = fall back. */
+  alts?: (string | null)[];
 }) {
   const [active, setActive] = useState(0);
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -194,7 +197,7 @@ export default function ImageGallery({
               // the whole set rather than the cover alone. The frames off to
               // the side stay aria-hidden: a screen reader hears the one that
               // is showing, and the live region below says where it is.
-              alt={productImageAlt(alt, i, images.length)}
+              alt={productImageAlt(alt, i, images.length, alts?.[i])}
               aria-hidden={i !== active}
               fill
               // Only the cover is priority: it is the page's LCP. Its immediate
@@ -299,7 +302,7 @@ export default function ImageGallery({
             >
               <Image
                 src={src}
-                alt={productImageAlt(alt, i, images.length)}
+                alt={productImageAlt(alt, i, images.length, alts?.[i])}
                 fill
                 sizes="120px"
                 className="object-cover"

@@ -284,9 +284,11 @@ function cacheChecks() {
 function polishChecks() {
   console.log("\n=== material-first PDP, quiet text that still reads ===");
   const detail = read("components/product/ProductDetail.tsx");
-  const block = detail.slice(detail.indexOf("{(product.fabric || care) && ("), detail.indexOf("</dl>"));
-  ok("the material block renders only when there is a stored fact to show", detail.includes("{(product.fabric || care) && ("));
-  ok("it shows the stored fabric value as-is", block.includes("{product.fabric}"));
+  // Since 0065 the fabric is the first of the stored fact rows (productFactRows),
+  // which keeps the stored value as-is (trimmed) and drops what is not stored.
+  const block = detail.slice(detail.indexOf("{(facts.length > 0 || care) && ("), detail.indexOf("</dl>"));
+  ok("the material block renders only when there is a stored fact to show", detail.includes("{(facts.length > 0 || care) && ("));
+  ok("it shows the stored fabric value as-is", detail.includes("fabric: product.fabric,") && block.includes("{row.value}"));
   ok("it never shows colour (stored colour is not yet reliable)", !/product\.colour/.test(block));
   ok("the care row only appears when a care note was written, and links to it",
     block.includes("{care && (") && block.includes('href="#material-care"'));

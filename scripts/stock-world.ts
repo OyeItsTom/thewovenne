@@ -26,7 +26,9 @@ export async function liveProduct(
   const { rows } = await c.query(
     `update product_versions
         set name = $2, slug = $3, price_inr = 2500, cost_price_inr = 900, sku = upper($3),
-            stock_quantity = $4, description = 'A handloom piece.'
+            stock_quantity = $4, description = 'A handloom piece.',
+            -- What 0065 requires before a product can be published.
+            care_note = 'Dry clean only.'
       where id = $1
       returning product_id`,
     [vid, `Piece ${n}`, slug, opts.stock ?? 0]
@@ -36,8 +38,16 @@ export async function liveProduct(
   // way a real product does. allow_no_images deliberately resets on each new
   // draft (0042), so it cannot stand in for one.
   await asRoot(c);
+  // Alt text too, where the database has the column (0065): the cover's alt
+  // text is required to publish from then on. These worlds are also built at
+  // earlier migrations, which have no such column.
+  const hasAlt = (await c.query(
+    "select 1 from information_schema.columns where table_schema = 'public' and table_name = 'product_images' and column_name = 'alt_text'"
+  )).rowCount;
   await c.query(
-    "insert into product_images (product_version_id, product_id, url, sort_order) values ($1, $2, 'https://example.test/p.jpg', 0)",
+    hasAlt
+      ? "insert into product_images (product_version_id, product_id, url, sort_order, alt_text) values ($1, $2, 'https://example.test/p.jpg', 0, 'A handloom piece, folded')"
+      : "insert into product_images (product_version_id, product_id, url, sort_order) values ($1, $2, 'https://example.test/p.jpg', 0)",
     [vid, productId]
   );
   await asAdmin(c, admin);

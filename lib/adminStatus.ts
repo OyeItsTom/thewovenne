@@ -253,6 +253,16 @@ export function adminErrorMessage(err: ErrorLike, action: string): string {
   }
 }
 
+/**
+ * A refused publish, with the reassurance that nothing changed for customers.
+ * A multi-line reason (0065's "Complete these before publishing" list) gets the
+ * note as its own paragraph rather than glued onto its last bullet.
+ */
+export function withLiveNote(message: string): string {
+  const note = "Customers still see the previous live version.";
+  return message.includes("\n") ? `${message}\n\n${note}` : `${message} ${note}`;
+}
+
 export type DraftWrite<T> = { ok: true; row: T } | { ok: false; reason: FailureReason; message: string };
 
 /**

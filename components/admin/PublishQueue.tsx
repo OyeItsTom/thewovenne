@@ -10,7 +10,7 @@ import {
   type QueueItem,
   type DraftKind,
 } from "@/lib/drafts";
-import { adminErrorMessage, discardOneText, publishedMessage } from "@/lib/adminStatus";
+import { adminErrorMessage, withLiveNote, discardOneText, publishedMessage } from "@/lib/adminStatus";
 
 /**
  * The pre-flight review before publishing.
@@ -84,6 +84,13 @@ const FIELD_LABEL: Record<string, string> = {
   discount_ends_at: "Discount ends",
   collection: "Collection",
   published: "Published",
+  // Product information (migration 0065).
+  seo_title: "SEO title",
+  blouse_piece: "Blouse piece",
+  fit_note: "Fit & sizing",
+  weave: "Weave / technique",
+  care_note: "Care instructions",
+  product_profile: "Product type",
 };
 
 function fieldName(f: string) {
@@ -188,8 +195,7 @@ export default function PublishQueue({
       // Reasons are written for the admin, e.g. "Publish its category first";
       // anything else is translated rather than shown raw.
       setError(
-        adminErrorMessage(e as Error, "publish that item") +
-          " Customers still see the previous live version."
+        withLiveNote(adminErrorMessage(e as Error, "publish that item"))
       );
     } finally {
       setBusy(null);
@@ -247,9 +253,9 @@ export default function PublishQueue({
       </div>
 
       {error && (
-        <p role="alert" className="flex items-start gap-2 rounded-lg bg-terracotta/10 px-4 py-3 text-sm text-terracotta-dark">
+        <p role="alert" className="flex items-start gap-2 whitespace-pre-line rounded-lg bg-terracotta/10 px-4 py-3 text-sm text-terracotta-dark">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          {error}
+          <span>{error}</span>
         </p>
       )}
 

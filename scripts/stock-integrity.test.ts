@@ -278,7 +278,7 @@ async function main() {
       await asAdmin(c, admin);
       const vid = (await c.query("select public.create_product_draft() id")).rows[0].id;
       const pid = (await c.query(
-        "update product_versions set name = 'Unpublished', slug = 'unpublished-x', price_inr = 100, stock_quantity = 2, allow_no_images = true where id = $1 returning product_id",
+        "update product_versions set name = 'Unpublished', slug = 'unpublished-x', price_inr = 100, stock_quantity = 2, allow_no_images = true, care_note = 'Dry clean only.' where id = $1 returning product_id",
         [vid])).rows[0].product_id;
       const r = (await c.query("select public.set_product_stock($1, 2, 7, $2) r", [pid, randomUUID()])).rows[0].r;
       check("sets the draft's opening stock", r.status, "opening_stock");
@@ -345,7 +345,8 @@ async function main() {
       check("the draft is untouched: still a draft, carry-forward rolled back", [draft.state, draft.stock_quantity, draft.name], ["draft", 1, "Will fail"]);
       check("live stock still 0, live name unchanged", [(await liveRow(c, p.productId))!.stock_quantity, (await liveRow(c, p.productId))!.name.startsWith("Piece")], [0, true]);
 
-      await c.query("insert into product_images (product_version_id, product_id, url) values ($1, $2, 'https://example.test/q.jpg')", [vid, p.productId]);
+      // With its alt text: since 0065 the cover's is required to publish.
+      await c.query("insert into product_images (product_version_id, product_id, url, alt_text) values ($1, $2, 'https://example.test/q.jpg', 'A handloom piece, folded')", [vid, p.productId]);
       await asAdmin(c, admin);
       await c.query("select public.publish_one('product', $1)", [p.productId]);
       check("a second publish of the same draft is refused",
@@ -553,7 +554,7 @@ async function main() {
       const gv = (await c.query("select public.ensure_product_draft($1) id", [gone.productId])).rows[0].id;
       await c.query("update product_versions set pending_delete = true where id = $1", [gv]);
       const nv = (await c.query("select public.create_product_draft() id")).rows[0].id;
-      const newId = (await c.query("update product_versions set name='Fresh', slug='fresh-x', price_inr=100, stock_quantity=4, allow_no_images=true where id=$1 returning product_id", [nv])).rows[0].product_id;
+      const newId = (await c.query("update product_versions set name='Fresh', slug='fresh-x', price_inr=100, stock_quantity=4, allow_no_images=true, care_note='Dry clean only.' where id=$1 returning product_id", [nv])).rows[0].product_id;
       const o = await paidOrder(c, [{ id: b.productId, quantity: 1 }, { id: a.productId, quantity: 1 }]);
       await sell(c, o, [{ id: b.productId, quantity: 1 }, { id: a.productId, quantity: 1 }]);
       await asAdmin(c, admin);

@@ -849,6 +849,13 @@
         "service_role"
       ]
     },
+    "category_product_profile(uuid)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "chat_consume(text,integer,interval)": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -963,7 +970,7 @@
     },
     "ensure_category_draft(uuid)": {
       "securityDefiner": true,
-      "searchPath": "public",
+      "searchPath": "public, pg_temp",
       "execute": [
         "authenticated",
         "service_role"
@@ -1135,6 +1142,20 @@
         "service_role"
       ]
     },
+    "product_info_message(text,text[])": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "product_info_missing(product_versions)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "product_path(uuid)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -1262,6 +1283,13 @@
       "execute": [
         "anon",
         "authenticated",
+        "service_role"
+      ]
+    },
+    "require_product_info_to_publish()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
         "service_role"
       ]
     },
