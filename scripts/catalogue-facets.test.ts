@@ -103,7 +103,9 @@ const facetsSrc = read("lib/catalogueFacets.ts");
 ok("the facet module has no database, network or write path",
   !/supabase|fetch\(|\.update\(|\.insert\(|\.upsert\(|\.rpc\(/.test(facetsSrc) && !/^import /m.test(facetsSrc));
 ok("the product page still prints the stored fabric itself",
-  read("components/product/ProductDetail.tsx").includes("{product.fabric}") &&
+  // Since #187 the fabric row is rendered by ProductReassurance from productFactRows.
+  read("components/product/ProductDetail.tsx").includes("fabric: product.fabric,") &&
+  read("components/product/ProductReassurance.tsx").includes("{row.value}") &&
   !read("components/product/ProductDetail.tsx").includes("catalogueFacets"));
 ok("JSON-LD material is still the stored fabric, untouched",
   read("lib/structuredData.ts").includes("material: input.fabric?.trim() || undefined") &&
