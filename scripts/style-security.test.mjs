@@ -30,7 +30,10 @@ try{
     values ('${cust.email}',1000,'[{"id":"${prod.id}","name":"x","size":"M","quantity":1,"price_inr":1000}]'::jsonb,
     'offline','cash','paid','delivered')`);
 
-  const asUser=async(id)=>c.query(`set local request.jwt.claims = '${JSON.stringify({sub:id,email:(id===cust.id?cust.email:id===other.id?other.email:admin.email)})}'`);
+  // 0062: is_admin() also requires a two-factor (aal2) session. The admin acts
+  // as the admin actually works — aal2 — and customers as after a password —
+  // aal1 — the same claims scripts/pg-world.ts asUser() presents.
+  const asUser=async(id,aal=(id===admin.id?"aal2":"aal1"))=>c.query(`set local request.jwt.claims = '${JSON.stringify({sub:id,email:(id===cust.id?cust.email:id===other.id?other.email:admin.email),aal})}'`);
   const asRole=async(r)=>c.query(`set local role ${r}`);
 
   console.log("\n=== verified purchase is enforced by the DATABASE ===");
@@ -64,7 +67,10 @@ try{
   await c.query("reset role");
   const strip=await sp("s5",()=>c.query(`update style_submissions set consented_at=null where id='${sid}'`));
   t("consent cannot be removed even by the table owner", !strip.ok && /not-null/i.test(strip.e||""), (strip.e||"").slice(0,60));
-  await asRole("authenticated"); await asUser(admin.id);
+  await asRole("authenticated"); await asUser(admin.id,"aal1");
+  const pwOnly=await sp("s5b",()=>c.query(`select public.moderate_style('${sid}','approved')`));
+  t("an admin with only a password (aal1) cannot approve", !pwOnly.ok, (pwOnly.e||"").slice(0,55));
+  await asUser(admin.id);
   await c.query(`select public.moderate_style('${sid}','approved')`);
   await asRole("anon");
   const pub=(await c.query(`select credit_name, product_name from public_style_submissions`)).rows;
