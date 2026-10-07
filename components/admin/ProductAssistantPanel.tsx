@@ -98,7 +98,9 @@ export default function ProductAssistantPanel({
   onUseAlt: (url: string, value: string) => void;
 }) {
   const ready = state.status === "ready" ? state : null;
-  const nothing = ready && ready.suggestions.fields.length === 0 && ready.suggestions.alts.length === 0;
+  const missing = ready?.suggestions.missing ?? [];
+  const nothing =
+    ready && ready.suggestions.fields.length === 0 && ready.suggestions.alts.length === 0 && missing.length === 0;
 
   return (
     <section aria-labelledby="assistant-title" className="space-y-3 rounded-xl border border-ink/10 bg-white p-4">
@@ -146,6 +148,13 @@ export default function ProductAssistantPanel({
       {nothing && (
         <p className="text-sm text-ink/60" role="status">
           No changes suggested — the current copy already covers what the product details say.
+        </p>
+      )}
+
+      {missing.length > 0 && (
+        <p className="text-xs text-ink/55" role="status">
+          No {missing.map((f) => (f === "seoTitle" ? "SEO title" : COPY_FIELD_LABEL[f].toLowerCase())).join(" or ")} was suggested this time. The
+          shop&rsquo;s automatic one stays in use until you write one or ask again.
         </p>
       )}
 

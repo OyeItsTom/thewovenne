@@ -277,6 +277,7 @@ export async function runProductAssistant(
     alts_offered: s.alts.length,
     alts_flagged: s.alts.filter((a) => a.issues.length).length,
     dropped: s.dropped,
+    missing: s.missing,
   });
   return { ok: true, suggestions: s, imagesDropped };
 }
