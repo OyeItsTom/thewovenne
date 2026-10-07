@@ -59,12 +59,15 @@ export default function ProductReviews({
                 >
                   <div className="flex flex-wrap items-center gap-3">
                     <Stars rating={review.rating} />
-                    {/* Every review here is from a verified buyer — the
-                        database allows no other kind — so the badge states a
-                        fact rather than decorating one. */}
-                    <span className="rounded-full bg-linen px-2.5 py-0.5 text-[11px] uppercase tracking-wider text-ink/60">
-                      Verified purchase
-                    </span>
+                    {/* Only when the database proved it: product_reviews_for()
+                        (0066) checks the author's own paid, delivered order
+                        for this piece. Who inserted the row is not evidence,
+                        so no evidence means no badge. */}
+                    {review.verified === true && (
+                      <span className="rounded-full bg-linen px-2.5 py-0.5 text-[11px] uppercase tracking-wider text-ink/60">
+                        Verified purchase
+                      </span>
+                    )}
                   </div>
                   <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-ink/80">
                     {review.body}

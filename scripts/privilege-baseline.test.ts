@@ -190,6 +190,9 @@ async function rowsOrCode(c: Client, sql: string): Promise<string> {
       JSON.stringify(["default_address", "default_phone", "email", "full_name", "marketing_consent", "marketing_consent_at"]));
     t("customers write reviews through column grants only", JSON.stringify(P.tables.product_reviews.columns.authenticated?.INSERT) ===
       JSON.stringify(["body", "product_id", "rating", "user_id"]));
+    t("admins moderate reviews but cannot write them (0066): no admin INSERT/UPDATE/ALL policy",
+      Object.entries(P.policies).filter(([k, v]) => k.startsWith("public.product_reviews.") && ["INSERT", "UPDATE", "ALL"].includes(v.cmd)
+        && `${v.using ?? ""}${v.check ?? ""}`.includes("is_admin()")).length === 0);
     for (const f of ["loyalty_balance(uuid)", "loyalty_settings()", "has_purchased(uuid)", "resubmit_style(uuid,text,text)"]) {
       if (P.functions[f]) t(`authenticated executes ${f}`, P.functions[f].execute.includes("authenticated"));
     }

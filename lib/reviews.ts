@@ -4,10 +4,10 @@ import { supabase as anonClient } from "./supabase";
 /**
  * Product reviews.
  *
- * The "verified purchase" rule is enforced by RLS and has_purchased() in
- * migration 0036, not here. Everything in this file is presentation: what the
- * page shows, and whether to bother rendering a form. Someone who bypasses all
- * of it still cannot insert a row.
+ * Who may write a review is enforced by RLS and has_purchased() in migration
+ * 0036, not here. Whether a review carries "Verified purchase" is decided by
+ * product_reviews_for() (0066) from the author's own paid, delivered order, at
+ * read time. Nothing here can set it. Everything in this file is presentation.
  */
 
 export interface Review {
@@ -16,6 +16,12 @@ export interface Review {
   body: string;
   author: string;
   created_at: string;
+  /**
+   * True only when the database found a paid, delivered order for this
+   * product under the author's sign-in email. Anything else, including a
+   * missing value, means no badge.
+   */
+  verified: boolean;
 }
 
 export interface RatingSummary {
