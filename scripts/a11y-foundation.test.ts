@@ -222,8 +222,10 @@ check("PDP stock note uses ink-muted", /tracking-\[0\.12em\] text-ink-muted">\s*
 // ink-muted text and the value itself is full ink. Since 0065 the fabric is the
 // first of the fact rows (productFactRows), rendered by one loop, so the label
 // and value classes are checked on that loop.
-check("PDP fabric label uses ink-muted", /text-ink-muted">\s*\{row\.label\}\s*<\/dt>/.test(detail));
-check("PDP fabric value is full ink", /text-ink">\s*\{row\.value\}/.test(detail));
+// Since PDP reassurance the rows render in ProductReassurance's Product details fold.
+const reassurance = read("components/product/ProductReassurance.tsx");
+check("PDP fabric label uses ink-muted", /text-ink-muted">\s*\{row\.label\}\s*<\/dt>/.test(reassurance));
+check("PDP fabric value is full ink", /text-ink">\s*\{row\.value\}/.test(reassurance));
 check("card Sold out uses ink-muted", /text-ink-muted">\s*Sold out/.test(card));
 check("cart line size uses ink-muted", /text-ink-muted">\s*Size \{item\.size\}/.test(line));
 check("Size heading uses ink-muted", /text-ink-muted">\s*Size/.test(sizeSel));

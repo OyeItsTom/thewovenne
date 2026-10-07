@@ -286,22 +286,22 @@ function polishChecks() {
   const detail = read("components/product/ProductDetail.tsx");
   // Since 0065 the fabric is the first of the stored fact rows (productFactRows),
   // which keeps the stored value as-is (trimmed) and drops what is not stored.
-  const block = detail.slice(detail.indexOf("{(facts.length > 0 || care) && ("), detail.indexOf("</dl>"));
-  ok("the material block renders only when there is a stored fact to show", detail.includes("{(facts.length > 0 || care) && ("));
+  // Since PDP reassurance the block is ProductReassurance: facts, care and the
+  // policy summaries as native <details> folds under the purchase controls.
+  const block = read("components/product/ProductReassurance.tsx");
+  ok("the material block renders only when there is a stored fact to show", block.includes("{facts.length > 0 && ("));
   ok("it shows the stored fabric value as-is", detail.includes("fabric: product.fabric,") && block.includes("{row.value}"));
-  ok("it never shows colour (stored colour is not yet reliable)", !/product\.colour/.test(block));
-  ok("the care row only appears when a care note was written, and links to it",
-    block.includes("{care && (") && block.includes('href="#material-care"'));
-  const care = read("components/product/MaterialCare.tsx");
-  ok("the care section unfolds when reached by that link", care.includes('window.location.hash === "#material-care"'));
-  ok("…and clears the sticky header when scrolled to", care.includes('id="material-care" className="scroll-mt-28'));
+  const code = block.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  ok("it never shows colour (stored colour is not yet reliable)", !/\bcolou?r\b/i.test(code) && !detail.includes("product.colour"));
+  ok("the care fold only appears when a care note was written",
+    block.includes("{care && (") && block.includes("{care.text}"));
   const quiet = [
     ["card was-price", "components/shop/ProductCard.tsx", /text-ink\/45 line-through/],
     ["PDP was-price", "components/product/ProductDetail.tsx", /text-ink\/40 line-through/],
     ["PDP breadcrumb", "components/product/ProductDetail.tsx", /Breadcrumb" className="mb-8 text-xs text-ink\/50/],
     ["sub-category breadcrumb", "app/(storefront)/in/[slug]/[child]/page.tsx", /Breadcrumb" className="text-xs text-ink\/50/],
     ["heritage/craft labels", "components/product/BrandKnowledgePanel.tsx", /text-ink\/(45|50)/],
-    ["care labels", "components/product/MaterialCare.tsx", /text-ink\/(50|55)/],
+    ["care labels", "components/product/ProductReassurance.tsx", /text-ink\/(50|55)/],
     ["rail subtitle", "components/home/CuratedForYou.tsx", /text-ink\/55/],
     ["pincode placeholder", "components/product/DeliveryEstimator.tsx", /placeholder:text-ink\/35/],
   ] as const;

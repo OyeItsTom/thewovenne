@@ -318,6 +318,7 @@ export default function ImageGallery({
         <ImageViewer
           images={images}
           alt={alt}
+          alts={alts}
           index={active}
           onIndexChange={setActive}
           onClose={() => setViewerOpen(false)}

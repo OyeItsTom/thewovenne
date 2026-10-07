@@ -323,7 +323,8 @@ ok("PDP description keeps owner paragraph breaks (whitespace-pre-line)", /whites
 ok("PDP no longer prints the raw column", !detail.includes("{product.description}"));
 ok("Product markup still takes the stored description, not a composed one", detail.includes("description: product.description,"));
 ok("Product markup still takes the stored fabric", detail.includes("fabric: product.fabric,"));
-ok("visible Fabric row prints the stored value", detail.includes("{product.fabric}"));
+ok("visible Fabric row prints the stored value",
+  detail.includes("fabric: product.fabric,") && read("components/product/ProductReassurance.tsx").includes("{row.value}"));
 
 const modal = read("components/admin/ProductModal.tsx");
 ok("Admin no longer promises general fabric care advice", !/general (fabric care )?advice/.test(modal));
