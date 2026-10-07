@@ -116,10 +116,32 @@ export interface EvalLimits {
   maxCostUsd: number;
 }
 
+/**
+ * The admin's AI Product Assistant (app/api/admin/product-assistant).
+ *
+ * One model call per press of "Suggest with AI", never more: there is no loop
+ * and no automatic retry on the Wovenne side. It draws on the SAME daily
+ * ceiling as Ask Wovenne rather than a pot of its own — adding this feature
+ * does not raise what the shop can spend in a day.
+ */
+export interface ProductAssistantLimits {
+  /** Presses per admin per hour. */
+  maxRequestsPerHour: number;
+  /** What one press may cost, held against the daily ceiling before the call. */
+  maxCostUsd: number;
+  /** The call's own max_tokens. */
+  maxOutputTokens: number;
+  /** Photos sent for alt text, cover first. Later photos get no suggestion. */
+  maxImages: number;
+  /** How long to wait for the model before giving up, per attempt. */
+  timeoutMs: number;
+}
+
 export interface AiLimits {
   request: RequestLimits;
   daily: DailyLimits;
   evaluation: EvalLimits;
+  productAssistant: ProductAssistantLimits;
 }
 
 /**
@@ -157,6 +179,15 @@ export function loadLimits(): AiLimits {
       maxModelCalls: int("AI_EVAL_MAX_MODEL_CALLS", 250),
       maxTokens: int("AI_EVAL_MAX_TOKENS", 1_000_000),
       maxCostUsd: num("AI_EVAL_MAX_COST_USD", 2.0),
+    },
+    productAssistant: {
+      maxRequestsPerHour: int("AI_ASSISTANT_MAX_PER_HOUR", 15),
+      // Worst case on Haiku 4.5 is ~14k input tokens (six photos plus a full
+      // form) and 1,500 output: about $0.022. Typical is $0.006–0.015.
+      maxCostUsd: num("AI_ASSISTANT_MAX_COST_USD", 0.03),
+      maxOutputTokens: int("AI_ASSISTANT_MAX_OUTPUT_TOKENS", 1_500),
+      maxImages: int("AI_ASSISTANT_MAX_IMAGES", 6),
+      timeoutMs: int("AI_ASSISTANT_TIMEOUT_MS", 25_000),
     },
   };
 }

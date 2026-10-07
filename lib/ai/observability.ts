@@ -187,8 +187,8 @@ export interface ToolCallRecord {
 export interface AiTrace {
   trace_id: string;
   ts: string;
-  surface: "ask_wovenne";
-  caller: "guest" | "customer";
+  surface: TraceSurface;
+  caller: TraceCaller;
   feature_enabled: boolean;
   model: string;
 
@@ -240,9 +240,17 @@ function newTraceId(): string {
   }
 }
 
+/** Which AI feature a trace belongs to. */
+export type TraceSurface = "ask_wovenne" | "product_assistant";
+
+/** A classification of who asked — never an identifier. */
+export type TraceCaller = "guest" | "customer" | "admin";
+
 export interface TraceOptions {
   model: string;
-  caller?: "guest" | "customer";
+  /** Defaults to Ask Wovenne, which every existing caller is. */
+  surface?: TraceSurface;
+  caller?: TraceCaller;
   featureEnabled?: boolean;
   /** Swap the sink in tests. Defaults to a structured line on stdout. */
   emit?: (trace: AiTrace) => void;
@@ -262,8 +270,9 @@ export class TraceRecorder {
   private readonly startedIso: string;
   private readonly model: string;
   private readonly emit: (trace: AiTrace) => void;
+  private readonly surface: TraceSurface;
 
-  private caller: "guest" | "customer";
+  private caller: TraceCaller;
   private featureEnabled: boolean;
 
   private calls: ModelCallRecord[] = [];
@@ -281,13 +290,14 @@ export class TraceRecorder {
     this.startedAt = now();
     this.startedIso = new Date().toISOString();
     this.model = opts.model;
+    this.surface = opts.surface ?? "ask_wovenne";
     this.caller = opts.caller ?? "guest";
     this.featureEnabled = opts.featureEnabled ?? true;
     this.emit = opts.emit ?? emitTraceLine;
   }
 
   /** Set once the session has been read. A classification, never an identifier. */
-  setCaller(caller: "guest" | "customer"): void {
+  setCaller(caller: TraceCaller): void {
     safe(() => {
       this.caller = caller;
     });
@@ -381,7 +391,7 @@ export class TraceRecorder {
       const trace: AiTrace = {
         trace_id: this.traceId,
         ts: this.startedIso,
-        surface: "ask_wovenne",
+        surface: this.surface,
         caller: this.caller,
         feature_enabled: this.featureEnabled,
         model: this.model,
