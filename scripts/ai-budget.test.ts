@@ -454,9 +454,13 @@ async function main() {
       .filter((f) => /\.tsx?$/.test(f))
       .filter((f) => f !== "lib/chatQuota.ts")
       .filter((f) => fs.readFileSync(f, "utf8").includes("consumeChatQuota"));
+    // Two callers, both of which want fail-closed: Ask Wovenne, and the
+    // admin's AI Product Assistant (its own key prefix and limit). Any third
+    // caller has to be added here deliberately.
     t(
-      "consumeChatQuota has exactly one caller, so failing closed is local",
-      callers.length === 1 && callers[0] === "app/api/chat/route.ts",
+      "consumeChatQuota has exactly the two known callers, so failing closed stays local",
+      JSON.stringify([...callers].sort()) ===
+        JSON.stringify(["app/api/admin/product-assistant/route.ts", "app/api/chat/route.ts"]),
       callers.join(", ")
     );
   }

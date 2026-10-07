@@ -18,6 +18,16 @@ import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
 import ProductContentCheck from "@/components/admin/ProductContentCheck";
 import ProductInfoPanel, { LevelTag } from "@/components/admin/ProductInfoPanel";
+import ProductAssistantPanel, { type AssistantState } from "@/components/admin/ProductAssistantPanel";
+import {
+  applyAltSuggestion,
+  applyCopySuggestion,
+  claimContext,
+  reviewCopy,
+  type AssistantRequest,
+  type AssistantSuggestions,
+  type CopyField,
+} from "@/lib/ai/productAssistant";
 import { getBrowserSupabase } from "@/lib/supabase";
 import { youtubeId } from "@/lib/youtube";
 import { getAllCategories } from "@/lib/categories";
@@ -214,6 +224,15 @@ export default function ProductModal({
   const [ignoredFindings, setIgnoredFindings] = useState<Set<string>>(new Set());
   const [checkOpen, setCheckOpen] = useState(false);
 
+  // ── AI writing suggestions ──
+  // Suggestions live here and nowhere else until the admin uses one, and then
+  // only in the unsaved form. Closing or switching product drops them.
+  const [assistant, setAssistant] = useState<AssistantState>({ status: "idle" });
+  const assistantAbort = useRef<AbortController | null>(null);
+  const assistantRequestId = useRef(0);
+  // A request still running when the form goes away is abandoned, not applied.
+  useEffect(() => () => assistantAbort.current?.abort(), []);
+
   // ── Unsaved changes ──
   // What each part of the form held when it finished loading. null = still
   // loading, which never counts as a change (lib/adminStatus isDirty), so the
@@ -318,6 +337,9 @@ export default function ProductModal({
 
     setError(null);
     setIgnoredFindings(new Set());
+    assistantAbort.current?.abort();
+    assistantAbort.current = null;
+    setAssistant({ status: "idle" });
     setCheckOpen(!isEdit);
     // In edit mode the slug is already published, so it must never be silently
     // rewritten by editing the name.
@@ -506,6 +528,130 @@ export default function ProductModal({
       return;
     }
     setForm((f) => applySuggestion(f, s));
+  };
+
+  // ── AI writing suggestions ──
+
+  /**
+   * The allow-list the assistant reads, from the form as it is now — unsaved
+   * edits included, since those are what the admin is about to save. Price,
+   * cost, stock, sizes, discounts and everything else are not in it.
+   */
+  const assistantRequest = (): AssistantRequest => ({
+    productId: product?.id ?? null,
+    profile,
+    categoryName: selectedSubCategory?.name ?? "",
+    parentCategoryName: parentCategoryName ?? "",
+    facts: {
+      fabric: form.fabric.trim(),
+      colour: form.colour.trim(),
+      dimensions: form.dimensions.trim(),
+      blouse_piece: form.blouse_piece.trim(),
+      finish: form.finish.trim(),
+      weave: form.weave.trim(),
+      origin: form.origin.trim(),
+      care: form.care_note.trim(),
+      fit: form.fit_note.trim(),
+    },
+    copy: {
+      name: form.name.trim(),
+      description: form.description.trim(),
+      seo_title: form.seo_title.trim(),
+      meta_description: form.meta_description.trim(),
+    },
+    notes: { heritage: form.heritage_note.trim(), craft: form.craft_note.trim() },
+    images: images.map((p) => ({ url: p.url, alt: p.alt.trim() })),
+  });
+
+  const assistantBlocked = uploading
+    ? "Wait for the photos to finish uploading."
+    : !form.name.trim()
+      ? "Enter a product name first."
+      : undefined;
+
+  /**
+   * One explicit press, one request. Never called by an effect: no suggestion
+   * is ever generated because something in the form changed.
+   */
+  const requestSuggestions = async () => {
+    if (assistantBlocked || assistant.status === "loading") return;
+    assistantAbort.current?.abort();
+    const controller = new AbortController();
+    assistantAbort.current = controller;
+    const body = assistantRequest();
+    setAssistant({ status: "loading" });
+    try {
+      const res = await fetch("/api/admin/product-assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { suggestions?: AssistantSuggestions; imagesDropped?: number; error?: string }
+        | null;
+      if (controller.signal.aborted) return;
+      if (!res.ok || !data?.suggestions) {
+        setAssistant({
+          status: "error",
+          message:
+            data?.error ??
+            (res.status === 404 || res.status === 403
+              ? "Your admin session can't use AI suggestions — sign in again with two-factor verification. Nothing in the form has changed."
+              : "Suggestions aren't available right now. Nothing in the form has changed."),
+        });
+        return;
+      }
+      assistantRequestId.current += 1;
+      setAssistant({
+        status: "ready",
+        suggestions: data.suggestions,
+        imagesDropped: data.imagesDropped ?? 0,
+        photosSent: body.images.length - (data.imagesDropped ?? 0),
+        requestId: assistantRequestId.current,
+      });
+    } catch {
+      if (controller.signal.aborted) return;
+      setAssistant({
+        status: "error",
+        message: "Couldn't reach the AI service. Check your connection and try again. Nothing in the form has changed.",
+      });
+    } finally {
+      if (assistantAbort.current === controller) assistantAbort.current = null;
+    }
+  };
+
+  const cancelSuggestions = () => {
+    assistantAbort.current?.abort();
+    assistantAbort.current = null;
+    setAssistant({ status: "idle" });
+  };
+
+  /** The same check the server ran, against the form's facts as they are now. */
+  const reviewSuggestion = (field: CopyField | "alt", text: string, url?: string) => {
+    const req = assistantRequest();
+    return reviewCopy(field, text, claimContext(req, field === "alt"), {
+      otherNames: otherProducts.map((p) => p.name),
+      productName: form.name,
+      otherAlts: images.filter((p) => p.url !== url).map((p) => p.alt),
+    });
+  };
+
+  /**
+   * "Use suggestion": that field of the unsaved form and nothing else. A name
+   * follows the rule for typing one — the slug moves with it only on a product
+   * that has never been saved and whose slug was never edited; an existing
+   * product's address never moves.
+   */
+  const acceptCopySuggestion = (field: CopyField, value: string) => {
+    if (field === "name") {
+      setForm((f) => ({
+        ...applyCopySuggestion(f, "name", value),
+        slug: slugTouched ? f.slug : uniqueSlug(value, takenSlugs),
+      }));
+      return;
+    }
+    setForm((f) => applyCopySuggestion(f, field, value));
   };
 
   /** Mirrors getVisibleCategoryIds: a hidden parent hides its children too. */
@@ -1557,6 +1703,30 @@ export default function ProductModal({
             </>
           )}
         </fieldset>
+
+        <ProductAssistantPanel
+          state={assistant}
+          canRequest={!assistantBlocked}
+          blockedReason={assistantBlocked}
+          onRequest={requestSuggestions}
+          onCancel={cancelSuggestions}
+          current={{
+            name: form.name,
+            description: form.description,
+            seoTitle: form.seo_title,
+            metaDescription: form.meta_description,
+          }}
+          emptyText={{
+            name: "Empty",
+            description: "Empty",
+            seoTitle: "Empty — the shop uses the product name.",
+            metaDescription: "Empty — the shop writes one from the name and details.",
+          }}
+          photos={images}
+          review={reviewSuggestion}
+          onUseField={acceptCopySuggestion}
+          onUseAlt={(url, value) => setImages((photos) => applyAltSuggestion(photos, url, value))}
+        />
 
         {checkOpen ? (
           <ProductContentCheck
