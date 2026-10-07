@@ -1701,14 +1701,14 @@
       "using": "(EXISTS ( SELECT 1\n   FROM products p\n  WHERE ((p.id = product_images.product_id) AND p.is_active)))",
       "check": null
     },
-    "public.product_reviews.Admins moderate reviews": {
-      "cmd": "ALL",
+    "public.product_reviews.Admins delete reviews": {
+      "cmd": "DELETE",
       "permissive": "PERMISSIVE",
       "roles": [
         "authenticated"
       ],
       "using": "is_admin()",
-      "check": "is_admin()"
+      "check": null
     },
     "public.product_reviews.Admins read every review": {
       "cmd": "SELECT",

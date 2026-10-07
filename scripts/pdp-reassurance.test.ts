@@ -147,10 +147,12 @@ ok("the PDP reads the PUBLISHED pages (default anonymous context)",
   detail.includes("getPageBySlug(POLICY_PAGES.delivery)") && detail.includes("getPageBySlug(POLICY_PAGES.returns)"));
 
 console.log("\n=== 12. verified purchase ===");
-const review = { id: "r1", rating: 5, body: "Beautiful weave, true to the photos.", author: "Asha", created_at: "2026-09-01T00:00:00Z" };
+const review = { id: "r1", rating: 5, body: "Beautiful weave, true to the photos.", author: "Asha", created_at: "2026-09-01T00:00:00Z", verified: true };
 const withReview = renderToStaticMarkup(createElement(ProductReviews, { productId: "p", reviews: [review], rating: { average: 5, total: 1 } }));
+const unverified = renderToStaticMarkup(createElement(ProductReviews, { productId: "p", reviews: [{ ...review, verified: false }], rating: { average: 5, total: 1 } }));
 const empty = renderToStaticMarkup(createElement(ProductReviews, { productId: "p", reviews: [], rating: { average: null, total: 0 } }));
-check("12. one review → exactly one Verified purchase label", (withReview.match(/Verified purchase/g) ?? []).length, 1);
+check("12. one verified review → exactly one Verified purchase label", (withReview.match(/Verified purchase/g) ?? []).length, 1);
+ok("12. an unverified review → no Verified purchase label (0066)", !/Verified purchase/.test(unverified) && text(unverified).includes(review.body));
 ok("12. no reviews → no Verified label, no stars, no count", !/Verified purchase|★|0\.0|0 reviews/.test(empty));
 ok("12. the empty state is honest", text(empty).includes("No reviews yet"));
 ok("12. insert is gated by has_purchased in RLS (0036)",
