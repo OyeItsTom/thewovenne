@@ -1,3 +1,5 @@
+import { isPlaceholderFact } from "./productInfo";
+
 /**
  * Care advice — what a product page may say about looking after a piece.
  *
@@ -65,10 +67,10 @@ export type CareGuidance = { source: "written"; text: string };
 
 /**
  * The written note, trimmed, or null when there is none. Whitespace is not a
- * note. The same rule for every kind of product: jewellery, garments and
+ * note, and neither is a filler such as "N/A" or a dash — see isPlaceholderFact. The same rule for every kind of product: jewellery, garments and
  * anything filed nowhere are all told only what was written for them.
  */
 export function careFor({ careNote }: { careNote: string | null }): CareGuidance | null {
   const written = careNote?.trim();
-  return written ? { source: "written", text: written } : null;
+  return written && !isPlaceholderFact(written) ? { source: "written", text: written } : null;
 }

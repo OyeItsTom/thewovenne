@@ -171,7 +171,8 @@ check("no facts: no additionalProperty key at all", Object.keys(prune(node([])) 
 check("a blank row never reaches the markup", node([{ key: "origin", label: "Origin", value: "  " }]).additionalProperty, undefined);
 check("no colour property in the markup (stored colour is not yet reliable)", /"color"/.test(serializeJsonLd(node(facts)) ?? ""), false);
 const detail = read("components/product/ProductDetail.tsx");
-check("the page renders the SAME rows it hands the markup", [/facts\.map\(\(row\)/.test(detail), /\n\s+facts,\n/.test(detail)], [true, true]);
+check("the page renders the SAME rows it hands the markup",
+  [/facts\.map\(\(row\)/.test(read("components/product/ProductReassurance.tsx")) && detail.includes("facts={facts}"), /\n\s+facts,\n/.test(detail)], [true, true]);
 
 console.log("\n=== the field carries from form to database to page ===");
 for (const col of ["dimensions", "blouse_piece", "fit_note", "finish", "weave", "origin", "seo_title", "meta_description"]) {

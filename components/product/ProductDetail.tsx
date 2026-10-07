@@ -3,7 +3,7 @@ import { formatINR } from "@/lib/utils";
 import { effectivePrice } from "@/lib/pricing";
 import ImageGallery from "@/components/product/ImageGallery";
 import ProductOptions from "@/components/product/ProductOptions";
-import MaterialCare from "@/components/product/MaterialCare";
+import ProductReassurance from "@/components/product/ProductReassurance";
 import BrandKnowledgePanel from "@/components/product/BrandKnowledgePanel";
 import ProductStyleSection from "@/components/style/ProductStyleSection";
 import ProductVideo from "@/components/product/ProductVideo";
@@ -24,6 +24,8 @@ import { stockNote, stockState } from "@/lib/stock";
 import JsonLd from "@/components/seo/JsonLd";
 import { productImageUrl } from "@/lib/seo";
 import { careFor } from "@/lib/care";
+import { getPageBySlug } from "@/lib/pages";
+import { POLICY_PAGES, policySummary, type PolicySummary } from "@/lib/policySummary";
 import { productDescriptionText } from "@/lib/metadata";
 import { breadcrumbNode, productNode } from "@/lib/structuredData";
 import { productHref } from "@/lib/urls";
@@ -74,13 +76,20 @@ export default async function ProductDetail({
   // A query of its own rather than a column on the listing payload — see
   // getBrandKnowledge. One extra read on the one page that shows it, instead of
   // three paragraphs per product on every category page.
-  const [reviews, rating, knowledge, deliveryConfig, tree] = await Promise.all([
-    getReviews(product.id),
-    getRating(product.id),
-    getBrandKnowledge({ productId: product.id }),
-    getDeliveryConfig(),
-    getVisibleCategoryTree(),
-  ]);
+  //
+  // The two policy pages are read as PUBLISHED rows (the anonymous context), so
+  // a draft edit to a policy never reaches a product page before it reaches the
+  // policy page itself. See lib/policySummary.
+  const [reviews, rating, knowledge, deliveryConfig, tree, deliveryPage, returnsPage] =
+    await Promise.all([
+      getReviews(product.id),
+      getRating(product.id),
+      getBrandKnowledge({ productId: product.id }),
+      getDeliveryConfig(),
+      getVisibleCategoryTree(),
+      getPageBySlug(POLICY_PAGES.delivery),
+      getPageBySlug(POLICY_PAGES.returns),
+    ]);
 
   // Which facts apply is the category's type (0065): jewellery's material is
   // "Material", a saree's is "Fabric", and a blouse piece is only a saree's.
@@ -103,8 +112,13 @@ export default async function ProductDetail({
   const urls = images.map((i) => i.url);
 
   // Only a note written for this piece. Null means nothing approved to say, and
-  // the Material & Care section is not rendered. See lib/care.
+  // no Care section is rendered. See lib/care.
   const care = careFor({ careNote: knowledge?.care ?? null });
+  // Quoted from the live policy pages, or absent — never composed here.
+  const policies = [
+    policySummary("delivery", deliveryPage),
+    policySummary("returns", returnsPage),
+  ].filter((p): p is PolicySummary => p !== null);
   const description = productDescriptionText(product.description);
 
   // DECIDED ON THE SERVER. Both switches are read here, so "off" means the
@@ -114,7 +128,10 @@ export default async function ProductDetail({
     deliveryConfig.estimator_enabled && deliveryConfig.estimator_on_pdp;
 
   return (
-    <div className="container-wovenne section-padding pb-28 lg:pb-24">
+    // data-pdp: the marker app/globals.css keys on to stand the site-wide
+    // floating WhatsApp button down on this page, where every WhatsApp action
+    // names the piece instead — see WhatsAppButton and ProductOptions.
+    <div data-pdp className="container-wovenne section-padding pb-28 lg:pb-24">
       {/* SERVER-RENDERED, and next to the markup it describes rather than in the
           route, because BOTH product routes render this file — the hierarchical
           one and the legacy flat one. Putting it here is what stops the two
@@ -128,7 +145,7 @@ export default async function ProductDetail({
           // stored URLs. See productImageUrl in lib/seo.
           images: urls.map((src) => productImageUrl(src, "jsonLd")),
           description: product.description,
-          // The same column MaterialCare and the fabric line below render, so
+          // The same column the Product details fabric row renders, so
           // the markup and the page cannot name two different materials.
           fabric: product.fabric,
           // The rows printed below the price, word for word.
@@ -276,54 +293,20 @@ export default async function ProductDetail({
             </div>
           )}
 
-          {(facts.length > 0 || care) && (
-            /* THE MATERIAL, LABELLED, after everything needed to buy. It was a
-               lone line of small caps under the delivery check with no label —
-               "HANDLOOM 120 COUNT MUL COTTON" on its own, easy to read as a
-               code rather than as the cloth. Now it sits under the same
-               rule-and-label as Quantity and Delivery above it, and the value
-               is set as words, in the case it was stored in.
-
-               Only stored facts: the fabric column and the facts of 0065 that
-               apply to this type (productFactRows — the same rows the Product
-               markup states), and a pointer to the care note when one was
-               written for this piece. Colour is deliberately absent — the
-               stored colour does not yet reliably describe the cloth (most
-               pieces read "Off-white" whatever their border). */
-            <dl className="mt-6 space-y-5 border-t border-ink/10 pt-5">
-              {facts.map((row) => (
-                <div key={row.key}>
-                  <dt className="font-heading text-sm uppercase tracking-wider text-ink-muted">
-                    {row.label}
-                  </dt>
-                  <dd className="mt-1.5 whitespace-pre-line text-[15px] leading-relaxed text-ink">
-                    {row.value}
-                  </dd>
-                </div>
-              ))}
-              {care && (
-                <div>
-                  <dt className="font-heading text-sm uppercase tracking-wider text-ink-muted">
-                    Care
-                  </dt>
-                  <dd className="mt-1.5 text-[15px] leading-relaxed">
-                    <a
-                      href="#material-care"
-                      className="text-ink underline decoration-ink/25 underline-offset-4 transition-colors hover:decoration-terracotta"
-                    >
-                      How to look after it
-                    </a>
-                  </dd>
-                </div>
-              )}
-            </dl>
-          )}
+          {/* THE MATERIAL, LABELLED, after everything needed to buy: the stored
+              facts (productFactRows — the same rows the Product markup
+              states), the care note written for this piece, and what the
+              delivery and returns pages say, each linking to the page. Folded
+              sections, native <details>, no client code. See
+              ProductReassurance for what each may and may not show. */}
+          <ProductReassurance facts={facts} care={care} policies={policies} />
           </div>
         </div>
       </div>
 
       {/* ── Below the fold, in the confirmed order ──────────────────
-          video → story → care → reviews → styled by customers → related.
+          video → story → reviews → styled by customers → related. (Care now sits
+          with the product details under the purchase controls.)
 
           Related pieces come LAST, deliberately. They used to sit above the
           reviews, which meant the page offered somebody a different product
@@ -337,10 +320,6 @@ export default async function ProductDetail({
       )}
 
       <BrandKnowledgePanel knowledge={knowledge} productName={product.name} />
-
-      {/* Only care somebody wrote for this piece — never a lookup by fabric
-          label, never generic advice. No note, no section. See lib/care. */}
-      {care && <MaterialCare fabric={product.fabric} care={care} />}
 
       <ProductReviews productId={product.id} reviews={reviews} rating={rating} />
 

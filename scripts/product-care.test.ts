@@ -106,19 +106,22 @@ const careFn = lib.slice(lib.indexOf("export function careFor"));
 ok("careFor never reads the fabric table", careFn.length > 0 && !careFn.includes("CARE_BY_FABRIC"));
 ok("careFor has no fabric or kind input", !/fabric|kind/.test(careFn.slice(0, careFn.indexOf("{\n"))));
 ok("nothing outside lib/care imports the table",
-  ![read("components/product/MaterialCare.tsx"), read("components/product/ProductDetail.tsx")].some((f) => f.includes("CARE_BY_FABRIC")));
+  ![read("components/product/ProductReassurance.tsx"), read("components/product/ProductDetail.tsx")].some((f) => f.includes("CARE_BY_FABRIC")));
 
-const materialCare = read("components/product/MaterialCare.tsx");
-ok("MaterialCare no longer says 'Made to last'", !materialCare.includes("Made to last"));
-ok("MaterialCare no longer decides care itself", !/CARE_BY_FABRIC|DEFAULT_CARE/.test(materialCare));
-ok("MaterialCare renders no list of generated lines", !/careLines|\.map\(\(line\)/.test(materialCare));
-ok("MaterialCare renders the written note", materialCare.includes("{care.text}"));
+// Care moved from the below-the-fold MaterialCare section into the Care fold of
+// ProductReassurance (PDP reassurance), which renders what careFor decided.
+const reassurance = read("components/product/ProductReassurance.tsx");
+ok("the care fold never says 'Made to last'", !reassurance.includes("Made to last"));
+ok("the care fold does not decide care itself", !/CARE_BY_FABRIC|DEFAULT_CARE/.test(reassurance));
+ok("the care fold renders no list of generated lines", !/careLines|\.map\(\(line\)/.test(reassurance));
+ok("the care fold renders the written note", reassurance.includes("{care.text}"));
 
 const detail = read("components/product/ProductDetail.tsx");
 ok("care comes only from the written note",
   detail.includes("careFor({ careNote: knowledge?.care ?? null })"));
 ok("the section is only rendered when there is care to show",
-  /\{care && <MaterialCare fabric=\{product\.fabric\} care=\{care\} \/>\}/.test(detail));
+  detail.includes("care={care}") && reassurance.includes("{care && ("));
+ok("care is rendered in one place only (MaterialCare is gone)", !detail.includes("MaterialCare"));
 
 console.log("\n=== RELATED PRODUCTS — WORDING ONLY ===");
 

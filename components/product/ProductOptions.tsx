@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { MessageCircle } from "lucide-react";
 import type { Product } from "@/lib/types";
 import type { ProductSize } from "@/lib/sizes";
 import { useCartStore } from "@/lib/store";
@@ -10,6 +11,7 @@ import AddToCart from "./AddToCart";
 import { effectivePrice } from "@/lib/pricing";
 import { sizeStockNote } from "@/lib/stock";
 import { showStickyCta, SITE_FOOTER_SELECTOR } from "@/lib/stickyCta";
+import { whatsappProductEnquiry } from "@/lib/whatsapp";
 
 /** What the cart records when a product has no sizes of its own. */
 const NO_SIZE = "One Size";
@@ -130,6 +132,10 @@ export default function ProductOptions({
   }, []);
 
   const showStickyBar = showStickyCta({ ctaHasBeenSeen, ctaVisible, footerVisible });
+  // The same message as the "Ask on WhatsApp" button above — this piece's name
+  // and its own URL — so the bar never offers a generic chat. Null without a
+  // configured number, and then no icon is drawn.
+  const waHref = whatsappProductEnquiry(product);
 
   return (
     <div className="space-y-6">
@@ -154,21 +160,42 @@ export default function ProductOptions({
       </div>
 
       {/* Sticky add-to-cart bar — mobile only, and only once the real button has
-          scrolled away. Adds one of the selected size. */}
-      {/* pr-24 clears the floating WhatsApp button at bottom-right. */}
+          scrolled away. Adds one of the selected size.
+
+          pr-24 is the FALLBACK: it clears the site-wide floating WhatsApp
+          button for a browser without :has(). Everywhere else app/globals.css
+          hides that button on a product page and returns this padding to 1rem
+          (data-sticky-cta), and the bar carries this piece's own WhatsApp
+          action instead. The bottom padding adds the home-indicator inset. */}
       {showStickyBar && (
-      <div className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-3 border-t border-ink/10 bg-cream/95 py-3 pl-4 pr-24 backdrop-blur lg:hidden">
+      <div
+        data-sticky-cta
+        className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-3 border-t border-ink/10 bg-cream/95 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pl-4 pr-24 pt-3 backdrop-blur lg:hidden"
+      >
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-ink">{product.name}</p>
           <p className="text-sm text-ink/70">{formatINR(effectivePrice(product).price)}</p>
         </div>
-        <button
-          onClick={quickAdd}
-          disabled={outOfStock}
-          className="shrink-0 rounded-full bg-terracotta-dark px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-terracotta-deep disabled:cursor-not-allowed disabled:bg-linen disabled:text-ink-muted"
-        >
-          {outOfStock ? "Out of Stock" : `Add · ${size}`}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {waHref && (
+            <a
+              href={waHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Ask about ${product.name} on WhatsApp`}
+              className="flex h-11 w-11 items-center justify-center rounded-full border border-ink/15 text-ink transition-colors hover:border-[#25D366] hover:text-[#1da851]"
+            >
+              <MessageCircle aria-hidden className="h-5 w-5" strokeWidth={1.5} />
+            </a>
+          )}
+          <button
+            onClick={quickAdd}
+            disabled={outOfStock}
+            className="shrink-0 rounded-full bg-terracotta-dark px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-terracotta-deep disabled:cursor-not-allowed disabled:bg-linen disabled:text-ink-muted"
+          >
+            {outOfStock ? "Out of Stock" : `Add · ${size}`}
+          </button>
+        </div>
       </div>
       )}
     </div>

@@ -172,7 +172,7 @@ check("focus FALLING TO BODY is caught too, which focusin cannot see", viewer.in
 check("both guards are cleaned up", viewer.includes('removeEventListener("focusin"') && viewer.includes('removeEventListener("focusout"'));
 check("keyboard Left/Right change image", viewer.includes('e.key === "ArrowRight"') && viewer.includes('e.key === "ArrowLeft"'));
 check("position is announced", viewer.includes('aria-live="polite"') && viewer.includes("Image {index + 1} of {images.length}"));
-check("alt text is preserved", viewer.includes("alt={alt}"));
+check("alt text is preserved — the photo's own written alt, else the name", viewer.includes("alt={productImageAlt(alt, index, images.length, alts?.[index])}"));
 check("focus is visible on every control", (viewer.match(/focus-visible:ring/g) ?? []).length >= 3);
 
 console.log("\n=== body scroll lock, and its cleanup ===");

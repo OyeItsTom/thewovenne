@@ -5,7 +5,7 @@ import type { BrandKnowledge } from "@/lib/products";
  *
  * A SERVER COMPONENT WITH NO INTERACTION. It is prose about the cloth — there is
  * nothing to expand, filter or toggle, so it ships no JavaScript. The care note
- * is deliberately NOT here: it belongs beside the fabric in CareAccordion, where
+ * is deliberately NOT here: it belongs beside the fabric in ProductReassurance, where
  * a buyer already looks for it, and showing care advice twice on one page invites
  * the two to disagree.
  *

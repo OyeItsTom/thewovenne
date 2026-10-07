@@ -381,6 +381,19 @@ export const BLOUSE_PIECE_LABEL: Record<"included" | "not_included", string> = {
 
 // ── What the product page states ──────────────────────────────────────────
 
+/**
+ * A value somebody typed to fill the box rather than to state a fact — "Unknown",
+ * "N/A", a dash. Blank already means unknown (0065 refuses an empty string), so
+ * these say nothing a customer can use and must not be printed or marked up as
+ * if they were the cloth's own details. Whole-value matches only: "Not included"
+ * is a real blouse-piece answer and "Natural dye" is a real finish.
+ */
+const PLACEHOLDER_FACT = /^(?:unknown|not known|n\/?a|na|tbd|tbc|null|undefined|none|nil|[-–—?.\s]+)$/i;
+
+export function isPlaceholderFact(value: string): boolean {
+  return PLACEHOLDER_FACT.test(value.trim());
+}
+
 export interface FactSource {
   profile: ProductProfile;
   fabric: string | null | undefined;
@@ -409,7 +422,7 @@ export function productFactRows(src: FactSource): FactRow[] {
   const rows: FactRow[] = [];
   const add = (key: FactRow["key"], infoKey: InfoKey, value: string | null | undefined) => {
     const v = value?.trim();
-    if (!v || fieldLevel(infoKey, src.profile) === "na") return;
+    if (!v || isPlaceholderFact(v) || fieldLevel(infoKey, src.profile) === "na") return;
     rows.push({ key, label: fieldLabel(infoKey, src.profile), value: v });
   };
   add("fabric", "fabric", src.fabric);

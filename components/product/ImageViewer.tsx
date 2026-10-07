@@ -18,6 +18,7 @@ import {
   settleZoom,
   viewerSizes,
 } from "@/lib/imageZoom";
+import { productImageAlt } from "@/lib/seo";
 
 /**
  * The product-inspection popup: the photograph brought closer, on the page it
@@ -57,6 +58,7 @@ const DOUBLE_TAP_MS = 400;
 export default function ImageViewer({
   images,
   alt,
+  alts,
   index,
   onIndexChange,
   onClose,
@@ -64,7 +66,10 @@ export default function ImageViewer({
   baseSizes,
 }: {
   images: string[];
+  /** The product name: the dialog's label, and the fallback for a photo with no alt. */
   alt: string;
+  /** Each photo's written alt text (0065), by position — the gallery's own list. */
+  alts?: (string | null)[];
   index: number;
   onIndexChange: (next: number) => void;
   onClose: () => void;
@@ -456,7 +461,10 @@ export default function ImageViewer({
           <Image
             key={`base-${src}`}
             src={src}
-            alt={alt}
+            // The SAME text the gallery frame gives this photo — its written
+            // alt, else the name with its position — so the closer look never
+            // describes the picture differently from the page behind it.
+            alt={productImageAlt(alt, index, images.length, alts?.[index])}
             fill
             sizes={baseSizes}
             priority

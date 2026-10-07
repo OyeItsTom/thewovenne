@@ -7,8 +7,13 @@ export default function WhatsAppButton() {
   // sits over every page promising a conversation it cannot start.
   if (!href) return null;
 
+  // data-whatsapp-float: on a product page this generic button stands down
+  // (app/globals.css), because there every WhatsApp action names the piece
+  // being viewed — and this one, fixed bottom-right, sat over the buy buttons,
+  // the related grid and the sticky add-to-cart bar.
   return (
     <a
+      data-whatsapp-float
       href={href}
       target="_blank"
       rel="noopener noreferrer"

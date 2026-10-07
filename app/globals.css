@@ -357,3 +357,27 @@ input[type="password"]::-webkit-textfield-decoration-container {
   visibility: hidden;
   pointer-events: none;
 }
+
+/*
+ * PRODUCT PAGES: ONE KIND OF WHATSAPP ACTION. The site-wide floating button
+ * (components/layout/WhatsAppButton) opens a generic chat; on a product page
+ * every WhatsApp action names the piece and links to it instead — the "Ask on
+ * WhatsApp" button beside Add to Cart and the icon in the sticky bar. Fixed at
+ * bottom-right, the generic button also sat over those buttons, the related
+ * grid and the sticky bar, so on the PDP it stands down, and the sticky bar's
+ * right padding (kept for it as a fallback) returns to the gutter.
+ *
+ * CSS rather than a client check of the URL: nothing to hydrate, nothing to
+ * flash, and the product page itself declares what it is (data-pdp). A browser
+ * without :has() keeps the old arrangement, which was safe — the bar's pr-24
+ * still clears the button.
+ */
+@supports selector(:has(*)) {
+  body:has([data-pdp]) [data-whatsapp-float] {
+    display: none;
+  }
+
+  body:has([data-pdp]) [data-sticky-cta] {
+    padding-right: 1rem;
+  }
+}
