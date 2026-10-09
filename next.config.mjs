@@ -100,11 +100,12 @@ const nextConfig = {
    * BROWSER SENTRY REPORTS ERRORS AND NOTHING ELSE.
    *
    * Measured 9 Oct 2026: the Sentry chunk every storefront page loads was
-   * 111 KB gzipped, and most of it was performance tracing — Web Vitals
-   * listeners, fetch/XHR span instrumentation, the idle-span machinery, and a
-   * copy of Next's PAGES router that the tracing integration imports to name
-   * transactions on an app that has no pages router. All of it parsed and run
-   * on every page load, to sample one visit in ten.
+   * 114 kB, and 51 kB of it went once this and app/global-error.tsx's narrowed
+   * import landed — performance tracing (Web Vitals listeners, fetch/XHR span
+   * instrumentation, the idle-span machinery, a copy of Next's PAGES router
+   * the tracing integration imports to name transactions on an app with no
+   * pages router) and the feedback widget. All of it parsed and run on every
+   * page load, to sample one visit in ten.
    *
    * Defining __SENTRY_TRACING__ false is the SDK's own switch for this: the
    * client never adds browserTracingIntegration, so the bundler drops it.
