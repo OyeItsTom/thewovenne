@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getBrowserSupabase } from "@/lib/supabase";
+import { loadBrowserSupabase } from "@/lib/supabaseLazy";
 import CuratedForYou from "./CuratedForYou";
 import type { CuratedSet } from "@/lib/curated";
 
@@ -34,7 +34,7 @@ export default function CuratedPersonalizer({
       // a guest never triggers a request.
       const {
         data: { user },
-      } = await getBrowserSupabase().auth.getUser();
+      } = await (await loadBrowserSupabase()).auth.getUser();
       if (!user || !active) return;
 
       try {

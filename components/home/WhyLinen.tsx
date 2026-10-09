@@ -3,7 +3,7 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { Hand, Heart, Shirt } from "lucide-react";
 import { fadeUp, staggerContainer } from "@/lib/motion";
-import { DEFAULT_CONTENT } from "@/lib/content";
+import { DEFAULT_CONTENT } from "@/lib/contentDefaults";
 import type { WhyLinenContent } from "@/lib/types";
 
 // In card order: chosen by hand, the cloth itself, worn again. No Leaf — an

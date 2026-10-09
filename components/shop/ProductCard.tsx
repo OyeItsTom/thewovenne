@@ -49,9 +49,21 @@ export default function ProductCard({
   product,
   discoveryHint = false,
   headingLevel = 3,
+  fold = "below",
 }: {
   product: ProductListing;
   discoveryHint?: boolean;
+  /**
+   * Where the card can sit on first load, which decides how its photograph is
+   * fetched. "priority" is preloaded at high priority — the first row's
+   * leading cards, one of which is the listing's LCP. "visible" is the rest of
+   * a first row: fetched eagerly but without jumping the queue. Both skip the
+   * scroll reveal, because a card that starts at opacity 0 cannot paint until
+   * the page has hydrated. "below" is every other card: lazy, and revealed on
+   * scroll as before. Marking the whole grid priority would have every photo
+   * fight the LCP for bandwidth.
+   */
+  fold?: "priority" | "visible" | "below";
   /**
    * The name's heading level, from where the card sits. A listing page's grid
    * hangs straight off its h1, so its cards are h2. Under a section that has
@@ -61,7 +73,7 @@ export default function ProductCard({
   headingLevel?: 2 | 3;
 }) {
   const Title = headingLevel === 2 ? "h2" : "h3";
-  const { ref, revealed } = useReveal<HTMLDivElement>();
+  const { ref, revealed } = useReveal<HTMLDivElement>(fold !== "below");
   const images = product.images?.length
     ? product.images
     : product.image_url
@@ -251,6 +263,8 @@ export default function ProductCard({
               src={images[0]}
               alt={product.name}
               fill
+              priority={fold === "priority"}
+              loading={fold === "visible" ? "eager" : undefined}
               sizes={CARD_SIZES}
               className={`object-cover transition-transform duration-500 ease-out motion-reduce:transition-none ${
                 index > 0

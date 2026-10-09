@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Star } from "lucide-react";
 import Button from "@/components/ui/Button";
-import { getBrowserSupabase } from "@/lib/supabase";
+import { loadBrowserSupabase } from "@/lib/supabaseLazy";
 
 /**
  * Write or amend a review.
@@ -45,7 +45,7 @@ export default function ReviewForm({
     }
 
     setBusy(true);
-    const supabase = getBrowserSupabase();
+    const supabase = await loadBrowserSupabase();
     const {
       data: { user },
     } = await supabase.auth.getUser();

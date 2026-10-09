@@ -22,7 +22,11 @@ export default function CartPage() {
       {!hydrated ? (
         <div className="mt-10 min-h-[16rem]" aria-busy="true" />
       ) : items.length === 0 ? (
-        <div className="mt-16 flex flex-col items-center text-center text-ink/60">
+        // The same box as the placeholder above (mt-10 + min-h-[16rem]; the
+        // pt-6 keeps the old mt-16 position). The empty state was ~70px
+        // shorter, so the footer jumped up when it replaced the placeholder —
+        // the cart page's only layout shift, on the state most visitors see.
+        <div className="mt-10 flex min-h-[16rem] flex-col items-center pt-6 text-center text-ink/60">
           <ShoppingBag className="mb-4 h-12 w-12" strokeWidth={1.5} />
           <p>Your bag is empty.</p>
           <Link

@@ -70,7 +70,7 @@ export default async function WishlistPage() {
             </Link>
           </div>
         ) : (
-          <ProductGrid products={products} />
+          <ProductGrid products={products} leadsPage />
         )}
       </div>
     </div>

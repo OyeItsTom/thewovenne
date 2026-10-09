@@ -44,14 +44,19 @@ function usable(images: LookbookImage[]): LookbookImage[] {
   return images.filter((i) => i.image_url.trim() || i.image_url_mobile.trim());
 }
 
+/*
+ * NO IMAGE HERE IS priority. The hero above is min-height one full screen
+ * (.hero-viewport), so no lookbook photograph can be on the first screen at any
+ * size — and the preloaded 100vw photograph this used to emit was fetched at
+ * high priority alongside the hero emblem, the page's actual LCP, taking
+ * bandwidth from it. They lazy-load like any other below-the-fold image.
+ */
 function Frame({
   image,
   layout,
-  priority,
 }: {
   image: LookbookImage;
   layout: LookbookSection["layout"];
-  priority: boolean;
 }) {
   const desktop = image.image_url.trim();
   const mobile = image.image_url_mobile.trim();
@@ -64,7 +69,6 @@ function Frame({
         src={mobile || desktop}
         alt={image.alt}
         fill
-        priority={priority}
         sizes="100vw"
         className="object-cover md:hidden"
       />
@@ -72,7 +76,6 @@ function Frame({
         src={desktop || mobile}
         alt={image.alt}
         fill
-        priority={priority}
         sizes={SIZES[layout]}
         className="hidden object-cover md:block"
       />
@@ -113,21 +116,13 @@ export default function LookbookSections({
 
   return (
     <div className="bg-cream">
-      {live.map((section, sectionIndex) => (
+      {live.map((section) => (
         <section
           key={section.id}
           className={`grid grid-cols-1 gap-0 ${COLUMNS[section.layout]}`}
         >
           {section.images.map((image, i) => (
-            <Frame
-              key={i}
-              image={image}
-              layout={section.layout}
-              // Only the very first image is eager: it is the one that can
-              // appear above the fold, and marking them all priority would
-              // have the browser fight itself for bandwidth.
-              priority={sectionIndex === 0 && i === 0}
-            />
+            <Frame key={i} image={image} layout={section.layout} />
           ))}
         </section>
       ))}

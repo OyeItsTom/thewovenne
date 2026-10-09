@@ -104,7 +104,7 @@ export default async function CollectionPage({
         {/* A listing, so sold-out pieces stay — after everything that can be
             bought, newest first within each group, exactly as the shop and the
             category pages order theirs. */}
-        <ProductGrid products={orderForDiscovery(products, null)} />
+        <ProductGrid products={orderForDiscovery(products, null)} leadsPage />
       </div>
     </div>
   );

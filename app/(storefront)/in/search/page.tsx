@@ -66,7 +66,7 @@ export default async function SearchPage({
             <p className="mb-8 text-center text-xs uppercase tracking-widest text-ink/45">
               {products.length} {products.length === 1 ? "piece" : "pieces"}
             </p>
-            <ProductGrid products={products} />
+            <ProductGrid products={products} leadsPage />
           </>
         )}
       </div>

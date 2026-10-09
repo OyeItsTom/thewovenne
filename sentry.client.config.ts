@@ -5,10 +5,10 @@ import * as Sentry from "@sentry/nextjs";
 const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
 const enabled = typeof dsn === "string" && dsn.startsWith("http");
 
+// Errors only. Browser performance tracing is compiled out of the bundle (see
+// the webpack block in next.config.mjs), so there is no tracesSampleRate here:
+// error capture is unaffected and stays at 100%.
 Sentry.init({
   dsn: enabled ? dsn : undefined,
   enabled,
-  // Performance tracing only — error capture is unaffected and stays at 100%.
-  // 1.0 traces every request, which burns quota as traffic grows.
-  tracesSampleRate: 0.1,
 });

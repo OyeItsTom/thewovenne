@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { getBrowserSupabase } from "./supabase";
+import { loadBrowserSupabase } from "./supabaseLazy";
 
 /**
  * The signed-in customer's saved products.
@@ -30,7 +30,7 @@ export const useWishlistStore = create<WishlistState>((set, get) => ({
 
   load: async () => {
     if (get().loaded) return;
-    const supabase = getBrowserSupabase();
+    const supabase = await loadBrowserSupabase();
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -66,7 +66,7 @@ export const useWishlistStore = create<WishlistState>((set, get) => ({
     else next.add(productId);
     set({ ids: next });
 
-    const supabase = getBrowserSupabase();
+    const supabase = await loadBrowserSupabase();
     const {
       data: { user },
     } = await supabase.auth.getUser();

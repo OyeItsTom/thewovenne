@@ -17,13 +17,22 @@ import { useEffect, useRef, useState } from "react";
  * Respects prefers-reduced-motion by reporting "already revealed", so the
  * element simply exists rather than animating.
  */
-export function useReveal<T extends HTMLElement = HTMLDivElement>() {
+export function useReveal<T extends HTMLElement = HTMLDivElement>(
+  /**
+   * Start visible and never animate. For anything that can be on the first
+   * screen: the server renders the hidden state, so a revealed-on-scroll card
+   * stays at opacity 0 until the whole bundle has downloaded and hydrated —
+   * which made the category grid's first photograph the page's LCP, painted
+   * seconds late on a phone.
+   */
+  initiallyRevealed = false
+) {
   const ref = useRef<T>(null);
-  const [revealed, setRevealed] = useState(false);
+  const [revealed, setRevealed] = useState(initiallyRevealed);
 
   useEffect(() => {
     const node = ref.current;
-    if (!node) return;
+    if (!node || initiallyRevealed) return;
 
     // Anyone who has asked for less motion gets none, and gets it immediately.
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
@@ -52,7 +61,7 @@ export function useReveal<T extends HTMLElement = HTMLDivElement>() {
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [initiallyRevealed]);
 
   return { ref, revealed };
 }
