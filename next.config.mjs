@@ -96,6 +96,40 @@ const nextConfig = {
       },
     ],
   },
+  /*
+   * BROWSER SENTRY REPORTS ERRORS AND NOTHING ELSE.
+   *
+   * Measured 9 Oct 2026: the Sentry chunk every storefront page loads was
+   * 114 kB, and 51 kB of it went once this and app/global-error.tsx's narrowed
+   * import landed — performance tracing (Web Vitals listeners, fetch/XHR span
+   * instrumentation, the idle-span machinery, a copy of Next's PAGES router
+   * the tracing integration imports to name transactions on an app with no
+   * pages router) and the feedback widget. All of it parsed and run on every
+   * page load, to sample one visit in ten.
+   *
+   * Defining __SENTRY_TRACING__ false is the SDK's own switch for this: the
+   * client never adds browserTracingIntegration, so the bundler drops it.
+   * __SENTRY_DEBUG__ false drops the SDK's debug-logging strings, which only
+   * print with `debug: true`, which nothing sets.
+   *
+   * Client only. Error capture is untouched — every uncaught error, rejection
+   * and React render error is still reported, from the first moment of a page
+   * load. Server and edge tracing are untouched too (their Sentry is not
+   * bundled by this config at all; see experimental below). What is given up
+   * is browser performance traces; the next phase's analytics is where real
+   * user Web Vitals belong.
+   */
+  webpack(config, { isServer, webpack }) {
+    if (!isServer) {
+      config.plugins.push(
+        new webpack.DefinePlugin({
+          __SENTRY_TRACING__: false,
+          __SENTRY_DEBUG__: false,
+        })
+      );
+    }
+    return config;
+  },
   experimental: {
     // Keep Sentry's server SDK (and its ESM-only deps) external so the dev
     // server doesn't try to bundle/require them — this is the Next 14 name for

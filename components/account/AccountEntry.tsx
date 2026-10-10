@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { User } from "lucide-react";
-import { getBrowserSupabase } from "@/lib/supabase";
+import { loadBrowserSupabase } from "@/lib/supabaseLazy";
 import GuestAccountModal from "./GuestAccountModal";
 
 /**
@@ -29,22 +29,29 @@ export default function AccountEntry({ href }: { href: string }) {
 
   useEffect(() => {
     let active = true;
-    const supabase = getBrowserSupabase();
+    let unsubscribe: (() => void) | undefined;
 
-    supabase.auth.getUser().then(({ data }) => {
-      if (active) setSignedIn(Boolean(data.user));
-    });
-
-    // Keeps the icon honest after a sign-in or sign-out in another tab.
-    const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
+    // Loaded after paint: until it arrives the icon is in its "not known yet"
+    // state, which is the plain link described above.
+    void loadBrowserSupabase().then((supabase) => {
       if (!active) return;
-      setSignedIn(Boolean(session));
-      if (session) setModalOpen(false);
+
+      supabase.auth.getUser().then(({ data }) => {
+        if (active) setSignedIn(Boolean(data.user));
+      });
+
+      // Keeps the icon honest after a sign-in or sign-out in another tab.
+      const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
+        if (!active) return;
+        setSignedIn(Boolean(session));
+        if (session) setModalOpen(false);
+      });
+      unsubscribe = () => listener.subscription.unsubscribe();
     });
 
     return () => {
       active = false;
-      listener.subscription.unsubscribe();
+      unsubscribe?.();
     };
   }, []);
 

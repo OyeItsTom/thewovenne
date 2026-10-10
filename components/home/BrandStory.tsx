@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { motion, useReducedMotion } from "framer-motion";
 import { fadeUp, staggerContainer } from "@/lib/motion";
-import { DEFAULT_CONTENT } from "@/lib/content";
+import { DEFAULT_CONTENT } from "@/lib/contentDefaults";
 import type { BrandStoryContent } from "@/lib/types";
 
 export default function BrandStory({ content }: { content?: BrandStoryContent }) {

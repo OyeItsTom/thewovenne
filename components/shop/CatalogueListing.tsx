@@ -182,7 +182,7 @@ export default function CatalogueListing({
                 </button>
               </div>
             ) : (
-              <ProductGrid products={products} headingLevel={2} />
+              <ProductGrid products={products} headingLevel={2} leadsPage />
             )}
           </div>
         </div>

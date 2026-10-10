@@ -5,10 +5,18 @@ import ProductCard from "./ProductCard";
 export default function ProductGrid({
   products,
   headingLevel,
+  leadsPage = false,
 }: {
   products: ProductListing[] | null;
   /** Passed to every card. See ProductCard. */
   headingLevel?: 2 | 3;
+  /**
+   * The grid is the first thing under the page heading, so its first row is on
+   * the first screen and one of its photographs is the LCP. Off by default: a
+   * grid lower down (related products under a PDP) must not preload anything
+   * in competition with the page's real LCP.
+   */
+  leadsPage?: boolean;
 }) {
   if (products === null) {
     return (
@@ -36,6 +44,14 @@ export default function ProductGrid({
           product={product}
           discoveryHint={productIndex === 0}
           headingLevel={headingLevel}
+          // The first row: two cards on a phone, four on a desktop.
+          fold={
+            !leadsPage || productIndex >= 4
+              ? "below"
+              : productIndex < 2
+                ? "priority"
+                : "visible"
+          }
         />
       ))}
     </div>

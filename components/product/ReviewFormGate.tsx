@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import ReviewForm from "./ReviewForm";
-import { getBrowserSupabase } from "@/lib/supabase";
+import { loadBrowserSupabase } from "@/lib/supabaseLazy";
 
 /**
  * Decides, in the browser, whether to offer the review form.
@@ -28,7 +28,9 @@ export default function ReviewFormGate({ productId }: { productId: string }) {
     let cancelled = false;
 
     (async () => {
-      const supabase = getBrowserSupabase();
+      // Loaded after paint, so the product page does not ship supabase-js up
+      // front for a form only a delivered customer will ever see.
+      const supabase = await loadBrowserSupabase();
       const {
         data: { user },
       } = await supabase.auth.getUser();

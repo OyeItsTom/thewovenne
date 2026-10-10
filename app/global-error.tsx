@@ -12,7 +12,15 @@ export default function GlobalError({
   useEffect(() => {
     const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
     if (!dsn || !dsn.startsWith("http")) return;
-    import("@sentry/nextjs").then((Sentry) => Sentry.captureException(error));
+    // webpackExports: name the ONE function used. A bare import() hands back
+    // the whole module namespace, so webpack has to keep every export of
+    // @sentry/nextjs — and since the browser SDK is one concatenated module
+    // shared with sentry.client.config, that kept all of browser tracing and
+    // the feedback widget in the Sentry chunk EVERY page loads, not just in
+    // this rarely-reached error page.
+    import(/* webpackExports: ["captureException"] */ "@sentry/nextjs").then(
+      (Sentry) => Sentry.captureException(error)
+    );
   }, [error]);
 
   return (

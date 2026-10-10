@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getBrowserSupabase } from "@/lib/supabase";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { loadBrowserSupabase } from "@/lib/supabaseLazy";
 import { useCartStore, type CartItem } from "@/lib/store";
 import { decideCart } from "@/lib/cartOwner";
 
@@ -40,10 +41,10 @@ export default function CartSync() {
 
   useEffect(() => {
     let active = true;
-    const supabase = getBrowserSupabase();
+    let unsubscribe: (() => void) | undefined;
 
     /** Bring the local cart into line with whoever is signed in now. */
-    async function reconcile(userId: string | null) {
+    async function reconcile(supabase: SupabaseClient, userId: string | null) {
       if (!active) return;
       const store = useCartStore.getState();
       const decision = decideCart(store.ownerId, userId);
@@ -92,20 +93,30 @@ export default function CartSync() {
       setOwnerResolved(true);
     }
 
-    supabase.auth.getUser().then(({ data }) => void reconcile(data.user?.id ?? null));
+    // The client arrives after paint (see lib/supabaseLazy). Nothing is lost
+    // by the wait: no upload can happen until ownerResolved, which only the
+    // reconcile below sets.
+    void loadBrowserSupabase().then((supabase) => {
+      if (!active) return;
 
-    // Sign-in, sign-out and account switches — including ones that happen in
-    // another tab, which is exactly how a shared device gets used.
-    const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
-      const userId = session?.user?.id ?? null;
-      if (userId === syncingFor.current) return;
-      setOwnerResolved(false);
-      void reconcile(userId);
+      supabase.auth
+        .getUser()
+        .then(({ data }) => void reconcile(supabase, data.user?.id ?? null));
+
+      // Sign-in, sign-out and account switches — including ones that happen
+      // in another tab, which is exactly how a shared device gets used.
+      const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
+        const userId = session?.user?.id ?? null;
+        if (userId === syncingFor.current) return;
+        setOwnerResolved(false);
+        void reconcile(supabase, userId);
+      });
+      unsubscribe = () => listener.subscription.unsubscribe();
     });
 
     return () => {
       active = false;
-      listener.subscription.unsubscribe();
+      unsubscribe?.();
     };
   }, []);
 
@@ -120,7 +131,7 @@ export default function CartSync() {
     timer.current = setTimeout(async () => {
       // The session can change during the debounce. Upload for the customer
       // this cart was reconciled against, and only if that is still them.
-      const supabase = getBrowserSupabase();
+      const supabase = await loadBrowserSupabase();
       const {
         data: { user },
       } = await supabase.auth.getUser();

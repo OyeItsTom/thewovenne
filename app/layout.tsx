@@ -33,8 +33,16 @@ const body = DM_Sans({
   display: "swap",
 });
 
+/*
+ * LATIN ONLY. The script face sets English accent labels ("Featured", "In real
+ * life", the eyebrows); no page carries a single Devanagari character. Listing
+ * the "devanagari" subset made next/font PRELOAD its file — 63.6 KB, the
+ * largest font on the site — at high priority on every page, competing with
+ * the LCP image for a glyph range nothing renders. Should Devanagari text ever
+ * appear, it falls back to the device's own Devanagari font.
+ */
 const script = Tiro_Devanagari_Hindi({
-  subsets: ["latin", "devanagari"],
+  subsets: ["latin"],
   weight: ["400"],
   variable: "--font-script",
   display: "swap",
