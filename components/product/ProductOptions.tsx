@@ -191,7 +191,7 @@ export default function ProductOptions({
           <button
             onClick={quickAdd}
             disabled={outOfStock}
-            className="shrink-0 rounded-full bg-terracotta-dark px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-terracotta-deep disabled:cursor-not-allowed disabled:bg-linen disabled:text-ink-muted"
+            className="shrink-0 rounded-full bg-emblem px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-emblem-light active:bg-emblem-deep disabled:cursor-not-allowed disabled:bg-linen disabled:text-ink-muted"
           >
             {outOfStock ? "Out of Stock" : `Add · ${size}`}
           </button>

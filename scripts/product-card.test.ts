@@ -77,7 +77,11 @@ console.log("\n=== quiet controls, so the photography dominates ===");
 check("no cream disc behind the heart on desktop", !card.includes("md:bg-cream/85"));
 check("no shadow or blur behind the heart on desktop", !card.includes("md:shadow-soft") && !card.includes("md:backdrop-blur"));
 check("the heart is not hidden until hover", !card.includes("md:opacity-0"));
-check("the heart keeps the transparent overlay treatment", wishlist.includes("bg-transparent text-white shadow-none"));
+// Superseded 10 Oct 2026: the bare white glyph was lost on pale cloth and in a
+// full grid. The heart is ALWAYS on a small frosted disc now — never a
+// hover-only one, which the checks above still forbid.
+check("the overlay heart sits on a small frosted disc", wishlist.includes("bg-white/85 text-ink"));
+check("a saved heart is red on every surface", wishlist.includes('saved && "fill-red-600 text-red-600"'));
 check("the arrows carry no disc, shadow or blur",
   !/bg-cream\/85 text-ink opacity-0 shadow-soft backdrop-blur/.test(card));
 check("the arrows are drawn as white chevrons", card.includes("rounded-full text-white opacity-0 transition-opacity"));

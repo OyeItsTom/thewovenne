@@ -27,6 +27,18 @@ const config: Config = {
           // Primary-button hover, one step further along the same hue (6.16:1).
           deep: "#934F33",
         },
+        // THE EMBLEM'S OWN COLOUR — sampled from public/logo_emblem_transparent.png
+        // (every opaque pixel of the mark is rgb 100,14,13), not chosen. It is
+        // the primary-action colour, so every "do this" button on the
+        // storefront matches the mark in the header. White on it is 13.04:1.
+        emblem: {
+          DEFAULT: "#640E0D",
+          // Hover goes LIGHTER: the base is already near-black, and a darker
+          // step would be invisible. White on light is 9.85:1.
+          light: "#801F1D",
+          // Pressed, one step deeper along the same hue (15.31:1).
+          deep: "#4E0A0A",
+        },
         gold: "#C9A84C",
         // Page background. Pure white — the emblem and product photography sit
         // directly on it, so any warmth here reads as a tint behind them.

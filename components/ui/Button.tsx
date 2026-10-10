@@ -10,11 +10,14 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 /**
- * Primary is the purchase colour, so it has to be readable in every state:
+ * Primary is the purchase colour — the emblem's maroon, so the storefront's
+ * "do this" buttons match the mark in the header (10 Oct 2026; it was
+ * terracotta, which read as orange beside the logo). Readable in every state:
  *
- *   resting  white on terracotta-dark  4.88:1  (was 3.64:1 on terracotta)
- *   hover    white on terracotta-deep  6.16:1
- *   disabled ink-muted on linen        4.62:1  — "Sold out" is information, and
+ *   resting  white on emblem        13.04:1
+ *   hover    white on emblem-light   9.85:1  (lighter: the base is near-black)
+ *   pressed  white on emblem-deep   15.31:1
+ *   disabled ink-muted on linen      4.62:1  — "Sold out" is information, and
  *            the old 50% fade left it at about 1.5:1. A flat linen surface
  *            reads as unavailable without looking broken.
  *
@@ -23,7 +26,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  */
 const variantStyles: Record<ButtonVariant, string> = {
   primary:
-    "bg-terracotta-dark text-cream hover:bg-terracotta-deep disabled:bg-linen disabled:text-ink-muted",
+    "bg-emblem text-cream hover:bg-emblem-light active:bg-emblem-deep disabled:bg-linen disabled:text-ink-muted",
   secondary: "bg-ink text-cream hover:bg-ink-light disabled:opacity-50",
   outline: "border border-ink text-ink hover:bg-ink hover:text-cream disabled:opacity-50",
   ghost: "text-ink hover:bg-linen disabled:opacity-50",

@@ -74,10 +74,19 @@ export default function WishlistButton({
         // it. Positioning is the caller's job; `tap-44` only needs SOME
         // positioned box, and every caller supplies one.
         "tap-44 flex items-center justify-center rounded-full transition-colors",
+        // RED IS THE HEART'S COLOUR, at every size and on every surface: it is
+        // the one colour a shopper already reads as "saved". It is not the
+        // brand's purchase colour (the emblem maroon), so the two never compete.
+        //
+        // The overlay sits on the photograph. A bare white glyph with a drop
+        // shadow vanished on pale cloth and in a busy grid, so it now sits on a
+        // small frosted disc: ink on it is over 11:1 even with a black photo
+        // behind the 85% white, and the disc is small enough not to become the
+        // subject.
         appearance === "overlay"
-          ? "bg-transparent text-white shadow-none [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.8))]"
+          ? "bg-white/85 text-ink shadow-[0_1px_3px_rgba(28,31,59,0.22)] backdrop-blur-sm"
           : "bg-cream/90 text-ink shadow-soft backdrop-blur",
-        "hover:text-terracotta disabled:opacity-60",
+        "hover:text-red-600 disabled:opacity-60",
         px,
         className
       )}
@@ -86,10 +95,7 @@ export default function WishlistButton({
         className={cn(
           icon,
           "transition-all",
-          saved &&
-            (appearance === "overlay"
-              ? "fill-white text-white"
-              : "fill-terracotta text-terracotta")
+          saved && "fill-red-600 text-red-600"
         )}
         strokeWidth={1.5}
       />

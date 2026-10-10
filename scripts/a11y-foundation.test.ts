@@ -173,14 +173,23 @@ const T = {
   brand: colors.terracotta.DEFAULT as string,
   dark: colors.terracotta.dark as string,
   deep: colors.terracotta.deep as string,
+  emblem: colors.emblem.DEFAULT as string,
+  emblemLight: colors.emblem.light as string,
+  emblemDeep: colors.emblem.deep as string,
 };
 
 const AA = 4.5;
 const r = (x: string, y: string) => Math.round(ratio(x, y) * 100) / 100;
 check(`the brand terracotta itself is unchanged (${T.brand})`, T.brand.toUpperCase() === "#C2714F");
 check(`it is genuinely too light for button text: ${r(T.white, T.brand)}:1 < 4.5`, ratio(T.white, T.brand) < AA);
-check(`primary resting — white on terracotta-dark ${r(T.white, T.dark)}:1 ≥ 4.5`, ratio(T.white, T.dark) >= AA);
-check(`primary hover — white on terracotta-deep ${r(T.white, T.deep)}:1 ≥ 4.5`, ratio(T.white, T.deep) >= AA);
+// Primary moved to the emblem's maroon on 10 Oct 2026 (it was terracotta-dark,
+// 4.88:1). The token is the logo's own colour, so check it IS that colour.
+check(`the emblem token is the logo's colour (${T.emblem})`, T.emblem.toUpperCase() === "#640E0D");
+check(`primary resting — white on emblem ${r(T.white, T.emblem)}:1 ≥ 4.5`, ratio(T.white, T.emblem) >= AA);
+check(`primary hover — white on emblem-light ${r(T.white, T.emblemLight)}:1 ≥ 4.5`, ratio(T.white, T.emblemLight) >= AA);
+check(`primary pressed — white on emblem-deep ${r(T.white, T.emblemDeep)}:1 ≥ 4.5`, ratio(T.white, T.emblemDeep) >= AA);
+check("hover is visibly different from rest (≥ 1.2× luminance apart)",
+  ratio(T.emblemLight, T.emblem) >= 1.2);
 check(`primary disabled / Sold out — ink-muted on linen ${r(T.muted, T.linen)}:1 ≥ 4.5`, ratio(T.muted, T.linen) >= AA);
 check(`muted labels on white ${r(T.muted, T.white)}:1 ≥ 4.5`, ratio(T.muted, T.white) >= AA);
 check(`muted labels on linen ${r(T.muted, T.linen)}:1 ≥ 4.5`, ratio(T.muted, T.linen) >= AA);
@@ -195,13 +204,17 @@ console.log("\n=== wiring ===");
 
 const button = read("components/ui/Button.tsx");
 const primaryLine = button.match(/primary:\s*\n?\s*"([^"]+)"/)?.[1] ?? "";
-check("primary variant uses terracotta-dark at rest", /\bbg-terracotta-dark\b/.test(primaryLine), primaryLine);
-check("primary variant hovers to terracotta-deep", /hover:bg-terracotta-deep\b/.test(primaryLine));
+check("primary variant uses the emblem at rest", /(^|\s)bg-emblem(\s|$)/.test(primaryLine), primaryLine);
+check("primary variant hovers to emblem-light and presses to emblem-deep",
+  /hover:bg-emblem-light\b/.test(primaryLine) && /active:bg-emblem-deep\b/.test(primaryLine));
 check("primary disabled is a readable linen surface, not a fade", /disabled:bg-linen\b/.test(primaryLine) && /disabled:text-ink-muted\b/.test(primaryLine));
 check("the 50% fade no longer applies to primary", !/disabled:opacity-50/.test(primaryLine) && !/cursor-not-allowed disabled:opacity-50/.test(button));
 
 const sticky = read("components/product/ProductOptions.tsx");
-check("the mobile sticky Add to Cart matches", /bg-terracotta-dark[^"]*hover:bg-terracotta-deep[^"]*disabled:bg-linen disabled:text-ink-muted/.test(sticky));
+check("the mobile sticky Add to Cart matches", /bg-emblem [^"]*hover:bg-emblem-light[^"]*disabled:bg-linen disabled:text-ink-muted/.test(sticky));
+check("no storefront CTA is left on the old terracotta-dark fill",
+  ["components/ui/Button.tsx", "components/product/ProductOptions.tsx", "components/style/StyleSubmissionForm.tsx", "app/global-error.tsx"]
+    .every((f) => !/\bbg-terracotta-dark\b/.test(read(f))));
 
 const noBareTerracottaButton = [
   "components/ui/Button.tsx",
