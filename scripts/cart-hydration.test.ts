@@ -90,7 +90,9 @@ async function freshStore() {
   t("cart page HTML is identical with a full and an empty bag", withBag === withoutBag);
   t("…and names no item", !withBag.includes("Black Line Border"));
   t("…and does not claim the bag is empty", !/bag is empty/i.test(withBag));
-  t("…but renders a placeholder that keeps the page's place", /aria-busy="true"/.test(withBag) && /min-h-\[16rem\]/.test(withBag));
+  // 11rem, the empty state's own box (storefront-performance pins the pair),
+  // so a guest's empty bag replaces it without moving the footer.
+  t("…but renders a placeholder that keeps the page's place", /aria-busy="true"/.test(withBag) && /min-h-\[11rem\]/.test(withBag));
 
   console.log("\n3. every component that prints cart contents during hydration is gated");
   const nav = fs.readFileSync("components/layout/NavbarClient.tsx", "utf8");

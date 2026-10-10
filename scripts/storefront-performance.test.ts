@@ -159,9 +159,9 @@ check("every face still swaps rather than blocks", (layout.match(/display: "swap
 
 console.log("\n=== cart: the empty state keeps the placeholder's box ===");
 const cart = read("app/(storefront)/in/cart/page.tsx");
-check("placeholder is mt-10 min-h-[16rem]", cart.includes('className="mt-10 min-h-[16rem]" aria-busy="true"'));
-check("empty state reserves the same box",
-  cart.includes('className="mt-10 flex min-h-[16rem] flex-col items-center pt-6 text-center text-ink/60"'));
+check("placeholder is mt-16 min-h-[11rem]", cart.includes('className="mt-16 min-h-[11rem]" aria-busy="true"'));
+check("empty state reserves the same box, at its original position",
+  cart.includes('className="mt-16 flex min-h-[11rem] flex-col items-center text-center text-ink/60"'));
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);
