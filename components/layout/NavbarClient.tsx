@@ -334,7 +334,7 @@ export default function NavbarClient({ navLinks }: { navLinks: NavItem[] }) {
           >
             <ShoppingBag className="h-6 w-6" />
             {totalItems > 0 && (
-              <span className="pointer-events-none absolute right-0 top-0 flex h-5 w-5 items-center justify-center rounded-full bg-terracotta text-[10px] font-semibold text-cream">
+              <span className="pointer-events-none absolute right-0 top-0 flex h-5 w-5 items-center justify-center rounded-full bg-emblem text-[10px] font-semibold text-cream">
                 {totalItems}
               </span>
             )}

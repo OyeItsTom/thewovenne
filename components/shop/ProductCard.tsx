@@ -340,12 +340,11 @@ export default function ProductCard({
           productName={product.name}
           size="sm"
           appearance="overlay"
-          // ONE HEART AT EVERY WIDTH. This used to become a cream disc that
-          // faded in on desktop hover — a white circle parked on the
-          // photograph, and invisible until you happened to hover. The overlay
-          // treatment (transparent, white glyph, a shadow to hold it against a
-          // pale cloth) is quieter than the disc AND always present, so the
-          // control is discoverable without competing with the picture.
+          // ONE HEART AT EVERY WIDTH, always present. It once faded in on
+          // desktop hover (undiscoverable), then became a bare white glyph
+          // (lost on pale cloth and in a full grid). The overlay is now a small
+          // frosted disc with an ink heart that turns red when saved — see
+          // WishlistButton.
           //
           // `absolute` now applies unopposed; the 44px target sits 2px inside
           // the frame on both axes, so overflow-hidden never clips it.

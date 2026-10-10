@@ -142,7 +142,7 @@ export default function AskWovenne() {
                   <p
                     className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                       m.role === "user"
-                        ? "bg-terracotta text-cream"
+                        ? "bg-emblem text-cream"
                         : "bg-white text-ink shadow-soft"
                     }`}
                   >

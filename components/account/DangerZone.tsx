@@ -102,7 +102,7 @@ export default function DangerZone() {
             <button
               onClick={remove}
               disabled={busy || typed !== "DELETE"}
-              className="inline-flex items-center gap-2 rounded-full bg-terracotta-dark px-5 py-2.5 text-sm font-medium text-cream transition-colors hover:opacity-90 disabled:opacity-40"
+              className="inline-flex items-center gap-2 rounded-full bg-red-700 px-5 py-2.5 text-sm font-medium text-cream transition-colors hover:bg-red-800 disabled:opacity-40"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
               Delete my account

@@ -65,12 +65,12 @@ check("both observers are disconnected on unmount", (options.match(/observer\.di
 check(
   // PDP reassurance (#187) added the home-indicator inset to the bottom padding
   // (py-3 → pt-3 + pb calc) and kept pr-24 as the no-:has() WhatsApp clearance.
-  "the bar's look is untouched (classes as shipped, plus the safe-area inset)",
+  "the bar's look is untouched (classes as shipped, plus the safe-area inset; emblem fill since 10 Oct)",
   options.includes(
     'className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-3 border-t border-ink/10 bg-cream/95 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pl-4 pr-24 pt-3 backdrop-blur lg:hidden"'
   ) &&
     options.includes(
-      'className="shrink-0 rounded-full bg-terracotta-dark px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-terracotta-deep disabled:cursor-not-allowed disabled:bg-linen disabled:text-ink-muted"'
+      'className="shrink-0 rounded-full bg-emblem px-6 py-3 text-sm font-medium text-cream transition-colors hover:bg-emblem-light active:bg-emblem-deep disabled:cursor-not-allowed disabled:bg-linen disabled:text-ink-muted"'
     )
 );
 check("still mobile-only (lg:hidden), so desktop is unaffected", /backdrop-blur lg:hidden"/.test(options));
