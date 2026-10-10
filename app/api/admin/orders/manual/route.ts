@@ -1,3 +1,4 @@
+import { adminApiGate } from "@/lib/adminApiGate";
 import { NextRequest, NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { createRSCClient } from "@/lib/supabaseRSC";
@@ -77,6 +78,9 @@ interface ManualOrderRequest {
 }
 
 export async function POST(request: NextRequest) {
+  const ended = await adminApiGate(request);
+  if (ended) return ended;
+
   const session = createRSCClient();
   const { data: isAdmin } = await session.rpc("is_admin");
   if (isAdmin !== true) return new NextResponse("Not found", { status: 404 });

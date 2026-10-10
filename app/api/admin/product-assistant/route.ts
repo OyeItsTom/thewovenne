@@ -1,3 +1,4 @@
+import { adminApiGate } from "@/lib/adminApiGate";
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
@@ -26,6 +27,9 @@ export const maxDuration = 60;
  * the only database calls it makes, and both happen after the gate.
  */
 export async function POST(req: NextRequest) {
+  const ended = await adminApiGate(req);
+  if (ended) return ended;
+
   const supabase = createRSCClient();
 
   // getUser() revalidates against Supabase rather than trusting the cookie.

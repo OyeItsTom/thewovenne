@@ -1,3 +1,4 @@
+import { adminApiGate } from "@/lib/adminApiGate";
 import { NextRequest, NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { createRSCClient } from "@/lib/supabaseRSC";
@@ -18,6 +19,9 @@ import { sendEmail } from "@/lib/email";
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
+  const ended = await adminApiGate(request);
+  if (ended) return ended;
+
   const supabase = createRSCClient();
   const { data: isAdmin } = await supabase.rpc("is_admin");
   if (isAdmin !== true) return new NextResponse("Not found", { status: 404 });

@@ -47,22 +47,25 @@ export default async function OrdersPage() {
     );
   }
 
-  // No email filter: the RLS policy from 0023 matches on auth.email() from the
-  // JWT. Filtering here as well would imply the policy were optional.
-  const orders = await getMyOrders(supabase);
+  // Filtered to this account's email explicitly — RLS alone would hand a
+  // verified admin every order in the shop. See getMyOrders.
+  const orders = await getMyOrders(supabase, user.email ?? "");
 
   // Credit notes against those orders, so a cancellation is downloadable here
-  // and not only in the email that announced it. Read with the customer's own
-  // client — 0043 lets them see notes against their own orders and nobody
-  // else's, so no id filtering is done here either.
+  // and not only in the email that announced it. Limited to the orders above:
+  // 0043 lets a customer read only notes against their own orders, but a
+  // verified admin may read them all, and this page is about one account.
   //
   // A failure is not fatal, exactly as the admin invoice list treats it: an
   // order history should not become a stack trace because a migration is
   // pending. The orders simply come back without a credit note link.
-  const { data: creditRows } = await supabase
-    .from("credit_notes")
-    .select("id, credit_note_number, order_id, amount_inr")
-    .order("issued_at", { ascending: false });
+  const { data: creditRows } = orders.length
+    ? await supabase
+        .from("credit_notes")
+        .select("id, credit_note_number, order_id, amount_inr")
+        .in("order_id", orders.map((o) => o.id))
+        .order("issued_at", { ascending: false })
+    : { data: [] };
 
   const creditsByOrder = new Map<
     string,

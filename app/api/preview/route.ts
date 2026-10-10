@@ -1,3 +1,4 @@
+import { adminApiGate } from "@/lib/adminApiGate";
 import { cookies, draftMode } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
@@ -15,6 +16,10 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "@/lib/supabase";
  * already set.
  */
 export async function GET(request: NextRequest) {
+  // Admin-only, so the admin idle rule applies here too (lib/adminApiGate).
+  const ended = await adminApiGate(request);
+  if (ended) return ended;
+
   const store = cookies();
   const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     cookies: {
