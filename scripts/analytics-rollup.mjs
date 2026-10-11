@@ -6,6 +6,9 @@
  *   node scripts/analytics-rollup.mjs rollup 2026-10-12     rebuild one finished IST day from raw events
  *   node scripts/analytics-rollup.mjs nightly             run the nightly job now (rebuild + purge)
  *
+ * Dates are IST calendar dates, printed as text (node-pg would otherwise
+ * turn a date into a local-midnight timestamp and shift it).
+ *
  * status and reconcile are read-only (a READ ONLY transaction, rolled back).
  * rollup and nightly write, in one transaction, as the database owner — the
  * only role that may run them; the scheduled job (0070) runs the same
@@ -46,16 +49,16 @@ try {
   if (action === "status") {
     show((await client.query(`
       select (select collecting from public.analytics_config where id) collecting,
-             public.analytics_day_of(now()) today_ist,
+             public.analytics_day_of(now())::text today_ist,
              (select count(*) from public.analytics_events)::int raw_events,
-             (select min(public.analytics_day_of(occurred_at)) from public.analytics_events) oldest_raw_day,
+             (select min(public.analytics_day_of(occurred_at))::text from public.analytics_events) oldest_raw_day,
              (select count(*) from public.analytics_daily)::int aggregate_rows,
              (select count(*) from public.analytics_daily_runs)::int days_rolled_up,
-             (select max(day) from public.analytics_daily_runs) latest_rolled_up,
+             (select max(day)::text from public.analytics_daily_runs) latest_rolled_up,
              (select count(*) from public.analytics_daily_runs where raw_purged_at is not null)::int days_purged`)).rows[0]);
     console.log("last 14 days:");
     console.table((await client.query(`
-      select d::date::text day, r.rolled_up_at, r.customer_events customer, r.internal_events internal, r.test_events test, r.aggregate_rows rows
+      select d::date::text as day, r.rolled_up_at, r.customer_events customer, r.internal_events internal, r.test_events test, r.aggregate_rows rows
         from generate_series(public.analytics_day_of(now()) - 14, public.analytics_day_of(now()) - 1, interval '1 day') d
         left join public.analytics_daily_runs r on r.day = d::date order by 1`)).rows);
     console.log("last jobs:");
