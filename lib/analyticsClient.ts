@@ -82,6 +82,15 @@ function readCookie(name: string): string | undefined {
   return hit ? hit.slice(name.length + 1) : undefined;
 }
 
+/**
+ * Whether this build of the site sends usage statistics at all. Public: the
+ * cookie page uses it to say plainly when nothing is being collected, so a
+ * visitor's preference is never mistaken for collection actually running.
+ */
+export function siteCollectsStatistics(): boolean {
+  return ENABLED;
+}
+
 /** Whether this visitor has turned statistics off (explicitly, or via GPC). */
 export function statisticsOff(): boolean {
   if (typeof document === "undefined") return false;

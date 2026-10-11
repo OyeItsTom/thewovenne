@@ -399,6 +399,20 @@ t("opt-out: cookie or GPC", optedOut("1", null) && optedOut(undefined, "1") && !
   t("the cookie page names only storage the code really uses", names.every(([n, src]) => page.includes(n) && src.includes(`"${n}"`)));
   t("the cookie page carries the opt-out control and says statistics are not for advertising",
     page.includes("<StatisticsChoice />") && page.includes("an advertising tracker") && page.includes("Global Privacy Control"));
+  const { choiceCopy } = await import("../components/analytics/StatisticsChoice");
+  const all = [false, true].flatMap((off) => [false, true].flatMap((gpc) => [false, true].map((siteCollecting) => ({ off, gpc, siteCollecting, copy: choiceCopy({ off, gpc, siteCollecting }) }))));
+  t("cookie page: the preference sentence never claims collection is happening",
+    all.every(({ copy }) => /^Your preference on this device: usage statistics (allowed|off)\.$/.test(copy.preference)));
+  t("cookie page: while the site is not collecting, every state says so",
+    all.every(({ siteCollecting, copy }) => siteCollecting === !copy.detail.includes("We are not collecting usage statistics at the moment")));
+  t("cookie page: allowed / off / GPC read correctly",
+    choiceCopy({ off: false, gpc: false, siteCollecting: true }).preference.endsWith("allowed.") &&
+    choiceCopy({ off: true, gpc: false, siteCollecting: true }).preference.endsWith("off.") &&
+    choiceCopy({ off: false, gpc: true, siteCollecting: true }).preference.endsWith("off.") &&
+    choiceCopy({ off: false, gpc: true, siteCollecting: true }).button === null &&
+    choiceCopy({ off: true, gpc: false, siteCollecting: false }).button === "Allow statistics" &&
+    choiceCopy({ off: false, gpc: false, siteCollecting: false }).button === "Turn statistics off");
+  t("siteCollectsStatistics() follows the public build flag", client.siteCollectsStatistics() === true);
   t("the cookie page makes no 'exempt from consent' claim", !/exempt|no consent (is )?(needed|required)/i.test(page));
   t("/in/cookies is in the sitemap", read("lib/sitemapRoutes.ts").includes('{ path: "/cookies", priority: 0.3 }'));
   t("robots.txt rules untouched by this work", read("app/robots.ts").includes("/admin") && !/OAI|GPTBot/.test(read("app/robots.ts")));
