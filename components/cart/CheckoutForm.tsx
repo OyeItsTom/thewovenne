@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Script from "next/script";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useCartStore } from "@/lib/store";
+import { trackOncePerPage } from "@/lib/analyticsClient";
 import { useHydrated } from "@/lib/useHydrated";
 import { formatINR } from "@/lib/utils";
 import { type OrderDetails, type DeliveryChannel } from "@/lib/orderDetails";
@@ -65,6 +66,14 @@ export default function CheckoutForm({
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // checkout_start: reached checkout with something to buy. Waits for the
+  // persisted cart to hydrate, so an empty server render is not read as an
+  // empty bag; once per page view, however often the bag changes here.
+  const hasItems = hydrated && items.length > 0;
+  useEffect(() => {
+    if (hasItems) trackOncePerPage("checkout", "checkout_start");
+  }, [hasItems]);
 
   const subtotal = items.reduce((sum, i) => sum + i.price_inr * i.quantity, 0);
   // Same function the server charges with, so what is shown and what is taken

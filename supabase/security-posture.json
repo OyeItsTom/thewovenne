@@ -55,6 +55,54 @@
       },
       "columns": {}
     },
+    "analytics_events": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "analytics_rate": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "analytics_sessions": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
     "carts": {
       "kind": "r",
       "rls": true,
@@ -691,6 +739,15 @@
     }
   },
   "sequences": {
+    "analytics_events_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "SELECT",
+        "UPDATE",
+        "USAGE"
+      ]
+    },
     "credit_note_number_seq": {
       "anon": [],
       "authenticated": [],
@@ -770,11 +827,47 @@
         "service_role"
       ]
     },
+    "analytics_diagnostics(timestamp with time zone,timestamp with time zone)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "analytics_ingest(text,jsonb,jsonb)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "analytics_low_stock(integer)": {
       "securityDefiner": true,
       "searchPath": "public",
       "execute": [
         "authenticated",
+        "service_role"
+      ]
+    },
+    "analytics_on_order_paid()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "analytics_on_wishlist()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "analytics_purge(integer)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
         "service_role"
       ]
     },

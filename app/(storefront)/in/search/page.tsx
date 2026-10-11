@@ -3,6 +3,7 @@ import Link from "next/link";
 import { searchProducts } from "@/lib/search";
 import ProductGrid from "@/components/shop/ProductGrid";
 import SearchField from "@/components/shop/SearchField";
+import AnalyticsBeacon from "@/components/analytics/AnalyticsBeacon";
 
 export const metadata: Metadata = {
   title: "Search | THE WOVENNE",
@@ -25,6 +26,11 @@ export default async function SearchPage({
 
   return (
     <div className="container-wovenne section-padding">
+      {/* A submitted search, once — never the keystrokes before it. The term
+          is cleaned again on the server (lib/analyticsCollect). */}
+      {searched && (
+        <AnalyticsBeacon event="search" term={query} resultCount={products.length} />
+      )}
       <div className="mx-auto max-w-xl text-center">
         <p className="eyebrow">Search</p>
         <h1 className="mt-3 font-heading text-display-sm text-ink">

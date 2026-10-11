@@ -13,6 +13,7 @@ const AskWovenne = dynamic(() => import("@/components/chat/AskWovenne"), {
   ssr: false,
 });
 import PreviewBanner from "@/components/layout/PreviewBanner";
+import AnalyticsTracker from "@/components/analytics/AnalyticsTracker";
 import { previewEnabled } from "@/lib/preview";
 import { getStoreSettings } from "@/lib/storeSettings";
 
@@ -26,6 +27,9 @@ export default async function StorefrontLayout({
 
   return (
     <>
+      {/* First, so its page view is counted before any beacon on the page
+          keys itself to that view (effects run in tree order). */}
+      <AnalyticsTracker />
       {(await previewEnabled()) && <PreviewBanner />}
       <Navbar />
       <main className="flex-1">{children}</main>
