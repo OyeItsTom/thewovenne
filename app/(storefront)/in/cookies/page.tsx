@@ -5,183 +5,155 @@ import { openGraph } from "@/lib/seo";
 import { cPath } from "@/lib/country";
 
 /**
- * Cookie Information & Consent — the page the Privacy Policy refers to.
+ * Cookie Information & Usage Statistics — the page the Privacy Policy links to.
  *
- * In code rather than in site_pages because it describes the code: every row
- * below names a real cookie or storage key, and the usage-statistics section
- * is the implementation in lib/analyticsClient, /api/events and migration 0068.
- * A test reads this file against those names, so the page cannot quietly
- * drift from what the site does. Plain statements of fact only — no legal
- * conclusions.
+ * In code rather than in site_pages because it describes the code: the
+ * storage it lists is lib/store (bag), lib/paymentOutcome (payment hold),
+ * DeliveryEstimator (postcode), the Supabase sign-in cookie and the
+ * statistics opt-out (lib/analyticsCookies); the statistics section is
+ * lib/analyticsClient, /api/events and migration 0068. Wording supplied by
+ * Wovenne (11 Oct 2026); scripts/analytics-foundation.test.ts holds it to the
+ * implementation.
  */
+const TITLE = "Cookie Information & Usage Statistics | THE WOVENNE";
+
 export const metadata: Metadata = {
-  title: "Cookies & usage statistics | THE WOVENNE",
+  title: TITLE,
   description:
-    "The cookies and similar technologies THE WOVENNE website uses, the usage statistics we collect, and how to turn statistics off.",
+    "The browser storage THE WOVENNE uses, the limited usage statistics we collect, and how to turn statistics off.",
   alternates: { canonical: cPath("/cookies") },
-  openGraph: openGraph({ title: "Cookies & usage statistics | THE WOVENNE", path: cPath("/cookies") }),
+  openGraph: openGraph({ title: TITLE, path: cPath("/cookies") }),
 };
 
 const H2 = "mt-12 font-heading text-2xl text-ink first:mt-0 sm:text-3xl";
 const P = "mt-5 text-base leading-relaxed text-ink/75";
 const LIST = "mt-4 list-disc space-y-2 pl-5 text-base leading-relaxed text-ink/75";
 
-const STORAGE: { name: string; what: string; kept: string }[] = [
-  {
-    name: "sb-…-auth-token (cookie)",
-    what: "Keeps you signed in to your account. Set only when you sign in.",
-    kept: "Until you sign out or the sign-in expires",
-  },
-  {
-    name: "wovenne-cart (browser storage)",
-    what: "Remembers what is in your bag between visits.",
-    kept: "Until you empty your bag or sign out",
-  },
-  {
-    name: "wovenne-payment-hold (browser storage)",
-    what: "Stops the same payment being started twice while one is in progress.",
-    kept: "Until that payment is confirmed or fails",
-  },
-  {
-    name: "Delivery postcode (browser tab storage)",
-    what: "Remembers the postcode you typed into the delivery estimate on a product page.",
-    kept: "Until you close the tab",
-  },
-  {
-    name: "wv_stats_off (cookie)",
-    what: "Remembers that you turned usage statistics off. Holds only that choice.",
-    kept: "1 year",
-  },
-  {
-    name: "wv_admin_active, wv_internal (cookies); wovenne-export-columns (browser storage)",
-    what: "Set only for THE WOVENNE staff who sign in to the store's administration: the admin sign-in's activity timer; a marker that keeps staff browsing out of our statistics; and the columns chosen for data exports.",
-    kept: "17 minutes of inactivity; 1 year; until cleared",
-  },
-];
-
 export default function CookiesPage() {
   return (
     <div className="container-wovenne section-padding">
       <div className="mx-auto max-w-prose text-center">
         <h1 className="font-heading text-display-sm text-ink md:text-display-md">
-          Cookies &amp; usage statistics
+          Cookie Information &amp; Usage Statistics
         </h1>
-        <p className="mt-6 text-base leading-relaxed text-ink/70">
-          Cookie Information &amp; Consent. What this website stores on your device, the usage
-          statistics we collect, and how to turn statistics off.
-        </p>
         <p className="mt-3 text-sm text-ink/50">Last updated: 11/10/2026</p>
+        <p className="mt-6 text-base leading-relaxed text-ink/70">
+          We use a small amount of browser storage to make THE WOVENNE work properly and to
+          understand, in a privacy-friendly way, how people use our website.
+        </p>
       </div>
 
       <div className="mx-auto mt-14 max-w-prose">
-        <h2 className={H2}>1. What this website stores on your device</h2>
+        <h2 className={H2}>1. Cookies and browser storage</h2>
+        <p className={P}>We may store information on your device to:</p>
+        <ul className={LIST}>
+          <li>keep you signed in to your account;</li>
+          <li>remember items in your shopping bag;</li>
+          <li>support checkout and prevent duplicate payment attempts;</li>
+          <li>remember a delivery postcode during your visit;</li>
+          <li>remember if you choose to turn usage statistics off.</li>
+        </ul>
         <p className={P}>
-          We use a small number of cookies and browser-storage entries, each for one job. None is
-          used for advertising.
+          Some third-party services used on our website may also use their own cookies or storage.
+          For example:
         </p>
-        <div className="mt-6 overflow-x-auto">
-          <table className="w-full text-left text-sm text-ink/75">
-            <thead>
-              <tr className="border-b border-ink/15 text-xs uppercase tracking-widest text-ink/50">
-                <th className="py-2 pr-4 font-normal">Name</th>
-                <th className="py-2 pr-4 font-normal">What it does</th>
-                <th className="py-2 font-normal">How long</th>
-              </tr>
-            </thead>
-            <tbody>
-              {STORAGE.map((row) => (
-                <tr key={row.name} className="border-b border-ink/10 align-top">
-                  <td className="py-3 pr-4 font-medium text-ink">{row.name}</td>
-                  <td className="py-3 pr-4">{row.what}</td>
-                  <td className="py-3">{row.kept}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ul className={LIST}>
+          <li>Razorpay when you open the payment window;</li>
+          <li>YouTube when you choose to play an embedded video;</li>
+          <li>Sentry when a technical error needs to be reported so we can fix it.</li>
+        </ul>
         <p className={P}>
-          On the checkout page, Razorpay&rsquo;s payment window loads from Razorpay and may use its
-          own cookies; see Razorpay&rsquo;s privacy notice. Product videos are embedded from youtube-nocookie.com
-          and nothing from YouTube loads until you press play. If a page fails, a technical error report is sent to
-          our error-monitoring provider, Sentry, so we can fix it.
+          We do not currently use Google Analytics, Google Ads, Meta Pixel or other advertising
+          trackers.
         </p>
 
         <h2 className={H2}>2. Usage statistics</h2>
         <p className={P}>
-          To understand how the shop is used and improve it, our own pages send short reports to
-          our own server — without your name, your account or any identifier — when you:
+          We collect limited statistics to understand how the shop is used and improve the website.
         </p>
+        <p className={P}>This may include:</p>
         <ul className={LIST}>
-          <li>view a page or a product;</li>
-          <li>submit a search (the words you searched, not what you type before searching);</li>
-          <li>add or remove a wishlist or bag item, or reach checkout;</li>
-          <li>tap a WhatsApp link.</li>
-        </ul>
-        <p className={P}>Each report can include:</p>
-        <ul className={LIST}>
-          <li>the page address, without anything after a &ldquo;?&rdquo;;</li>
-          <li>
-            the website you arrived from (its name only, such as instagram.com) and any campaign
-            tags in the link you followed;
-          </li>
-          <li>a broad device type: mobile, tablet or desktop;</li>
-          <li>
-            an approximate country and region (for example, India / Kerala), worked out by our
-            hosting provider from your connection. This can be wrong, for example on a VPN or
-            some mobile networks.
-          </li>
-        </ul>
-        <p className={P}>Our usage statistics do not use:</p>
-        <ul className={LIST}>
-          <li>an advertising tracker, or any tag from an advertising company;</li>
-          <li>a cookie or other identifier that recognises you or your device between visits;</li>
-          <li>browser fingerprinting;</li>
-          <li>your IP address beyond the moment of the request (it is not stored);</li>
-          <li>your exact or GPS location, or your city;</li>
-          <li>your name, email address, phone number or account;</li>
-          <li>any guess at your gender, age or other personal characteristics.</li>
+          <li>pages and products viewed;</li>
+          <li>submitted searches;</li>
+          <li>wishlist and shopping bag activity;</li>
+          <li>reaching checkout;</li>
+          <li>WhatsApp link clicks;</li>
+          <li>where you came from, such as Google, Instagram or another website;</li>
+          <li>campaign information included in a link;</li>
+          <li>broad device type, such as mobile, tablet or desktop;</li>
+          <li>approximate country and region.</li>
         </ul>
         <p className={P}>
-          Searches that look like an email address, a phone number or an order or reference
-          number are recorded only as &ldquo;redacted&rdquo;.
+          Approximate location is provided by our hosting service and may be inaccurate, for example
+          when using a VPN, mobile network or private relay.
         </p>
+        <p className={P}>We do not use these statistics to identify individual visitors.</p>
+        <p className={P}>For these statistics, we do not collect or store:</p>
+        <ul className={LIST}>
+          <li>your name, email address or phone number;</li>
+          <li>your account details;</li>
+          <li>your exact location;</li>
+          <li>your city;</li>
+          <li>your raw IP address;</li>
+          <li>a persistent visitor identifier;</li>
+          <li>browser fingerprints;</li>
+          <li>guesses about your gender, age or other personal characteristics.</li>
+        </ul>
         <p className={P}>
-          The reports are stored in our own database. Our hosting provider (Vercel) and database
-          provider (Supabase) process them on our behalf; they are not shared with anyone else. We
-          look at them as totals — for example, how many times a saree was viewed this week — not
-          as a record of what any one person did. Individual reports are kept for up to 180 days; after
-          that we keep only daily totals.
-        </p>
-        <p className={P}>
-          When an online order is paid, we also count it from our order records. That count comes
-          from the order itself, which we keep as a business record whether or not statistics are
-          on.
+          Submitted searches that appear to contain personal information, such as an email address,
+          phone number or order/reference number, are recorded only as &ldquo;redacted&rdquo;.
         </p>
 
-        <h2 className={H2}>3. Turning statistics off</h2>
+        <h2 className={H2}>3. How we use the information</h2>
+        <p className={P}>We use these statistics only to understand and improve THE WOVENNE.</p>
+        <p className={P}>For example, we may look at:</p>
+        <ul className={LIST}>
+          <li>which products are viewed most;</li>
+          <li>which searches are popular;</li>
+          <li>which regions generate more interest;</li>
+          <li>which traffic sources bring people to the website;</li>
+          <li>how often people move from product viewing to bag or checkout.</li>
+        </ul>
         <p className={P}>
-          You can turn usage statistics off for this browser here, free of charge, at any time.
-          When they are off, our pages send no reports from this browser. If your browser sends a
-          Global Privacy Control signal, we treat that as off too.
+          The information is processed using our hosting and database providers, including Vercel
+          and Supabase.
+        </p>
+        <p className={P}>
+          Raw usage statistics may be kept for up to 180 days. Longer-term reporting may use
+          aggregated daily totals.
+        </p>
+        <p className={P}>
+          Paid orders are also counted from our order records. Order information is kept separately
+          as part of our normal business records.
+        </p>
+
+        <h2 className={H2}>4. Turn usage statistics off</h2>
+        <p className={P}>You can turn usage statistics off for this browser at any time.</p>
+        <p className={P}>
+          When turned off, our website will stop sending optional usage statistics from this
+          browser. We also respect Global Privacy Control where supported.
         </p>
         <div className="mt-6">
           <StatisticsChoice />
         </div>
+        <p className={P}>You can change your choice at any time.</p>
 
-        <h2 className={H2}>4. Changes</h2>
+        <h2 className={H2}>5. Changes</h2>
         <p className={P}>
-          We do not currently use advertising or third-party analytics tags, such as Google
-          Analytics, Google Ads or the Meta Pixel. If that changes, we will update this page before
-          they are used.
+          If we later introduce services such as Google Analytics, Google Ads, Meta Pixel or other
+          advertising or analytics technologies, we will update this page and the relevant privacy
+          controls before they are used.
         </p>
 
-        <h2 className={H2}>5. Contact</h2>
+        <h2 className={H2}>6. Contact</h2>
         <p className={P}>
-          Questions about cookies or statistics:{" "}
+          If you have questions about cookies or usage statistics, contact:{" "}
           <a href="mailto:hello@thewovenne.com" className="text-terracotta underline">
             hello@thewovenne.com
           </a>
-          . See also our{" "}
+        </p>
+        <p className={P}>
+          You can also read our{" "}
           <Link href={cPath("/privacy-policy")} className="text-terracotta underline">
             Privacy Policy
           </Link>

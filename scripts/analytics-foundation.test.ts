@@ -388,17 +388,19 @@ t("opt-out: cookie or GPC", optedOut("1", null) && optedOut(undefined, "1") && !
   const everything = ["lib/analyticsClient.ts", "lib/analyticsCollect.ts", "lib/analyticsIngest.ts", "lib/analyticsCookies.ts", "app/api/events/route.ts", "middleware.ts"].map(read).join("\n");
   t("no visitor/session identifier code remains", !/wv_vid|wv_consent|visitor_id|session_id|getUserId/.test(everything));
   const page = read("app/(storefront)/in/cookies/page.tsx");
-  const names = [
-    ["wovenne-cart", read("lib/store.ts")],
-    ["wovenne-payment-hold", read("lib/paymentOutcome.ts")],
-    ["wv_stats_off", read("lib/analyticsCookies.ts")],
-    ["wv_internal", read("lib/analyticsCookies.ts")],
-    ["wv_admin_active", read("lib/adminSession.ts")],
-    ["wovenne-export-columns", read("components/admin/ExportPanel.tsx")],
+  // Each purpose the page lists is real storage in the code — and the page
+  // lists no purpose the code does not have.
+  const purposes: Array<[string, string, string]> = [
+    ["keep you signed in to your account", "lib/supabase.ts", "createBrowserClient"],
+    ["remember items in your shopping bag", "lib/store.ts", '"wovenne-cart"'],
+    ["prevent duplicate payment attempts", "lib/paymentOutcome.ts", '"wovenne-payment-hold"'],
+    ["remember a delivery postcode during your visit", "components/product/DeliveryEstimator.tsx", "sessionStorage.setItem"],
+    ["remember if you choose to turn usage statistics off", "lib/analyticsCookies.ts", '"wv_stats_off"'],
   ];
-  t("the cookie page names only storage the code really uses", names.every(([n, src]) => page.includes(n) && src.includes(`"${n}"`)));
-  t("the cookie page carries the opt-out control and says statistics are not for advertising",
-    page.includes("<StatisticsChoice />") && page.includes("an advertising tracker") && page.includes("Global Privacy Control"));
+  t("the cookie page's storage purposes all exist in the code", purposes.every(([text, file, marker]) => page.includes(text) && read(file).includes(marker)));
+  t("the cookie page lists exactly those five storage purposes", (page.slice(page.indexOf("We may store information on your device to:"), page.indexOf("Some third-party")).match(/<li>/g) ?? []).length === 5);
+  t("the cookie page carries the opt-out control, honours GPC and names no advertising tracker in use",
+    page.includes("<StatisticsChoice />") && page.includes("advertising") && page.includes("trackers") && page.includes("Global Privacy Control"));
   const { choiceCopy } = await import("../components/analytics/StatisticsChoice");
   const all = [false, true].flatMap((off) => [false, true].flatMap((gpc) => [false, true].map((siteCollecting) => ({ off, gpc, siteCollecting, copy: choiceCopy({ off, gpc, siteCollecting }) }))));
   t("cookie page: the preference sentence never claims collection is happening",
