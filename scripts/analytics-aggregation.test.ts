@@ -41,6 +41,8 @@ const read = (p: string) => fs.readFileSync(p, "utf8");
   t("the ops script reads in a READ ONLY transaction unless rolling up", ops.includes('writes ? "begin" : "begin read only"') && ops.includes('const writes = action === "rollup" || action === "nightly"'));
   t("the ops script calls only the 0069 functions, never DML on analytics tables",
     !/\b(insert into|update|delete from)\s+public\.analytics/i.test(ops) && ops.includes("analytics_rollup_day(") && ops.includes("analytics_nightly()") && ops.includes("analytics_reconcile("));
+  t("the ops script prints IST dates as text (no local-time shift) and quotes the day alias",
+    ops.includes("analytics_day_of(now())::text today_ist") && ops.includes("max(day)::text") && ops.includes("::text as day,"));
   t("no Vercel cron, no new public endpoint for the job", !fs.existsSync("vercel.json") && !fs.existsSync("app/api/cron"));
 
   const engine = await startEngine();
