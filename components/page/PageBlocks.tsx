@@ -1,5 +1,7 @@
 import Image from "next/image";
+import Link from "next/link";
 import type { PageBlock } from "@/lib/pages";
+import { parseInlineLinks } from "@/lib/inlineLinks";
 
 /**
  * Renders a page's blocks.
@@ -23,7 +25,16 @@ export default function PageBlocks({ blocks }: { blocks: PageBlock[] }) {
           case "paragraph":
             return (
               <p key={i} className="mt-5 text-base leading-relaxed text-ink/75">
-                {block.text}
+                {/* Plain text, plus [text](/internal-path) links — see lib/inlineLinks. */}
+                {parseInlineLinks(block.text).map((seg, j) =>
+                  seg.kind === "link" ? (
+                    <Link key={j} href={seg.href} className="text-terracotta underline">
+                      {seg.text}
+                    </Link>
+                  ) : (
+                    seg.text
+                  )
+                )}
               </p>
             );
           case "image":
