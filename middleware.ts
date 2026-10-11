@@ -7,6 +7,7 @@ import {
   assessAdminActivity,
   mintActivityCookie,
 } from "./lib/adminSession";
+import { INTERNAL_COOKIE } from "./lib/analyticsCookies";
 
 const SUPABASE_URL =
   process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
@@ -237,6 +238,19 @@ export async function middleware(request: NextRequest) {
       if (facts.sessionId && !isPrefetch(request)) {
         const value = await mintActivityCookie(facts.sessionId, Date.now());
         if (value) response.cookies.set(ADMIN_ACTIVITY_COOKIE, value, activityCookieOptions);
+      }
+
+      // This browser belongs to staff: its storefront visits are internal
+      // traffic in analytics. Outlives sign-out on purpose — the device is
+      // still a staff device. Grants nothing; it only hides traffic.
+      if (request.cookies.get(INTERNAL_COOKIE)?.value !== "1") {
+        response.cookies.set(INTERNAL_COOKIE, "1", {
+          httpOnly: true,
+          secure: true,
+          sameSite: "lax",
+          path: "/",
+          maxAge: 60 * 60 * 24 * 365,
+        });
       }
     }
 

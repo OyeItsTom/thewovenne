@@ -22,6 +22,7 @@ import { effectiveProfile, productFactRows } from "@/lib/productInfo";
 import type { ProductSize } from "@/lib/sizes";
 import { stockNote, stockState } from "@/lib/stock";
 import JsonLd from "@/components/seo/JsonLd";
+import AnalyticsBeacon from "@/components/analytics/AnalyticsBeacon";
 import { productImageUrl } from "@/lib/seo";
 import { careFor } from "@/lib/care";
 import { getPageBySlug } from "@/lib/pages";
@@ -132,6 +133,8 @@ export default async function ProductDetail({
     // floating WhatsApp button down on this page, where every WhatsApp action
     // names the piece instead — see WhatsAppButton and ProductOptions.
     <div data-pdp className="container-wovenne section-padding pb-28 lg:pb-24">
+      {/* Here rather than in the routes for the same reason as JsonLd below. */}
+      <AnalyticsBeacon event="product_view" productId={product.id} />
       {/* SERVER-RENDERED, and next to the markup it describes rather than in the
           route, because BOTH product routes render this file — the hierarchical
           one and the legacy flat one. Putting it here is what stops the two

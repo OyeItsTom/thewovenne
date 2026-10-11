@@ -85,6 +85,9 @@ const STATIC_ROUTES: { path: string; priority: number }[] = [
   { path: "/shop", priority: 0.7 },
   { path: "/journal", priority: 0.7 },
   { path: "/customer-style", priority: 0.6 },
+  // Cookie Information & Consent — a policy page that lives in code because it
+  // describes code (app/(storefront)/in/cookies). Other policies are site_pages.
+  { path: "/cookies", priority: 0.3 },
 ];
 
 /**

@@ -3,6 +3,7 @@ import { createServiceClient } from "./supabase";
 import { settleLoyalty } from "./settleLoyalty";
 import { sendOrderConfirmation } from "./sendOrderConfirmation";
 import { toPaise } from "./utils";
+import { recordPurchase } from "./analyticsPurchase";
 
 /**
  * Everything that happens once a Razorpay payment is known to be real.
@@ -290,6 +291,9 @@ export async function settleOrder(
       }
     }
 
+    // Analytics: the paid order is real even without its pending row.
+    if (orderId) await recordPurchase(supabase, orderId);
+
     return {
       outcome: "settled",
       paymentStatus: status,
@@ -478,6 +482,10 @@ export async function settleOrder(
       .then(() => sendConfirmation(razorpayOrderId))
       .catch((e) => console.error(`Order confirmation email failed for ${razorpayOrderId}:`, e));
   }
+
+  // Analytics: one purchase event per paid online order (the database
+  // de-duplicates replays and the webhook). Never affects this outcome.
+  if (markedPaid) await recordPurchase(supabase, orderId);
 
   return {
     outcome: "settled",

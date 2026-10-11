@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { cartAddAnnouncement } from "./cartAnnouncement";
+import { track } from "./analyticsClient";
 
 export interface CartItem {
   id: string;
@@ -115,6 +116,9 @@ export const useCartStore = create<CartState>()(
         // Measured from the result rather than re-deriving the cap, so the
         // sentence cannot disagree with what the cart now holds.
         const after = unitsOf(get().items);
+        // Counted from what actually went in: a capped or refused add is not
+        // an add.
+        if (after > before) track("cart_add", { product_id: item.id, quantity: after - before });
         set({
           lastAdded: cartAddAnnouncement({
             name: item.name,
@@ -124,13 +128,20 @@ export const useCartStore = create<CartState>()(
           }),
         });
       },
-      removeItem: (id, size) =>
+      removeItem: (id, size) => {
+        const line = get().items.find((i) => i.id === id && i.size === size);
+        if (line) track("cart_remove", { product_id: id, quantity: line.quantity });
         set((state) => ({
           items: state.items.filter(
             (i) => !(i.id === id && i.size === size)
           ),
-        })),
-      updateQuantity: (id, size, quantity) =>
+        }));
+      },
+      updateQuantity: (id, size, quantity) => {
+        // Stepping a line down to nothing removes it — the same act as the
+        // remove button. Other stepper moves are not tracked.
+        const line = get().items.find((i) => i.id === id && i.size === size);
+        if (line && quantity <= 0) track("cart_remove", { product_id: id, quantity: line.quantity });
         set((state) => ({
           items: state.items
             .map((i) =>
@@ -147,7 +158,8 @@ export const useCartStore = create<CartState>()(
                 : i
             )
             .filter((i) => i.quantity > 0),
-        })),
+        }));
+      },
       clearCart: () => set({ items: [] }),
       // Sign-out, and the handover point on a shared device. Drops the items
       // AND the owner, so the next person starts as a guest with an empty cart
