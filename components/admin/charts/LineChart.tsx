@@ -17,7 +17,6 @@ export interface LinePoint {
   value: number;
 }
 
-const W = 600;
 const H = 200;
 const PAD = { top: 12, right: 12, bottom: 24, left: 48 };
 
@@ -26,11 +25,17 @@ export default function LineChart({
   format = (n) => String(n),
   colour = "#C2714F",
   emptyMessage = "No data yet.",
+  width: W = 600,
 }: {
   points: LinePoint[];
   format?: (n: number) => string;
   colour?: string;
   emptyMessage?: string;
+  /**
+   * Drawing width. The SVG scales to its box, so text shrinks with it: a
+   * narrower drawing (e.g. 320 on a phone) keeps the axis labels readable.
+   */
+  width?: number;
 }) {
   if (points.length === 0) {
     return <p className="py-12 text-center text-sm text-ink/50">{emptyMessage}</p>;
@@ -56,7 +61,7 @@ export default function LineChart({
   const ticks = [0, max / 2, max];
 
   // Only a few labels, or they collide on a narrow screen.
-  const labelEvery = Math.max(1, Math.ceil(points.length / 6));
+  const labelEvery = Math.max(1, Math.ceil(points.length / (W < 400 ? 4 : 6)));
 
   const allZero = values.every((v) => v === 0);
 
@@ -117,7 +122,7 @@ export default function LineChart({
               key={i}
               x={x(i)}
               y={H - 6}
-              textAnchor="middle"
+              textAnchor={i === points.length - 1 && points.length > 1 ? "end" : "middle"}
               fontSize={10}
               fill="#1C1F3B"
               fillOpacity={0.45}
