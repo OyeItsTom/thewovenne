@@ -645,11 +645,17 @@ async function database(c: Client) {
 
   console.log("\ndatabase: retention and schema");
   await c.query("update analytics_events set occurred_at = now() - interval '200 days' where path = '/in/r'");
+  // Since 0069 the purge belongs to the database owner (the nightly job) and
+  // deletes only days covered by a matching rollup — proven in
+  // scripts/analytics-aggregation.test.ts.
   await asService(c);
+  t("service_role can no longer purge (0069: owner / nightly job only)", (await failure(() => c.query("select analytics_purge(180)"))).includes("permission denied"));
+  await asRoot(c);
   t("purge refuses to keep less than 30 days", (await failure(() => c.query("select analytics_purge(7)"))).includes("at least 30"));
   const purged = (await c.query("select analytics_purge(180) p")).rows[0].p;
-  await asRoot(c);
-  t("purge removes raw events past 180 days", purged.events === 121 && (await rows("analytics_events", "path = '/in/r'")) === 0);
+  t("purge never deletes raw events past 180 days that were never rolled up",
+    purged.events === 0 && purged.skipped.length > 0 && purged.skipped.every((s: { reason: string }) => s.reason === "not rolled up") &&
+    (await rows("analytics_events", "path = '/in/r'")) === 121);
   const cols = (await c.query("select column_name from information_schema.columns where table_schema = 'public' and table_name = 'analytics_events' order by 1")).rows.map((x) => x.column_name as string);
   t("19–23. no identity, token, password, IP, UA, city, coordinates, email or gender column",
     !cols.some((x) => /visitor|session|user_id|token|password|^ip|user_agent|city|latitude|longitude|email|gender|form/.test(x)), cols.join(","));

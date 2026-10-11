@@ -1,4 +1,4 @@
-# Wovenne analytics — design (Analytics 1A)
+# Wovenne analytics — design (Analytics 1A + 1B)
 
 Wovenne records how the shop is used in **its own database**, without visitor
 identifiers. This page is the reference for what is collected, how it is
@@ -9,6 +9,9 @@ Code: `lib/analyticsClient.ts` (browser), `app/api/events/route.ts` +
 `lib/analyticsPurchase.ts` (purchase), `supabase/migrations/0068_analytics_foundation.sql`,
 `app/(storefront)/in/cookies/page.tsx` (public information + opt-out),
 `scripts/analytics-switch.mjs` (the switch), `scripts/analytics-foundation.test.ts`.
+1B (daily aggregates, §9): `supabase/migrations/0069_analytics_daily.sql`,
+`supabase/migrations/0070_analytics_schedule.sql`, `scripts/analytics-rollup.mjs`,
+`scripts/analytics-aggregation.test.ts`.
 
 ## 1. On / off — one authority
 
@@ -106,10 +109,10 @@ is a business record kept anyway, and the event carries no customer data.
 
 ## 7. Retention and time
 
-Raw events: 180 days (`analytics_purge(180)`; Wovenne's product decision, not
-a legal figure). **Not scheduled yet — 1B must schedule it before the first
-events are 180 days old.** Daily aggregates (1B): long term. Rate-limit rows:
-minutes. Timestamps are UTC; business days are **Asia/Kolkata**.
+Raw events: 180 days, then purged by whole IST day — and only for days whose
+daily aggregates exist and still match the raw rows (§9.8). Daily aggregates:
+long term. Rate-limit rows: minutes. Job log: 400 days. Timestamps are UTC;
+business days are **Asia/Kolkata**.
 
 ## 8. Future integration points (not built)
 
@@ -142,3 +145,144 @@ assistants for that package to report on.
 self-declaration in the profile with a prefer-not-to-say option, aggregate
 reporting only; Google Sign-In with minimum scopes only (no People API for
 gender); any Google aggregate demographics stay in Google's reports.
+
+## 9. Daily aggregates (Analytics 1B)
+
+Raw events → verified daily aggregates → long-term reporting. Analytics 1C
+reads **only** `analytics_report()` / `analytics_reconcile()`; it never scans
+raw events.
+
+### 9.1 The business day
+
+A day `d` is `[d 00:00 IST, d+1 00:00 IST)` = `[d-1 18:30 UTC, d 18:30 UTC)`
+(`analytics_day_start(d)`; India has no daylight saving, so every day is 24 h).
+`occurred_at` is the time the server **received** the event (browser batches
+flush within ~5 s, so an action at 23:59:58 may land on the next day) or, for
+a purchase, when settlement recorded it. Nothing groups by a UTC date. A day is
+rolled up only after it has ended; today is never in an aggregate.
+
+### 9.2 Customer only
+
+Aggregates count `traffic = 'customer'` only. Internal (staff browsers,
+staff-email orders, the 1A verification events) and test (Razorpay test-key
+payments, deliberate non-production tests) never enter a business total. Their
+per-day counts are kept in `analytics_daily_runs`, and `analytics_reconcile`
+shows customer / internal / test side by side.
+
+### 9.3 Grains and metric definitions
+
+`analytics_daily`: one row per (IST day, grain, event type, dimension values).
+`events` = number of customer events; `units` = quantity (cart_add/remove:
+units moved; purchase: units sold), else NULL; `entries` = page views that
+were the first page of a page load (landings), else 0.
+
+| Grain | Dimensions | Event types | Notes |
+|---|---|---|---|
+| total | — | all ten | the daily series |
+| product | product_id, category_id (that day), product_name (at rollup) | product_view, wishlist_add/remove, cart_add/remove, purchase | purchase: `events` = orders containing the product, `units` = units sold, from the order's line snapshot |
+| location | country_code, region | browser events | approximate (IP lookup); NULL = unknown |
+| device | device | browser events | NULL = unknown |
+| source | source, medium, campaign (utm_campaign), referrer_host | browser events | exactly as observed; NULL source = unknown |
+| search | search_term, zero_results | search | stored term (normalised, redaction applied); zero_results NULL = count not captured |
+
+Grains are never crossed (no product × region × source cube). Each grain sums
+back to its event type's total — the reconciliation check. `utm_content`,
+`utm_term` and `path` are not aggregated; they remain in raw events for 180
+days. Not aggregated by design: checkout_start by product (a checkout is the
+whole bag), purchases by IP location/device/source (purchases are recorded
+server-side with no browser context and no identifier to link one).
+
+| Metric | Exact definition |
+|---|---|
+| Page views | total.events, page_view |
+| Landings | total.entries, page_view |
+| Product views | total.events, product_view (per product: product grain) |
+| Submitted searches | total.events, search (per term: search grain) |
+| Zero-result searches | search grain rows with zero_results = true |
+| Wishlist adds / removes | total.events, wishlist_add / wishlist_remove |
+| Cart adds / removes | total.events (actions) and total.units (units), cart_add / cart_remove |
+| Checkout starts | total.events, checkout_start |
+| WhatsApp clicks | total.events, whatsapp_click |
+| Purchases | total.events, purchase = customer online orders that became paid that day (one per order) |
+| Units sold | total.units, purchase (per product: product grain units) |
+
+### 9.4 Not available (and not estimated)
+
+Unique visitors, sessions, returning visitors, per-person conversion, journeys:
+there is no identifier. 1C shows them as "Not enabled". Nothing is derived
+from event ids or the rate-limiter.
+
+### 9.5 Funnel — an EVENT funnel
+
+Product views → Cart adds → Checkout starts → Purchases, each a count of
+events in the same IST date range. The same person viewing a product five
+times is five product views. 1C may show ratios **only** as "per 100 events"
+with these exact denominators and must label them as event ratios, not
+conversion rates:
+
+* cart adds per 100 product views = 100 × cart_add.events / product_view.events
+  (site-wide, or per product from the product grain);
+* checkout starts per 100 cart adds = 100 × checkout_start.events / cart_add.events (site-wide only);
+* purchases per 100 checkout starts = 100 × purchase.events / checkout_start.events (site-wide only).
+
+A step can exceed the one before it (several checkouts for one cart add,
+purchases on a day after the views); 1C must not clamp or "fix" that.
+
+### 9.6 Purchases and revenue
+
+Purchases are the authoritative 0068 events (one per paid online order),
+customer only. **No money is aggregated.** Revenue, goods/shipping split,
+refunds and cancellations belong to the order system (0025's functions read
+`orders`). While Razorpay is on **test keys every purchase is `test`**, so
+customer purchases are 0 and no revenue is reportable from analytics. Real
+revenue reporting starts at payment launch, from orders, not from these
+aggregates. Purchases by region: the order's **delivery region** (shipping
+state) is the authoritative business fact, and differs in meaning from the
+IP-based **visitor region**; if 1C shows it, it reads it from orders and
+labels it "delivery region". The two are never mixed in one figure.
+
+### 9.7 Product history
+
+Aggregates keep `product_id` without a foreign key, the category the product
+had that day, and the name at rollup. Reports show the current name while the
+product exists (`product_exists: true`) and the stored name after it is
+deleted. Renames, unpublishing and category moves change nothing already
+aggregated. (Products are archived, not deleted, in the admin; a hand-deleted
+product loses its id from raw events — 0068's `on delete set null` — but not
+from aggregates already rolled up.)
+
+### 9.8 Rebuilds, late events, retention, the job
+
+* `analytics_rollup_day(d)`: delete day d's aggregates and recompute them from
+  raw, in one transaction — idempotent, deterministic, never incremental.
+  Refuses an unfinished day and any day whose raw rows were purged.
+* `analytics_nightly()` (pg_cron, 02:00 IST = 20:30 UTC, migration 0070):
+  rebuild the last 3 finished days always, plus any day in the last 35 with no
+  rollup or whose raw counts changed; then purge. A rollup failure is logged
+  and **skips the purge**.
+* `analytics_purge(180)`: oldest first, whole IST days strictly older than 180
+  days, only when the day has a rollup whose recorded customer/internal/test
+  counts equal the raw rows now and whose total grain equals the customer
+  count. Otherwise skipped and reported. At most 7 days purged per run. The
+  run row then records `raw_purged_at` and the aggregate is final.
+* Owner only: rollup, nightly and purge are executable by no API role
+  (not even service_role). Manual runs: `node scripts/analytics-rollup.mjs`.
+* Observability: `analytics_job_log` (each run's result or error),
+  `cron.job_run_details`, and `analytics_reconcile().last_jobs`.
+
+### 9.9 Reading (the 1C contract)
+
+* `analytics_report(from, to, grain)` — IST dates inclusive, ≤ 5 years.
+  `total` returns one row per day and event type; other grains are summed over
+  the range. Returns `covered_days` and `missing_days`: a day with no rollup is
+  **unknown, not zero**. Customer only.
+* `analytics_reconcile(day)` — the UTC window, raw counts per event type for
+  customer / internal / test (while retained), the aggregate total, every
+  grain's sum, `matches` per type and `all_match`, plus the last 5 job runs.
+  Answers "why does it say 57 product views?".
+* A covered day of zeros means no customer events were received. It can also
+  mean collection was switched off: the switch keeps only its latest change
+  (`analytics_config.changed_at`, shown by `analytics_diagnostics`), not a
+  history, so 1C should show the switch state beside any zero.
+* Both behind `can_read_analytics()` → hardened `is_admin()` (staff + aal2 +
+  live session). Counts only; no event or order ids.

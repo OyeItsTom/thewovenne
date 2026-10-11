@@ -66,6 +66,28 @@
       },
       "columns": {}
     },
+    "analytics_daily": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
+      },
+      "columns": {}
+    },
+    "analytics_daily_runs": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
+      },
+      "columns": {}
+    },
     "analytics_events": {
       "kind": "r",
       "rls": true,
@@ -79,6 +101,17 @@
           "SELECT",
           "UPDATE"
         ]
+      },
+      "columns": {}
+    },
+    "analytics_job_log": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
       },
       "columns": {}
     },
@@ -743,6 +776,11 @@
         "USAGE"
       ]
     },
+    "analytics_job_log_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
     "credit_note_number_seq": {
       "anon": [],
       "authenticated": [],
@@ -829,6 +867,16 @@
         "service_role"
       ]
     },
+    "analytics_day_of(timestamp with time zone)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "analytics_day_start(date)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
     "analytics_diagnostics(timestamp with time zone,timestamp with time zone)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -852,10 +900,21 @@
         "service_role"
       ]
     },
+    "analytics_nightly()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
     "analytics_purge(integer)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "analytics_reconcile(date)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
       "execute": [
+        "authenticated",
         "service_role"
       ]
     },
@@ -866,6 +925,14 @@
         "service_role"
       ]
     },
+    "analytics_report(date,date,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
     "analytics_revenue(text,integer)": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -873,6 +940,11 @@
         "authenticated",
         "service_role"
       ]
+    },
+    "analytics_rollup_day(date)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
     },
     "analytics_signups(integer)": {
       "securityDefiner": true,
