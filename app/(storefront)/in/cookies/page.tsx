@@ -94,11 +94,14 @@ export default function CookiesPage() {
           <li>your account details;</li>
           <li>your exact location;</li>
           <li>your city;</li>
-          <li>your raw IP address;</li>
           <li>a persistent visitor identifier;</li>
           <li>browser fingerprints;</li>
           <li>guesses about your gender, age or other personal characteristics.</li>
         </ul>
+        <p className={P}>
+          Your IP address is used briefly to estimate approximate location and help prevent abuse,
+          but the raw IP address is not stored.
+        </p>
         <p className={P}>
           Submitted searches that appear to contain personal information, such as an email address,
           phone number or order/reference number, are recorded only as &ldquo;redacted&rdquo;.
@@ -136,7 +139,6 @@ export default function CookiesPage() {
         <div className="mt-6">
           <StatisticsChoice />
         </div>
-        <p className={P}>You can change your choice at any time.</p>
 
         <h2 className={H2}>5. Changes</h2>
         <p className={P}>

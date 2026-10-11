@@ -415,6 +415,12 @@ t("opt-out: cookie or GPC", optedOut("1", null) && optedOut(undefined, "1") && !
     choiceCopy({ off: true, gpc: false, siteCollecting: false }).button === "Allow statistics" &&
     choiceCopy({ off: false, gpc: false, siteCollecting: false }).button === "Turn statistics off");
   t("siteCollectsStatistics() follows the public build flag", client.siteCollectsStatistics() === true);
+  t("IP wording: never listed as 'not collected'; said to be used briefly and not stored",
+    !page.includes("<li>your raw IP address;</li>") &&
+    page.includes("Your IP address is used briefly to estimate approximate location and help prevent abuse,\n          but the raw IP address is not stored."));
+  t("IP wording exposes no mechanism (hash, salt, rate-limit table)", !/hash|salt|HMAC|analytics_rate|rate.limit/i.test(page.slice(page.indexOf("export default"))));
+  t("staff-only Admin storage is deliberately not on the customer page", !/wv_admin_active|wv_internal|wovenne-export-columns/.test(page));
+  t("the duplicate 'change your choice' sentence is gone", !page.includes("You can change your choice at any time."));
   t("the cookie page makes no 'exempt from consent' claim", !/exempt|no consent (is )?(needed|required)/i.test(page));
   t("/in/cookies is in the sitemap", read("lib/sitemapRoutes.ts").includes('{ path: "/cookies", priority: 0.3 }'));
   t("robots.txt rules untouched by this work", read("app/robots.ts").includes("/admin") && !/OAI|GPTBot/.test(read("app/robots.ts")));
