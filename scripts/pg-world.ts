@@ -58,6 +58,22 @@ create table if not exists auth.users (
   raw_app_meta_data jsonb default '{}'::jsonb,
   created_at timestamptz default now()
 );
+-- Supabase Auth's sessions, as production has them (checked 11 Oct 2026): one
+-- row per signed-in session, deleted on sign-out, raised to aal2 when a second
+-- factor is verified. RLS on, no policies, nothing granted to the API roles.
+-- Only the columns is_admin() (0067) reads, plus the ones that identify a row.
+create type auth.aal_level as enum ('aal1', 'aal2', 'aal3');
+create table if not exists auth.sessions (
+  id uuid primary key, -- no default: Supabase Auth supplies the id
+  user_id uuid not null references auth.users (id) on delete cascade,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  factor_id uuid,
+  aal auth.aal_level,
+  not_after timestamptz,
+  refreshed_at timestamp
+);
+alter table auth.sessions enable row level security;
 -- As Supabase defines them: the single-claim setting first, then the claims
 -- object PostgREST sets for every request.
 create or replace function auth.uid() returns uuid language sql stable as
@@ -219,11 +235,25 @@ export async function asRoot(c: Client) {
  * A signed-in user's request as PostgREST presents it: role authenticated, the
  * user id, and the token's claims — including the authentication assurance
  * level Supabase Auth issues ('aal1' after a password, 'aal2' after a verified
- * second factor).
+ * second factor) and the id of the session the token belongs to.
+ *
+ * The session is real: a new auth.sessions row at the same level, as Supabase
+ * Auth creates on sign-in, so is_admin() (0067) finds it. Users with no
+ * auth.users row get claims without a session, as there is nothing to sign in.
  */
 export async function asUser(c: Client, userId: string, aal: "aal1" | "aal2" | null) {
+  await c.query("reset role");
+  const session = (await c.query(
+    `insert into auth.sessions (id, user_id, aal)
+       select gen_random_uuid(), id, $2::auth.aal_level from auth.users where id = $1::uuid
+     returning id`, [userId, aal ?? "aal1"])).rows[0]?.id as string | undefined;
   await c.query("set role authenticated");
-  const claims = aal === null ? { sub: userId, role: "authenticated" } : { sub: userId, role: "authenticated", aal };
+  const claims = {
+    sub: userId,
+    role: "authenticated",
+    ...(aal === null ? {} : { aal }),
+    ...(session ? { session_id: session } : {}),
+  };
   await c.query("select set_config('request.jwt.claim.sub', $1, false), set_config('request.jwt.claims', $2, false)",
     [userId, JSON.stringify(claims)]);
 }

@@ -16,7 +16,7 @@ const sp=async(label,fn)=>{await c.query(`savepoint ${label}`);try{const r=await
 await c.connect();
 // What the database held before this test touched anything. Compared against
 // after the rollback, rather than against zero — see the final assertion.
-const baseline=(await c.query("select (select count(*)::int from style_submissions) s,(select count(*)::int from orders) o")).rows[0];
+const baseline=(await c.query("select (select count(*)::int from style_submissions) s,(select count(*)::int from orders) o,(select count(*)::int from auth.sessions) a")).rows[0];
 await c.query("begin");
 try{
   const admin=(await c.query("select id,email from profiles where is_admin limit 1")).rows[0];
@@ -33,7 +33,11 @@ try{
   // 0062: is_admin() also requires a two-factor (aal2) session. The admin acts
   // as the admin actually works — aal2 — and customers as after a password —
   // aal1 — the same claims scripts/pg-world.ts asUser() presents.
-  const asUser=async(id,aal=(id===admin.id?"aal2":"aal1"))=>c.query(`set local request.jwt.claims = '${JSON.stringify({sub:id,email:(id===cust.id?cust.email:id===other.id?other.email:admin.email),aal})}'`);
+  // 0067: is_admin() also requires the token's session to be live in
+  // auth.sessions. The admin gets one for the length of this transaction — it
+  // is rolled back with everything else, so Supabase Auth never sees it.
+  const adminSession=(await c.query(`insert into auth.sessions (id, user_id, aal) values (gen_random_uuid(),'${admin.id}','aal2') returning id`)).rows[0].id;
+  const asUser=async(id,aal=(id===admin.id?"aal2":"aal1"))=>c.query(`set local request.jwt.claims = '${JSON.stringify({sub:id,email:(id===cust.id?cust.email:id===other.id?other.email:admin.email),aal,...(id===admin.id?{session_id:adminSession}:{})})}'`);
   const asRole=async(r)=>c.query(`set local role ${r}`);
 
   console.log("\n=== verified purchase is enforced by the DATABASE ===");
@@ -102,9 +106,9 @@ finally{
   // perfectly good rollback reported a failure. A test that assumes an empty shop
   // reports a fault in the shop rather than one in itself. Same correction as
   // scripts/cancel-guard.verify.mjs needed for the same reason.
-  const left=await c.query("select (select count(*)::int from style_submissions) s,(select count(*)::int from orders) o");
+  const left=await c.query("select (select count(*)::int from style_submissions) s,(select count(*)::int from orders) o,(select count(*)::int from auth.sessions) a");
   t("ROLLED BACK — nothing written",
-    left.rows[0].s===baseline.s && left.rows[0].o===baseline.o,
-    `submissions ${left.rows[0].s}/${baseline.s}, orders ${left.rows[0].o}/${baseline.o}`);
+    left.rows[0].s===baseline.s && left.rows[0].o===baseline.o && left.rows[0].a===baseline.a,
+    `submissions ${left.rows[0].s}/${baseline.s}, orders ${left.rows[0].o}/${baseline.o}, sessions ${left.rows[0].a}/${baseline.a}`);
   await c.end(); console.log(`\n${ok} passed, ${bad} failed`);
 }
