@@ -1,40 +1,38 @@
 import {
-  CONSENT_COOKIE,
   INTERNAL_COOKIE,
   MAX_BODY_BYTES,
-  VISITOR_COOKIE,
+  OPT_OUT_COOKIE,
   callerIp,
-  collectionEnabled,
+  deploymentMode,
   deviceFor,
   geoFor,
-  hasAnalyticsConsent,
   isBot,
+  optedOut,
   parseBatch,
   rateKey,
-  visitorIdFor,
   type CleanEvent,
 } from "./analyticsCollect";
 
 /**
  * The body of POST /api/events, with its collaborators passed in so the whole
- * path — environment, size, origin, bots, consent, identity, rate limit — is
- * tested without a server or a database.
+ * path — deployment, size, origin, opt-out, bots, staff, rate limit, the
+ * database switch — is tested without a server or a database.
  *
  * Status codes are for tests and logs; the browser ignores the response.
- *   204  stored, or deliberately not stored (switched off, preview, a bot)
+ *   204  stored, or deliberately not stored (preview/local, switched off in
+ *        the database, opted out, a bot)
  *   400  malformed       403  another site     405  not POST
  *   413  too large       429  rate limited     503  database refused
  */
 export interface IngestContext {
-  visitor_id: string | null;
-  user_id: string | null;
   device: "mobile" | "tablet" | "desktop" | null;
   country_code: string | null;
   region: string | null;
-  traffic: "customer" | "internal";
+  traffic: "customer" | "internal" | "test";
 }
 
 export interface IngestResult {
+  collecting: boolean;
   accepted: number;
   duplicates: number;
   skipped: number;
@@ -45,8 +43,6 @@ export interface EventsDeps {
   env: Record<string, string | undefined>;
   /** Server-only secret for the rate key. */
   secret: string;
-  /** The signed-in user, validated against Supabase Auth. Only asked with consent. */
-  getUserId: () => Promise<string | null>;
   ingest: (rateKey: string, context: IngestContext, events: CleanEvent[]) => Promise<IngestResult>;
 }
 
@@ -55,7 +51,6 @@ export interface EventsRequest {
   url: string;
   headers: Headers;
   cookie: (name: string) => string | undefined;
-  hasAuthCookie: boolean;
   text: () => Promise<string>;
 }
 
@@ -63,7 +58,9 @@ const empty = (status: number) => new Response(null, { status });
 
 export async function handleEvents(req: EventsRequest, deps: EventsDeps): Promise<Response> {
   if (req.method !== "POST") return empty(405);
-  if (!collectionEnabled(deps.env)) return empty(204);
+  const mode = deploymentMode(deps.env);
+  // A preview or local build shares the production database; it never asks.
+  if (mode === "off") return empty(204);
   if (!deps.secret) return empty(503);
 
   // Same-site only. A beacon from our own pages carries our Origin; a form on
@@ -78,6 +75,11 @@ export async function handleEvents(req: EventsRequest, deps: EventsDeps): Promis
     }
     if (!sameSite) return empty(403);
   }
+
+  // The visitor objected. The browser client already sends nothing in this
+  // case; this is the server honouring it even if a page (an old tab, a
+  // cached script) does not.
+  if (optedOut(req.cookie(OPT_OUT_COOKIE), req.headers.get("sec-gpc"))) return empty(204);
 
   const declared = Number(req.headers.get("content-length") ?? "0");
   if (declared > MAX_BODY_BYTES) return empty(413);
@@ -96,20 +98,17 @@ export async function handleEvents(req: EventsRequest, deps: EventsDeps): Promis
   const parsed = parseBatch(body);
   if (!parsed.ok) return empty(400);
 
-  const consent = req.cookie(CONSENT_COOKIE);
-  const consented = hasAnalyticsConsent(consent);
-  // Identity only with consent, and only from a session Supabase vouches for.
-  // The body cannot carry one — parseBatch refuses the key.
-  const userId = consented && req.hasAuthCookie ? await deps.getUserId().catch(() => null) : null;
-
   const context: IngestContext = {
-    visitor_id: visitorIdFor(consent, req.cookie(VISITOR_COOKIE)),
-    user_id: userId,
     device: deviceFor(userAgent),
     ...geoFor(req.headers),
-    // Set on any browser that has completed an admin sign-in (middleware).
-    // Claiming it only hides your own traffic, so it needs no protection.
-    traffic: req.cookie(INTERNAL_COOKIE) === "1" ? "internal" : "customer",
+    traffic:
+      mode === "test"
+        ? "test"
+        : // Set on any browser that has completed an admin sign-in (middleware).
+          // Claiming it only hides your own traffic, so it needs no protection.
+          req.cookie(INTERNAL_COOKIE) === "1"
+          ? "internal"
+          : "customer",
   };
 
   try {

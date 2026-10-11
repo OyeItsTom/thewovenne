@@ -14,9 +14,13 @@
  * needs and what PGlite cannot give.
  *
  * embedded-postgres is not a project dependency (it downloads ~30MB of
- * binaries). Point PG_HARNESS_DIR at a directory where it is installed:
+ * binaries). Point PG_HARNESS_DIR at a directory where it is installed —
+ * PINNED to production's major version (PostgreSQL 17.6, checked 11 Oct 2026).
+ * An unpinned install gets 18.x, where nested SECURITY DEFINER calls are much
+ * cheaper, and admin-db-session's 0062-vs-0067 cost comparison stops
+ * describing production:
  *
- *   mkdir -p /tmp/pgh && npm install --prefix /tmp/pgh embedded-postgres
+ *   mkdir -p /tmp/pgh && npm install --prefix /tmp/pgh embedded-postgres@17.6.0-beta.15
  *   PG_HARNESS_DIR=/tmp/pgh npx tsx scripts/stock-integrity.test.ts
  *
  * Nothing here reads .env.local or any credential.

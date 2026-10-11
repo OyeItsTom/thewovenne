@@ -55,6 +55,17 @@
       },
       "columns": {}
     },
+    "analytics_config": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
+      },
+      "columns": {}
+    },
     "analytics_events": {
       "kind": "r",
       "rls": true,
@@ -72,22 +83,6 @@
       "columns": {}
     },
     "analytics_rate": {
-      "kind": "r",
-      "rls": true,
-      "forceRls": false,
-      "privileges": {
-        "anon": [],
-        "authenticated": [],
-        "service_role": [
-          "DELETE",
-          "INSERT",
-          "SELECT",
-          "UPDATE"
-        ]
-      },
-      "columns": {}
-    },
-    "analytics_sessions": {
       "kind": "r",
       "rls": true,
       "forceRls": false,
@@ -827,6 +822,13 @@
         "service_role"
       ]
     },
+    "analytics_collecting()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "analytics_diagnostics(timestamp with time zone,timestamp with time zone)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -850,21 +852,14 @@
         "service_role"
       ]
     },
-    "analytics_on_order_paid()": {
-      "securityDefiner": true,
-      "searchPath": "public, pg_temp",
-      "execute": [
-        "service_role"
-      ]
-    },
-    "analytics_on_wishlist()": {
-      "securityDefiner": true,
-      "searchPath": "public, pg_temp",
-      "execute": [
-        "service_role"
-      ]
-    },
     "analytics_purge(integer)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "analytics_record_purchase(uuid,boolean)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
       "execute": [

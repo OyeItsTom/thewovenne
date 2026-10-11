@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { loadBrowserSupabase } from "./supabaseLazy";
+import { track } from "./analyticsClient";
 
 /**
  * The signed-in customer's saved products.
@@ -180,6 +181,9 @@ export function createWishlistStore(
           }
           return "error";
         }
+        // Counted only once the database has the change: a failed save is
+        // not a wishlist add. No user id travels with it (lib/analyticsClient).
+        track(saved ? "wishlist_remove" : "wishlist_add", { product_id: productId });
         return saved ? "removed" : "added";
       },
     };

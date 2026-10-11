@@ -1,12 +1,12 @@
-import { createServerClient } from "@supabase/ssr";
 import type { NextRequest } from "next/server";
 import { handleEvents, type IngestResult } from "@/lib/analyticsIngest";
 import { createServiceClient } from "@/lib/supabase";
 
 /**
- * First-party analytics collector. See lib/analyticsIngest for the rules and
- * migration 0068 for what is stored. Writes nothing unless
- * NEXT_PUBLIC_ANALYTICS_ENABLED=1 on the production deployment.
+ * First-party analytics collector. See lib/analyticsIngest for the rules,
+ * migration 0068 for what is stored and docs/analytics.md for the design.
+ * Writes nothing outside the production deployment, and nothing at all while
+ * the database switch (analytics_config) is off.
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,22 +18,11 @@ export async function POST(request: NextRequest) {
       url: request.url,
       headers: request.headers,
       cookie: (name) => request.cookies.get(name)?.value,
-      hasAuthCookie: request.cookies.getAll().some((c) => /^sb-.+-auth-token/.test(c.name)),
       text: () => request.text(),
     },
     {
       env: process.env,
       secret: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
-      getUserId: async () => {
-        const supabase = createServerClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-          // Read-only: a refreshed token is the page's business, not a beacon's.
-          { cookies: { getAll: () => request.cookies.getAll(), setAll: () => {} } }
-        );
-        const { data } = await supabase.auth.getUser();
-        return data.user?.id ?? null;
-      },
       ingest: async (rateKey, context, events) => {
         const { data, error } = await createServiceClient().rpc("analytics_ingest", {
           p_rate_key: rateKey,
