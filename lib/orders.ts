@@ -134,14 +134,17 @@ export async function getAllOrders(client: SupabaseClient): Promise<Order[]> {
 /**
  * The signed-in customer's own orders.
  *
- * No email filter here: the RLS policy from 0023 matches on auth.email() from
- * the JWT. Filtering as well would suggest the policy were optional, and the
- * one that matters is the one the database enforces.
+ * Filtered by email EXPLICITLY, as well as by RLS. RLS alone answers "what may
+ * this session read", not "which orders are mine" — and for a two-factor
+ * verified admin browsing the shop, "may read" is every order there is. Their
+ * account page would have listed the whole shop's orders as "Your orders". The
+ * 0023 policy matches on auth.email(), so this is the same rule, stated here.
  */
-export async function getMyOrders(client: SupabaseClient): Promise<Order[]> {
+export async function getMyOrders(client: SupabaseClient, email: string): Promise<Order[]> {
   const { data, error } = await client
     .from("orders")
     .select(ORDER_SELECT)
+    .ilike("customer_email", exactEmailPattern(email))
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -149,6 +152,16 @@ export async function getMyOrders(client: SupabaseClient): Promise<Order[]> {
     return [];
   }
   return ((data ?? []) as unknown as Record<string, unknown>[]).map(mapOrder);
+}
+
+/**
+ * An ILIKE pattern that matches this email and nothing else — case-insensitive,
+ * as the 0023 policy is (lower() = lower()), with LIKE's wildcards escaped.
+ * Underscores are common in addresses, and an unescaped one matches any
+ * character: jo_n@x.com would also have matched john@x.com's orders.
+ */
+export function exactEmailPattern(email: string): string {
+  return email.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
 /** A short, readable reference. The first block of the uuid, as in the email. */

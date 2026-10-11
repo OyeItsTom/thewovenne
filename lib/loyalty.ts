@@ -48,6 +48,9 @@ export async function getMyLoyalty(
     client
       .from("loyalty_ledger")
       .select("id, points, reason, created_at, order_id")
+      // Their own entries, not everything RLS allows — a verified admin may
+      // read the whole ledger.
+      .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(50),
   ]);

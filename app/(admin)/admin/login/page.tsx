@@ -16,6 +16,7 @@ export default function AdminLoginPage() {
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     if (p.get("timeout")) setNotice("You were signed out after 15 minutes of inactivity.");
+    else if (p.get("signedout")) setNotice("You've signed out.");
     else if (p.get("retry")) setNotice("We couldn't verify your session just then. Please sign in again.");
     else if (p.get("denied")) setNotice("That account doesn't have admin access.");
   }, []);

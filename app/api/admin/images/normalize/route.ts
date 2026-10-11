@@ -1,3 +1,4 @@
+import { adminApiGate } from "@/lib/adminApiGate";
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import sharp from "sharp";
@@ -56,6 +57,9 @@ interface Body {
 }
 
 export async function POST(request: NextRequest) {
+  const ended = await adminApiGate(request);
+  if (ended) return ended;
+
   const supabase = createRSCClient();
 
   /*

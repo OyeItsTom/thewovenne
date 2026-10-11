@@ -1,3 +1,4 @@
+import { adminApiGate } from "@/lib/adminApiGate";
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { createRSCClient } from "@/lib/supabaseRSC";
@@ -34,6 +35,9 @@ interface ExportRequest {
 }
 
 export async function POST(request: NextRequest) {
+  const ended = await adminApiGate(request);
+  if (ended) return ended;
+
   const body = (await request.json()) as ExportRequest;
   const supabase = createRSCClient();
 

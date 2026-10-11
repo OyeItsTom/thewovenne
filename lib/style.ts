@@ -148,12 +148,21 @@ export async function getMySubmission(
   productId: string,
   client: SupabaseClient
 ): Promise<MySubmission | null> {
+  // By user as well as product. RLS lets a verified admin read every
+  // submission, so "the one for this product" would have been someone else's —
+  // or, with several, an error that hid the admin's own.
+  const {
+    data: { user },
+  } = await client.auth.getUser();
+  if (!user) return null;
+
   const { data, error } = await client
     .from("style_submissions")
     .select(
       "id, status, photo_url, video_url, caption, credit_name, withdrawn_at, reject_reason, created_at"
     )
     .eq("product_id", productId)
+    .eq("user_id", user.id)
     .maybeSingle();
 
   if (error) {

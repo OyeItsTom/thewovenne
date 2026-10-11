@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { createRSCClient } from "@/lib/supabaseRSC";
+import { exactEmailPattern } from "@/lib/orders";
 import { getProductsByIds } from "@/lib/products";
 import ProfileForm from "@/components/account/ProfileForm";
 import ProductGrid from "@/components/shop/ProductGrid";
@@ -49,6 +50,9 @@ export default async function ProfilePage() {
     ? await supabase
         .from("orders")
         .select("customer_phone")
+        // Their own orders by email, not whatever RLS allows: a verified admin
+        // may read every order, and this would have shown a customer's phone.
+        .ilike("customer_email", exactEmailPattern(user.email ?? ""))
         .not("customer_phone", "is", null)
         .order("created_at", { ascending: false })
         .limit(1)

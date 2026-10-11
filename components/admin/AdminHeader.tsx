@@ -3,9 +3,10 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { KeyRound, Lock, LogOut } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
+import { endAdminSession } from "@/lib/adminSessionClient";
 
 /**
  * Admin chrome. Deliberately not the storefront Navbar — no category links, no
@@ -14,7 +15,6 @@ import { getBrowserSupabase } from "@/lib/supabase";
  */
 export default function AdminHeader() {
   const pathname = usePathname();
-  const router = useRouter();
   const [email, setEmail] = useState<string | null>(null);
 
   useEffect(() => {
@@ -23,10 +23,9 @@ export default function AdminHeader() {
       .then(({ data }) => setEmail(data.user?.email ?? null));
   }, [pathname]);
 
-  const signOut = async () => {
-    await getBrowserSupabase().auth.signOut();
-    router.replace("/admin/login");
-  };
+  // A full sign-out: revoked at Supabase, cookies cleared, and a full page
+  // load so Back cannot bring the dashboard back. See lib/adminSessionClient.
+  const signOut = () => endAdminSession("signed-out");
 
   return (
     <header className="border-b border-ink/10 bg-cream">

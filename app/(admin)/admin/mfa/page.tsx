@@ -2,10 +2,10 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
 import Button from "@/components/ui/Button";
+import { endAdminSession } from "@/lib/adminSessionClient";
 
 type Mode = "loading" | "enroll" | "challenge" | "failed";
 
@@ -18,7 +18,6 @@ type Mode = "loading" | "enroll" | "challenge" | "failed";
  * factors exist and renders accordingly.
  */
 export default function AdminMfaPage() {
-  const router = useRouter();
   const [mode, setMode] = useState<Mode>("loading");
   const [factorId, setFactorId] = useState("");
   const [qr, setQr] = useState("");
@@ -103,10 +102,7 @@ export default function AdminMfaPage() {
     window.location.assign("/admin/dashboard");
   };
 
-  const signOut = async () => {
-    await getBrowserSupabase().auth.signOut();
-    router.replace("/admin/login");
-  };
+  const signOut = () => endAdminSession("signed-out");
 
   return (
     <div className="container-wovenne section-padding flex min-h-[60vh] items-center justify-center">

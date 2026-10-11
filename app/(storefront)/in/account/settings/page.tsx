@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { createRSCClient } from "@/lib/supabaseRSC";
+import { exactEmailPattern } from "@/lib/orders";
 import MarketingPreference from "@/components/account/MarketingPreference";
 import LoyaltyPanel from "@/components/account/LoyaltyPanel";
 import ChangePassword from "@/components/account/ChangePassword";
@@ -39,12 +40,14 @@ export default async function SettingsPage() {
         .maybeSingle()
     : { data: null };
 
-  // The most recent order, used ONLY as a fallback below. RLS scopes this to
-  // the customer's own orders.
+  // The most recent order, used ONLY as a fallback below. Filtered to this
+  // account's email explicitly: RLS would give a verified admin every order,
+  // and the fallback would have prefilled a customer's address here.
   const { data: lastOrder } = user
     ? await supabase
         .from("orders")
         .select("shipping_address, customer_phone, created_at")
+        .ilike("customer_email", exactEmailPattern(user.email ?? ""))
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle()

@@ -1,6 +1,12 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { DEFAULT_COUNTRY, isCountry, isUnprefixed } from "./lib/country";
+import {
+  ADMIN_ACTIVITY_COOKIE,
+  activityCookieOptions,
+  assessAdminActivity,
+  mintActivityCookie,
+} from "./lib/adminSession";
 
 const SUPABASE_URL =
   process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
@@ -32,6 +38,31 @@ async function checkIsAdmin(
     if (attempt === 0) await new Promise((r) => setTimeout(r, 300));
   }
   return "unknown";
+}
+
+/**
+ * How the privileged half of a session is doing — see lib/adminSession.
+ * Only meaningful once getUser() has validated the token it reads.
+ */
+async function privilegedActivity(
+  supabase: ReturnType<typeof createServerClient>,
+  request: NextRequest
+) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  return assessAdminActivity(
+    session?.access_token,
+    request.cookies.get(ADMIN_ACTIVITY_COOKIE)?.value
+  );
+}
+
+/** A background prefetch is not the admin doing anything, so it never counts as activity. */
+function isPrefetch(request: NextRequest): boolean {
+  return (
+    request.headers.get("next-router-prefetch") === "1" ||
+    request.headers.get("purpose") === "prefetch"
+  );
 }
 
 /** Reachable without a session — everything else under /admin is gated. */
@@ -108,7 +139,7 @@ export async function middleware(request: NextRequest) {
     (p) => pathname === p || pathname.startsWith(`${p}/`)
   );
 
-  // Customer area: a session, and NOT a staff account. No MFA — a shopper is
+  // Customer area: a session — any session, staff included. No MFA — a shopper is
   // not an operator, and demanding an authenticator app to open a wishlist
   // would be theatre rather than security. Kept as its own branch so the
   // customer gate can never be mistaken for the admin one.
@@ -122,28 +153,16 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(url);
     }
 
-    // STAFF ARE NOT CUSTOMERS. Blocking admin credentials on the customer
-    // LOGIN FORM was only half the job: it stopped an admin signing in here,
-    // but not an admin who was already signed in at /admin from walking into
-    // the customer area and finding their own staff address printed in the
-    // Email field. One session, two areas — the login form was never the
-    // boundary. This is.
+    // Staff browsing the shop get the shop's account, like anyone else. The
+    // person icon is a customer entry point; the way into admin is /admin, on
+    // its own login and its own second factor.
     //
-    // Note it needs no aal2: a password-only admin session was enough to get
-    // in, so the check has to sit ahead of the two-factor step entirely.
-    const verdict = await checkIsAdmin(supabase);
-    if (verdict === "admin") {
-      const url = request.nextUrl.clone();
-      url.pathname = "/admin/dashboard";
-      url.search = "";
-      return NextResponse.redirect(url);
-    }
-
-    // "unknown" lets them through, DELIBERATELY, and this is the opposite of
-    // how the admin gate treats it. There, failing closed costs an admin one
-    // retry. Here it would lock genuine customers out of their own orders over
-    // a network blip — and what gets through in the rare failure is an admin
-    // seeing their own row, not a customer seeing anyone else's.
+    // This used to send any staff account to /admin/dashboard, which made the
+    // icon an admin shortcut. It was also standing in for a real problem: the
+    // account pages leaned on RLS alone to mean "mine", and RLS lets a verified
+    // admin read every order. Those reads are now filtered to the signed-in
+    // person explicitly (lib/orders getMyOrders and friends), so an admin here
+    // sees their own account and nobody else's.
     return response;
   }
 
@@ -194,6 +213,33 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(url);
     }
 
+    // Verified — but is the privileged session still alive? A refreshed token
+    // keeps its aal2 claim indefinitely, so the claim alone cannot tell an admin
+    // at the desk from a laptop opened the next morning. The activity record can.
+    if (!needsMfa) {
+      const { activity, facts } = await privilegedActivity(supabase, request);
+
+      if (activity === "expired") {
+        // Revoked at Supabase, not just forgotten here: signOut ends the session
+        // server-side, so its refresh token can never mint another aal2 token.
+        // The cleared cookies are written into `response` by setAll above and
+        // copied onto the redirect, or the browser would keep them.
+        await supabase.auth.signOut({ scope: "local" });
+        const url = request.nextUrl.clone();
+        url.pathname = "/admin/login";
+        url.search = "?timeout=1";
+        const redirect = NextResponse.redirect(url);
+        response.cookies.getAll().forEach((c) => redirect.cookies.set(c));
+        redirect.cookies.set(ADMIN_ACTIVITY_COOKIE, "", { ...activityCookieOptions, maxAge: 0 });
+        return redirect;
+      }
+
+      if (facts.sessionId && !isPrefetch(request)) {
+        const value = await mintActivityCookie(facts.sessionId, Date.now());
+        if (value) response.cookies.set(ADMIN_ACTIVITY_COOKIE, value, activityCookieOptions);
+      }
+    }
+
     // Fully verified admins have no reason to sit on the MFA page.
     if (!needsMfa && pathname === MFA_PATH) {
       const url = request.nextUrl.clone();
@@ -216,9 +262,15 @@ export async function middleware(request: NextRequest) {
   // Asking for the login page means "I want to log in". So an unverified
   // session is ended here and the form is shown. Local scope only — this
   // clears the cookies on this device without touching other sessions.
+  //
+  // "Verified" includes still being alive: an idle-expired session is ended
+  // here like any other, rather than sent to a dashboard that would only end it.
   if (pathname === "/admin/login" && user) {
     const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    const verified = aal?.nextLevel === "aal2" && aal.currentLevel === "aal2";
+    const verified =
+      aal?.nextLevel === "aal2" &&
+      aal.currentLevel === "aal2" &&
+      (await privilegedActivity(supabase, request)).activity !== "expired";
 
     if (verified && (await checkIsAdmin(supabase)) === "admin") {
       const url = request.nextUrl.clone();
@@ -231,6 +283,7 @@ export async function middleware(request: NextRequest) {
     // `response`. It must be returned as-is — a redirect here would be a
     // different response object and would drop the clearing.
     await supabase.auth.signOut({ scope: "local" });
+    response.cookies.set(ADMIN_ACTIVITY_COOKIE, "", { ...activityCookieOptions, maxAge: 0 });
     return response;
   }
 

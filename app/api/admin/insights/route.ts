@@ -1,3 +1,4 @@
+import { adminApiGate } from "@/lib/adminApiGate";
 import { cookies } from "next/headers";
 import { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
@@ -26,6 +27,9 @@ export const dynamic = "force-dynamic";
  * returning a customer row because it was never given the means to fetch one.
  */
 export async function POST(req: NextRequest) {
+  const ended = await adminApiGate(req);
+  if (ended) return ended;
+
   const store = cookies();
   const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     cookies: {
