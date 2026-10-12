@@ -14,6 +14,7 @@ import { productSeo } from "@/lib/metadata";
 import { cPath } from "@/lib/country";
 import ProductDetail from "@/components/product/ProductDetail";
 import { openGraph, productImageUrl } from "@/lib/seo";
+import { imageFor } from "@/lib/imageVariants";
 
 /**
  * The canonical product URL — /women/sarees/kerala-kasavu.
@@ -90,7 +91,11 @@ export async function generateMetadata({
       title: seo.heading,
       description: seo.description,
       path: productHref(product),
-      images: [product.image_url ? productImageUrl(product.image_url, "openGraph") : null],
+      images: [
+        product.image_url
+          ? productImageUrl(imageFor(product.image_url, "detail", product.imageVariants), "openGraph")
+          : null,
+      ],
       imageAlt: (cover?.url === product.image_url ? cover?.alt : null) ?? product.name,
     }),
   };

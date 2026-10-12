@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import sharp from "sharp";
 import { verifyMasterDelivery } from "@/lib/imageDelivery";
+import { makeAndStoreDerivatives, type DerivativeReport } from "@/lib/imageDerivatives";
 import { createRSCClient } from "@/lib/supabaseRSC";
 import {
   ImageRejected,
@@ -100,6 +101,7 @@ export async function POST(request: NextRequest) {
   }
 
   let masterPath: string;
+  let masterBytes: Buffer;
   let bytesOut: number;
   let masterMd5: string;
   let duplicate: boolean;
@@ -168,6 +170,7 @@ export async function POST(request: NextRequest) {
 
     const hash = createHash("sha256").update(source).digest("hex");
     masterPath = masterKey(hash, encoding.ext);
+    masterBytes = master;
     bytesOut = master.byteLength;
     // What the delivery check compares the served ETag against. See
     // lib/imageDelivery for when an ETag is, and is not, an MD5.
@@ -264,6 +267,38 @@ export async function POST(request: NextRequest) {
   }
 
   /*
+   * DELIVERY-SIZED COPIES (lib/imageDerivatives, 0071). Made from the master
+   * bytes already in memory — nothing is downloaded again — and only now that
+   * the master is proven readable. They are an optimisation, never a
+   * condition: whatever happens here the upload stands, the master is not
+   * touched, and a tier that failed is simply not registered, so the storefront
+   * keeps using the master for it until the backfill's next run fills it in.
+   * The outcome goes back in the response and the log, so a partial result is
+   * visible rather than swallowed.
+   */
+  let derivatives: DerivativeReport;
+  try {
+    derivatives = await makeAndStoreDerivatives(masterPath, masterBytes, {
+      storage: supabase,
+      registry: supabase,
+    });
+  } catch (error) {
+    derivatives = {
+      status: "failed",
+      tiers: [],
+      registered: false,
+      registryError: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (derivatives.status !== "complete" || !derivatives.registered) {
+    console.warn(
+      `[image-normalize] derivatives-${derivatives.status} master=${masterPath} registered=${derivatives.registered} ${derivatives.tiers
+        .map((t) => `${t.tier}:${t.status}${t.status === "failed" ? `(${t.reason})` : ""}`)
+        .join(" ")}${derivatives.registryError ? ` registry=${derivatives.registryError}` : ""}`
+    );
+  }
+
+  /*
    * ONLY NOW is the original allowed to go, and its removal is the last
    * destructive act in the request. If it fails the customer still gets the
    * photograph — the master exists and is readable — so this is reported, not
@@ -297,6 +332,12 @@ export async function POST(request: NextRequest) {
     version: NORMALIZER_VERSION,
     duplicate,
     delivery,
+    // Summary only — never the bytes. "complete" | "partial" | "failed".
+    derivatives: {
+      status: derivatives.status,
+      registered: derivatives.registered,
+      tiers: derivatives.tiers.map((t) => ({ tier: t.tier, status: t.status })),
+    },
   });
 }
 

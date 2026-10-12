@@ -2,7 +2,8 @@
 
 import { useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import Image from "next/image";
+import DeliveryImage from "@/components/ui/DeliveryImage";
+import type { ImageVariantMap } from "@/lib/imageVariants";
 import { ChevronLeft, ChevronRight, ZoomIn } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ImageWeaveOverlay from "@/components/weave/ImageWeaveOverlay";
@@ -57,11 +58,14 @@ export default function ImageGallery({
   images,
   alt,
   alts,
+  variants,
 }: {
   images: string[];
   alt: string;
   /** Each photo's written alt text (0065), by position. Null or absent = fall back. */
   alts?: (string | null)[];
+  /** Registered delivery copies (lib/imageVariants). Absent = masters, as before. */
+  variants?: ImageVariantMap;
 }) {
   const [active, setActive] = useState(0);
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -190,9 +194,11 @@ export default function ImageGallery({
         {images.map((src, i) => {
           const offset = cardImageOffset(i, active);
           return (
-            <Image
+            <DeliveryImage
               key={src + i}
               src={src}
+              use="detail"
+              variants={variants}
               // Every frame carries its own alt, so the server HTML describes
               // the whole set rather than the cover alone. The frames off to
               // the side stay aria-hidden: a screen reader hears the one that
@@ -300,8 +306,10 @@ export default function ImageGallery({
                   : "opacity-60 hover:opacity-100"
               )}
             >
-              <Image
+              <DeliveryImage
                 src={src}
+                use="card"
+                variants={variants}
                 alt={productImageAlt(alt, i, images.length, alts?.[i])}
                 fill
                 sizes="120px"
@@ -323,6 +331,7 @@ export default function ImageGallery({
           onIndexChange={setActive}
           onClose={() => setViewerOpen(false)}
           baseSizes={PDP_FRAME_SIZES}
+          variants={variants}
         />
       )}
     </div>

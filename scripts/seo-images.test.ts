@@ -230,12 +230,14 @@ const detail = read("components/product/ProductDetail.tsx");
 const childRoute = read("app/(storefront)/in/[slug]/[child]/[product]/page.tsx");
 const flatRoute = read("app/(storefront)/in/product/[slug]/page.tsx");
 ok("ProductDetail maps JSON-LD images through the helper",
-  /images:\s*urls\.map\(\(src\)\s*=>\s*productImageUrl\(src,\s*"jsonLd"\)\)/.test(detail) &&
+  // Through the helper, naming the file the gallery frame shows: its registered
+  // 1920 copy (lib/imageVariants), else the stored master.
+  /images:\s*urls\.map\(\(src\)\s*=>\s*productImageUrl\(imageFor\(src,\s*"detail",\s*product\.imageVariants\),\s*"jsonLd"\)\)/.test(detail) &&
     /const urls = images\.map\(\(i\) => i\.url\);/.test(detail));
-ok("the gallery still renders the stored URLs", /<ImageGallery images=\{urls\}/.test(detail));
+ok("the gallery still renders the stored URLs", /<ImageGallery\s+images=\{urls\}/.test(detail));
 for (const [label, route] of [["canonical route", childRoute], ["flat route", flatRoute]] as const) {
   ok(`${label}: og:image goes through the helper`,
-    /images:\s*\[product\.image_url \? productImageUrl\(product\.image_url, "openGraph"\) : null\]/.test(route));
+    /images:\s*\[\s*product\.image_url\s*\?\s*productImageUrl\(imageFor\(product\.image_url, "detail", product\.imageVariants\), "openGraph"\)\s*:\s*null,?\s*\]/.test(route));
   ok(`${label}: og:image is still the cover (image_url)`, route.includes("product.image_url"));
 }
 ok("no route hand-builds an optimizer URL", ![detail, childRoute, flatRoute].some((s) => s.includes("/_next/image")));

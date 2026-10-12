@@ -292,6 +292,25 @@
       },
       "columns": {}
     },
+    "image_derivatives": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [
+          "SELECT"
+        ],
+        "authenticated": [
+          "INSERT",
+          "SELECT"
+        ],
+        "service_role": [
+          "INSERT",
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
     "journal_posts": {
       "kind": "r",
       "rls": true,
@@ -1689,6 +1708,25 @@
       ],
       "using": "is_admin()",
       "check": "is_admin()"
+    },
+    "public.image_derivatives.Admins register derivatives": {
+      "cmd": "INSERT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "check": "is_admin()"
+    },
+    "public.image_derivatives.Anyone reads the derivative registry": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "anon",
+        "authenticated"
+      ],
+      "using": "true",
+      "check": null
     },
     "public.journal_posts.Admins can delete journal": {
       "cmd": "DELETE",

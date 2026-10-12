@@ -201,6 +201,10 @@ export default function ProductModal({
   const [parentId, setParentId] = useState("");
   const [subCategoryId, setSubCategoryId] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Not an error: the photograph uploaded and is usable. Its delivery-sized
+  // copies (lib/imageDerivatives) did not all get made, so the shop serves the
+  // full master for it until the backfill fills them in. Said, not swallowed.
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   // Gallery is edited locally and written on save, so cancelling leaves the
@@ -685,12 +689,14 @@ export default function ProductModal({
     if (files.length === 0) return;
 
     setError(null);
+    setUploadNote(null);
     setUploading(true);
 
     // Upload sequentially so one rejected file doesn't discard the others, and
     // report the failures rather than dropping them silently.
     const uploaded: string[] = [];
     const failures: string[] = [];
+    const incomplete: string[] = [];
     for (let i = 0; i < files.length; i += 1) {
       const file = files[i];
       const of = files.length > 1 ? ` ${i + 1} of ${files.length}` : "";
@@ -711,6 +717,9 @@ export default function ProductModal({
           }
         );
         uploaded.push(prepared.url);
+        if (prepared.derivatives && (prepared.derivatives.status !== "complete" || !prepared.derivatives.registered)) {
+          incomplete.push(file.name);
+        }
       } catch (err) {
         failures.push(
           `${file.name}: ${err instanceof Error ? err.message : "upload failed"}`
@@ -721,6 +730,11 @@ export default function ProductModal({
 
     if (uploaded.length) setImages((prev) => [...prev, ...uploaded.map((url) => ({ url, alt: "" }))]);
     if (failures.length) setError(failures.join("\n"));
+    if (incomplete.length) {
+      setUploadNote(
+        `Uploaded, but the smaller display copies of ${incomplete.join(", ")} could not all be made. The photo works; the shop will use the full-size file for it until the copies are filled in.`
+      );
+    }
 
     setUploading(false);
     // Let the same file be re-picked after a rejection, otherwise choosing it
@@ -1750,6 +1764,12 @@ export default function ProductModal({
         {error && (
           <p role="alert" className="whitespace-pre-line text-sm text-terracotta-dark">
             {error}
+          </p>
+        )}
+
+        {uploadNote && (
+          <p role="status" className="text-sm text-ink/70">
+            {uploadNote}
           </p>
         )}
 

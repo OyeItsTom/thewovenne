@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent, PointerEvent } from "react";
-import Image from "next/image";
+import DeliveryImage from "@/components/ui/DeliveryImage";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { ProductListing } from "@/lib/types";
@@ -259,8 +259,10 @@ export default function ProductCard({
           onClick={onPhotoClick}
         >
           {images[0] && (
-            <Image
+            <DeliveryImage
               src={images[0]}
+              use="card"
+              variants={product.imageVariants}
               alt={product.name}
               fill
               priority={fold === "priority"}
@@ -276,9 +278,11 @@ export default function ProductCard({
             />
           )}
           {images.slice(1, mounted + 1).map((src, imageIndex) => (
-            <Image
+            <DeliveryImage
               key={src}
               src={src}
+              use="card"
+              variants={product.imageVariants}
               alt=""
               aria-hidden
               fill

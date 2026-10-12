@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
-import Image from "next/image";
+import DeliveryImage from "@/components/ui/DeliveryImage";
+import type { ImageVariantMap } from "@/lib/imageVariants";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -64,6 +65,7 @@ export default function ImageViewer({
   onClose,
   /** The PDP frame's own `sizes`. Passed in so the two cannot drift apart. */
   baseSizes,
+  variants,
 }: {
   images: string[];
   /** The product name: the dialog's label, and the fallback for a photo with no alt. */
@@ -74,6 +76,8 @@ export default function ImageViewer({
   onIndexChange: (next: number) => void;
   onClose: () => void;
   baseSizes: string;
+  /** Registered delivery copies — the SAME map the gallery used, so layer one stays the file already on screen. */
+  variants?: ImageVariantMap;
 }) {
   const [zoom, setZoom] = useState(MIN_ZOOM);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -458,9 +462,11 @@ export default function ImageViewer({
             to a variant that has been downloaded and decoded already. It is what
             makes the popup appear rather than load.
           */}
-          <Image
+          <DeliveryImage
             key={`base-${src}`}
             src={src}
+            use="detail"
+            variants={variants}
             // The SAME text the gallery frame gives this photo — its written
             // alt, else the name with its position — so the closer look never
             // describes the picture differently from the page behind it.
@@ -478,9 +484,11 @@ export default function ImageViewer({
             photograph is already on screen, and a spinner over a visible picture
             reports on something the customer is not waiting for.
           */}
-          <Image
+          <DeliveryImage
             key={`detail-${src}`}
             src={src}
+            use="detail"
+            variants={variants}
             alt=""
             aria-hidden="true"
             fill

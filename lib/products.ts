@@ -10,6 +10,7 @@ import { withinPriceCeiling } from "./pricing";
 import { colourOptions, fabricOptions, matchesColour, matchesFabric } from "./catalogueFacets";
 import { promotable } from "./merchandising";
 import { factsFromVersions } from "./adminStatus";
+import { attachImageVariants } from "./imageVariantsRegistry";
 import type { Category, GalleryPhoto, Product, ProductListing } from "./types";
 
 // Storefront reads come from PUBLISHED versions, never the identity tables.
@@ -97,13 +98,24 @@ function storefrontListingQuery(ctx: ReadCtx) {
 const NEWEST_PRODUCT_FIRST = "products(created_at)";
 const BY_NEWEST_PRODUCT = { ascending: false, nullsFirst: false } as const;
 
-/** Collapse to one row per product and map. A no-op outside preview. */
-function finish(data: unknown, cats: Map<string, Category>): Product[] {
+/**
+ * Collapse to one row per product, map, and attach each product's registered
+ * derivative copies (lib/imageVariantsRegistry) — one extra read per fetch,
+ * which fails open to the masters. The collapse is a no-op outside preview.
+ */
+async function finish(
+  data: unknown,
+  cats: Map<string, Category>,
+  client: SupabaseClient
+): Promise<Product[]> {
   const rows = (data as (ProductVersionRow & {
     state?: string;
     pending_delete?: boolean;
   })[] | null) ?? [];
-  return preferDraft(rows, (r) => r.product_id).map((r) => mapProduct(r, cats));
+  return attachImageVariants(
+    preferDraft(rows, (r) => r.product_id).map((r) => mapProduct(r, cats)),
+    client
+  );
 }
 
 export type ProductVersionRow = {
@@ -185,10 +197,15 @@ export function mapListingProduct(
   };
 }
 
-function finishListing(data: unknown, cats: Map<string, Category>): ProductListing[] {
+async function finishListing(
+  data: unknown,
+  cats: Map<string, Category>,
+  client: SupabaseClient
+): Promise<ProductListing[]> {
   const rows = (data as ProductListingRow[] | null) ?? [];
-  return preferDraft(rows, (r) => r.product_id).map((r) =>
-    mapListingProduct(r, cats)
+  return attachImageVariants(
+    preferDraft(rows, (r) => r.product_id).map((r) => mapListingProduct(r, cats)),
+    client
   );
 }
 
@@ -519,7 +536,7 @@ export async function getFeaturedProducts(
     console.error("getFeaturedProducts:", error.message);
     return [];
   }
-  return finish(data, cats);
+  return finish(data, cats, ctx.client);
 }
 
 export async function getAllProducts(ctx: ReadCtx = ANON_CTX): Promise<Product[]> {
@@ -536,7 +553,7 @@ export async function getAllProducts(ctx: ReadCtx = ANON_CTX): Promise<Product[]
     console.error("getAllProducts:", error.message);
     return [];
   }
-  return finish(data, cats);
+  return finish(data, cats, ctx.client);
 }
 
 /**
@@ -706,7 +723,10 @@ export async function getCatalogue(
       cats,
       sizeScopedProductIds
     );
-    const products = effective.map((row) => mapListingProduct(row, cats));
+    const products = await attachImageVariants(
+      effective.map((row) => mapListingProduct(row, cats)),
+      ctx.client
+    );
     return { products, total: products.length };
   }
 
@@ -769,11 +789,11 @@ export async function getCatalogue(
     );
     const from = opts.offset ?? 0;
     const page = opts.limit !== undefined ? priced.slice(from, from + opts.limit) : priced;
-    const products = finishListing(page, cats);
+    const products = await finishListing(page, cats, ctx.client);
     return { products, total: products.length };
   }
 
-  const products = finishListing(data, cats);
+  const products = await finishListing(data, cats, ctx.client);
   // Without paging the row count IS the total. When paging arrives this becomes
   // a count query; the shape of the return value already allows for it.
   return { products, total: products.length };
@@ -877,7 +897,7 @@ export async function getProductsByCollection(
     console.error("getProductsByCollection:", error.message);
     return [];
   }
-  return finish(data, cats);
+  return finish(data, cats, ctx.client);
 }
 
 /**
@@ -907,7 +927,7 @@ export async function getProductsByIds(
     console.error("getProductsByIds:", error.message);
     return [];
   }
-  return finish(data, cats);
+  return finish(data, cats, ctx.client);
 }
 
 /**
@@ -959,7 +979,7 @@ export async function getProductsByCategoryIds(
     console.error("getProductsByCategoryIds:", error.message);
     return [];
   }
-  return finish(data, cats);
+  return finish(data, cats, ctx.client);
 }
 
 export async function getProductBySlug(
@@ -980,7 +1000,7 @@ export async function getProductBySlug(
   }
   // Not maybeSingle(): in preview a product with a draft matches twice, and
   // maybeSingle errors on more than one row.
-  return finish(data, cats)[0] ?? null;
+  return (await finish(data, cats, ctx.client))[0] ?? null;
 }
 
 /**
@@ -1176,5 +1196,5 @@ export async function getRelatedProducts(
     console.error("getRelatedProducts:", error.message);
     return [];
   }
-  return promotable(finish(data, cats), limit);
+  return promotable(await finish(data, cats, ctx.client), limit);
 }
