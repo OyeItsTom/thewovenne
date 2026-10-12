@@ -286,3 +286,74 @@ from aggregates already rolled up.)
   history, so 1C should show the switch state beside any zero.
 * Both behind `can_read_analytics()` → hardened `is_admin()` (staff + aal2 +
   live session). Counts only; no event or order ids.
+
+## 10. Admin Analytics V1 (1C)
+
+Admin → Analytics (`/admin/dashboard/analytics`). One section, eight views:
+Overview · Funnel · Products · Traffic sources · Geography · Devices · Search,
+plus **Orders & stock** — the original 0025 order/revenue/stock dashboard,
+unchanged, so revenue is reported in one place only. Pure rules:
+`lib/analyticsDashboard.ts`; reads: `lib/analyticsDashboardSource.ts`;
+UI: `components/admin/analytics/`; tests: `scripts/analytics-dashboard.test.ts`.
+
+### 10.1 What it reads
+
+* `analytics_report(from, to, grain)` for every finished-day figure — one call
+  per view (+ one for the Overview comparison), cached per range until Refresh.
+* `analytics_report(yesterday − 34, yesterday, 'total')` for "final figures
+  through", and `analytics_reconcile(that day)` for the nightly job and
+  reconciliation status.
+* `analytics_diagnostics(today 00:00 IST, now)` for the collection switch and
+  Today's provisional count — the only raw read, bounded to the current IST day
+  (index range on `occurred_at`).
+* The admin product list (`getAdminProducts`) for each product's current
+  category and Live / Hidden / Never-published state.
+
+No new endpoint, table or migration. Every call uses the signed-in admin's own
+session, so the database's gate (`can_read_analytics()` → `is_admin()`: staff +
+aal2 + live session) decides access; middleware and the dashboard layout gate
+the page as before. Errors are shown as errors, never as zeros.
+
+### 10.2 Ranges, Today and comparison
+
+* **Yesterday / Last 7 days / Last 30 days / Custom** are finished IST days
+  ending yesterday at the latest ("Last 7 days" = the 7 days before today).
+  Custom: up to 366 days, end ≤ yesterday.
+* **Today** is a provisional live count of today's customer events by type,
+  labelled "so far today · provisional", on Overview and Funnel only. It is
+  never added to a finished-day figure and never compared. Breakdowns for today
+  say they arrive after the nightly run.
+* Days with no rollup are **unknown, not zero**: the view says how many days
+  are covered and where figures start; a range with none shows no numbers.
+* **Comparison** = the immediately preceding period of equal length (Yesterday
+  vs the day before; 7 vs previous 7; 30 vs previous 30; Custom likewise). Shown
+  only when that period is fully processed; previous 0 → "New", both 0 → "—",
+  never an infinite percentage. Direction is written in words (Up / Down).
+
+### 10.3 Shown, and deliberately not shown
+
+* Overview: page views, product views, searches, wishlist adds, cart adds (and
+  units), checkout starts, purchases (and units sold), WhatsApp clicks; a daily
+  trend with a table equivalent; a Data status panel (switch, final-figures-
+  through, last nightly run, reconciliation, retention, customer / staff / test
+  counts — the only place internal and test traffic appear).
+* Funnel: the §9.5 event funnel with "per 100" ratios, unclamped; "—" for a
+  zero denominator.
+* Products: views, wishlist adds, cart adds, purchases (orders), units sold,
+  cart adds per 100 views; category filter; optional zero-activity products;
+  renamed (current name), hidden / never-published (marked), deleted (stored
+  name, or "Deleted product (name not kept)" when deleted before its day was
+  rolled up — 0068's `on delete set null` removes the id from raw rows).
+* Traffic sources: by source (Unknown kept as its own line), campaigns
+  (utm_campaign rows only) and referring websites. AI assistants appear only
+  when observed. Purchases are not attributed to sources.
+* Geography: country and first-level region, approximate, Unknown kept; no
+  city. Visitor region, not delivery region.
+* Devices: mobile / desktop / tablet / unknown.
+* Search: top searches, searches that found nothing, and "% found nothing"
+  over searches whose result count was captured. "(redacted)" stays redacted.
+* **Not shown:** visitors, unique visitors, sessions, returning visitors,
+  bounce rate, journeys (a one-line "not enabled" note says so); conversion
+  rates; revenue, AOV, ROAS (revenue stays in Orders & stock; meaningful from
+  the live payment launch). While Razorpay is on test keys a note explains
+  that purchases read 0.

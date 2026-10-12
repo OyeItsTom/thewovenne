@@ -191,7 +191,7 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     id: "analytics",
     label: "Analytics",
     href: "/admin/dashboard/analytics",
-    blurb: "Revenue, best sellers and stock to watch",
+    blurb: "Shop activity, products, traffic sources and orders",
     icon: BarChart3,
   },
   {
