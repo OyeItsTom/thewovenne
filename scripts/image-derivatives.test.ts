@@ -19,15 +19,21 @@ process.env.NEXT_PUBLIC_SUPABASE_URL = "https://proj.supabase.co";
 const BASE = "https://proj.supabase.co/storage/v1/object/public/product-images/";
 
 import {
+  ACTIVE_TIERS,
   DERIVATIVE_RECIPE,
+  DERIVED_TIERS,
   derivedKey,
   imageFor,
   isDerivedKey,
   isSafeSourceKey,
   publicObjectUrl,
+  parseTiers,
   storageKeyFromPublicUrl,
   type ImageVariantMap,
 } from "../lib/imageVariants";
+
+/** Both tiers, for the checks written against the two-tier behaviour. */
+const BOTH = DERIVED_TIERS;
 import { attachImageVariants, keysForUrls, loadImageVariants, variantMapFromRows } from "../lib/imageVariantsRegistry";
 import { buildDerivative, makeAndStoreDerivatives, usesAlpha, MIN_SAVING } from "../lib/imageDerivatives";
 import { parseLimit, planBackfill, MAX_BATCH } from "../lib/imageDerivativeBackfill";
@@ -318,7 +324,7 @@ async function storeAndRegister() {
   const key = "products/abc123-v1.jpg";
 
   const w = fakeWorld();
-  const r1 = await makeAndStoreDerivatives(key, src, w.deps);
+  const r1 = await makeAndStoreDerivatives(key, src, w.deps, BOTH);
   check("both tiers ready → complete + registered", r1.status === "complete" && r1.registered, JSON.stringify(r1.tiers));
   check("two new objects under derived/", [...w.objects.keys()].every((k) => k.startsWith("derived/")) && w.objects.size === 2);
   check("uploads are upsert:false with a year's cache and robots all",
@@ -334,7 +340,7 @@ async function storeAndRegister() {
   check("master never uploaded or touched", w.uploads.every((u) => u.key !== key));
 
   // RETRY: same source again → duplicates proven by MD5, no new objects, same rows.
-  const r2 = await makeAndStoreDerivatives(key, src, w.deps);
+  const r2 = await makeAndStoreDerivatives(key, src, w.deps, BOTH);
   check("retry → complete, every tier a verified duplicate",
     r2.status === "complete" && r2.tiers.every((t) => t.status === "ready" && t.duplicate), JSON.stringify(r2.tiers));
   check("retry created no new objects", w.objects.size === 2);
@@ -342,35 +348,43 @@ async function storeAndRegister() {
 
   // An existing object that is NOT these bytes is never accepted.
   const bad = fakeWorld({ corruptExisting: "w1080" });
-  await makeAndStoreDerivatives(key, src, bad.deps); // first run creates (verification sees corrupt length → fails)
-  const r3 = await makeAndStoreDerivatives(key, src, bad.deps);
+  await makeAndStoreDerivatives(key, src, bad.deps, BOTH); // first run creates (verification sees corrupt length → fails)
+  const r3 = await makeAndStoreDerivatives(key, src, bad.deps, BOTH);
   const t1080 = r3.tiers.find((t) => t.tier === "w1080");
   check("mismatched existing object → that tier failed", t1080?.status === "failed", JSON.stringify(t1080));
   check("…and is not registered", !(bad.registryCalls.at(-1)?.rows as Record<string, unknown>[]).some((x) => x.tier === "w1080"));
 
   // One tier's upload failing never stops the other.
   const half = fakeWorld({ failUploadFor: "w1920" });
-  const r4 = await makeAndStoreDerivatives(key, src, half.deps);
+  const r4 = await makeAndStoreDerivatives(key, src, half.deps, BOTH);
   check("one upload fails → partial", r4.status === "partial");
   check("the good tier is still stored and registered",
     half.objects.size === 1 && (half.registryCalls[0].rows as Record<string, unknown>[]).map((x) => x.tier).join() === "w1080");
 
   // Registry failure is reported, not thrown; objects remain for the backfill to register.
   const noReg = fakeWorld({ registryError: 'relation "public.image_derivatives" does not exist' });
-  const r5 = await makeAndStoreDerivatives(key, src, noReg.deps);
+  const r5 = await makeAndStoreDerivatives(key, src, noReg.deps, BOTH);
   check("registry failure → registered:false with reason, objects kept",
     r5.status === "complete" && !r5.registered && /does not exist/.test(r5.registryError ?? "") && noReg.objects.size === 2);
 
   // Narrow source: nothing uploaded, but the decision is registered so it is never re-made.
   const nw = fakeWorld();
-  const r6 = await makeAndStoreDerivatives("products/small.jpg", await photo(800, 1000), nw.deps);
+  const r6 = await makeAndStoreDerivatives("products/small.jpg", await photo(800, 1000), nw.deps, BOTH);
   check("narrow source → complete, no uploads, not_needed rows",
     r6.status === "complete" && nw.uploads.length === 0 &&
     (nw.registryCalls[0].rows as Record<string, unknown>[]).every((x) => x.status === "not_needed" && x.derived_path === null));
 
+  // DEFAULT = ACTIVE_TIERS (w1080 only since 13 Oct): no w1920 is made or registered.
+  const def = fakeWorld();
+  const r8 = await makeAndStoreDerivatives(key, src, def.deps);
+  check("default tiers = ACTIVE_TIERS = w1080 only", ACTIVE_TIERS.join() === "w1080" && r8.tiers.map((t) => t.tier).join() === "w1080");
+  check("…one object, under its w1080 name", def.objects.size === 1 && [...def.objects.keys()][0].endsWith("-w1080-r1.jpg"));
+  check("…one registry row, w1080, ready",
+    (def.registryCalls[0].rows as Record<string, unknown>[]).map((x) => `${x.tier}:${x.status}`).join() === "w1080:ready");
+
   // An undecodable source fails cleanly, touching nothing.
   const junk = fakeWorld();
-  const r7 = await makeAndStoreDerivatives(key, Buffer.from("not an image"), junk.deps);
+  const r7 = await makeAndStoreDerivatives(key, Buffer.from("not an image"), junk.deps, BOTH);
   check("undecodable source → failed, nothing stored", r7.status === "failed" && junk.objects.size === 0);
 }
 
@@ -395,7 +409,7 @@ async function backfill() {
     // An OLD recipe's rows do not count as done.
     { source_path: "products/d-v1.jpg", tier: "w1080" as const, recipe: DERIVATIVE_RECIPE + 1, status: "ready" as const },
   ];
-  const plan = planBackfill({ referencedUrls: urls, objects, registry });
+  const plan = planBackfill({ tiers: BOTH, referencedUrls: urls, objects, registry });
   const by = Object.fromEntries(plan.items.map((i) => [i.sourceKey, i]));
   check("fully registered source → done (no download)", by["products/a-v1.jpg"].action === "done");
   check("half registered → build, only the missing tier", by["products/b-v1.jpg"].action === "build" && by["products/b-v1.jpg"].pendingTiers.join() === "w1920");
@@ -405,19 +419,32 @@ async function backfill() {
   check("foreign URL listed as unrecognised", plan.unrecognised.includes("https://placehold.co/600x800"));
   check("reference counts", by["products/a-v1.jpg"].references === 2);
   check("download estimate = selected sources", plan.downloadBytes === 4_000_000 + 2_000_000);
-  check("limit bounds the batch", planBackfill({ referencedUrls: urls, objects, registry, limit: 1 }).selected.length === 1);
-  check("--only narrows", planBackfill({ referencedUrls: urls, objects, registry, only: ["products/d-v1.jpg"] }).selected.map((i) => i.sourceKey).join() === "products/d-v1.jpg");
-  check("--only a done source selects nothing", planBackfill({ referencedUrls: urls, objects, registry, only: ["products/a-v1.jpg"] }).selected.length === 0);
-  check("--only an unknown source refuses", (await throws(() => planBackfill({ referencedUrls: urls, objects, registry, only: ["products/nope.jpg"] }))) !== "");
+  check("limit bounds the batch", planBackfill({ tiers: BOTH, referencedUrls: urls, objects, registry, limit: 1 }).selected.length === 1);
+  check("--only narrows", planBackfill({ tiers: BOTH, referencedUrls: urls, objects, registry, only: ["products/d-v1.jpg"] }).selected.map((i) => i.sourceKey).join() === "products/d-v1.jpg");
+  check("--only a done source selects nothing", planBackfill({ tiers: BOTH, referencedUrls: urls, objects, registry, only: ["products/a-v1.jpg"] }).selected.length === 0);
+  check("--only an unknown source refuses", (await throws(() => planBackfill({ tiers: BOTH, referencedUrls: urls, objects, registry, only: ["products/nope.jpg"] }))) !== "");
   check("parseLimit default 10", parseLimit(undefined) === 10);
   for (const bad of ["0", "-1", "1.5", "x", String(MAX_BATCH + 1)]) {
     check(`parseLimit refuses ${bad}`, (await throws(() => parseLimit(bad))) !== "");
+  }
+  // DEFAULT (ACTIVE_TIERS = w1080): w1920 is never pending, so a w1080-ready source is done.
+  const one = planBackfill({ referencedUrls: urls, objects, registry });
+  const byOne = Object.fromEntries(one.items.map((i) => [i.sourceKey, i]));
+  check("default plan: w1080 registered → done, no download for w1920", byOne["products/b-v1.jpg"].action === "done");
+  check("default plan: pending tiers never include w1920", one.items.every((i) => !i.pendingTiers.includes("w1920")));
+  check("default plan: unregistered source pends only w1080", byOne["products/d-v1.jpg"].pendingTiers.join() === "w1080");
+  check("explicit tiers: w1920 later picks up w1080-done sources",
+    planBackfill({ tiers: ["w1920"], referencedUrls: urls, objects, registry }).items.find((i) => i.sourceKey === "products/b-v1.jpg")?.action === "build");
+  check("parseTiers accepts w1080,w1920", parseTiers("w1080, w1920").join() === "w1080,w1920");
+  check("parseTiers de-duplicates", parseTiers("w1080,w1080").join() === "w1080");
+  for (const bad of ["", "w720", "1080", "w1080,x"]) {
+    check(`parseTiers refuses "${bad}"`, (await throws(() => parseTiers(bad))) !== "");
   }
   // Second run after everything is registered: nothing selected.
   const all = urls.filter((u) => u.includes("/products/") && !u.includes("gone") && !u.includes("heic"))
     .map((u) => u.replace(BASE, ""));
   const fullRegistry = [...new Set(all)].flatMap((k) => (["w1080", "w1920"] as const).map((tier) => ({ source_path: k, tier, recipe: DERIVATIVE_RECIPE, status: "ready" as const })));
-  check("resumed run with everything registered selects nothing", planBackfill({ referencedUrls: urls, objects, registry: fullRegistry }).selected.length === 0);
+  check("resumed run with everything registered selects nothing", planBackfill({ tiers: BOTH, referencedUrls: urls, objects, registry: fullRegistry }).selected.length === 0);
 }
 
 /* ───────────── cleanup tooling never deletes copies ───────────── */

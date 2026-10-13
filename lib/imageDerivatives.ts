@@ -5,7 +5,7 @@ import { verifyMasterDelivery } from "./imageDelivery";
 import { MASTER_CACHE_CONTROL, MAX_INPUT_PIXELS, masterUploadOptions } from "./imageNormalize";
 import {
   DERIVATIVE_RECIPE,
-  DERIVED_TIERS,
+  ACTIVE_TIERS,
   IMAGE_BUCKET,
   TIER_WIDTH,
   derivedKey,
@@ -174,7 +174,8 @@ export interface DerivativeDeps {
 }
 
 /**
- * Build, store, verify and register both tiers for one master.
+ * Build, store, verify and register the given tiers (by default ACTIVE_TIERS)
+ * for one master.
  *
  * NOTHING HERE TOUCHES THE MASTER. It is read (from the buffer the caller
  * already has) and never written, moved or deleted, whatever happens below.
@@ -191,7 +192,9 @@ export interface DerivativeDeps {
 export async function makeAndStoreDerivatives(
   sourceKey: string,
   source: Buffer,
-  deps: DerivativeDeps
+  deps: DerivativeDeps,
+  /** Which tiers to make. Defaults to the ones currently switched on (ACTIVE_TIERS). */
+  tiersToMake: readonly DerivedTier[] = ACTIVE_TIERS
 ): Promise<DerivativeReport> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   let hasRealAlpha: boolean;
@@ -200,13 +203,13 @@ export async function makeAndStoreDerivatives(
   } catch (error) {
     return {
       status: "failed",
-      tiers: DERIVED_TIERS.map((tier) => ({ tier, status: "failed" as const, reason: describe(error) })),
+      tiers: tiersToMake.map((tier) => ({ tier, status: "failed" as const, reason: describe(error) })),
       registered: false,
     };
   }
 
   const tiers: TierOutcome[] = [];
-  for (const tier of DERIVED_TIERS) {
+  for (const tier of tiersToMake) {
     tiers.push(await oneTier(sourceKey, source, tier, hasRealAlpha, deps, fetchImpl));
   }
 

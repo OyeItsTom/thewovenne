@@ -19,6 +19,8 @@ A derivative is a smaller copy of a master, made once and stored under a **new n
 | `w1080` | 1080 px | product cards, gallery thumbnails | 534 KB (−83%) |
 | `w1920` | 1920 px | PDP gallery frame, zoom viewer, JSON-LD, og:image | 1,725 KB (−46%) |
 
+**Only `w1080` is made for now** (owner decision, 13 Oct 2026). `ACTIVE_TIERS` in `lib/imageVariants.ts` lists the tiers that uploads and the backfill make. The storefront reads every tier, so until `w1920` exists the PDP frame, zoom, JSON-LD and og:image keep using the master, exactly as before. The reason is storage: on the Free plan's 1 GB, `w1080` costs about 73 MB for the whole catalogue, and `w1920` would add about 200 MB more. Turn `w1920` on only after watching cached egress with `w1080` live: add it to `ACTIVE_TIERS` and run the backfill with `--tiers w1920`.
+
 - **Recipe:** JPEG q88, 4:4:4, progressive, tagged sRGB, rotation baked in. A photograph with real transparency gets lossy WebP with alpha instead.
 - **How the recipe was chosen:** measurements are in `lib/imageDerivatives.ts`. Every candidate differs from the master by less than the optimizer's own WebP q75 loss.
 - **The master is unchanged.** It is the archival copy and the fallback. The cart, orders, emails, chat and Admin keep naming it.
@@ -49,7 +51,7 @@ products/<stem>.<ext>  →  derived/<folder>-<stem>-w1080-r<recipe>.jpg
 
 ## How copies are made
 
-**New uploads.** `app/api/admin/images/normalize` makes both tiers from the master bytes already in memory, after the master is proven readable and before the staged original is removed. It uses the admin's own session, never the service role.
+**New uploads.** `app/api/admin/images/normalize` makes the active tiers (`ACTIVE_TIERS`) from the master bytes already in memory, after the master is proven readable and before the staged original is removed. It uses the admin's own session, never the service role.
 
 - Each tier is uploaded, then proven by a one-byte ranged GET against its MD5, then registered `ON CONFLICT DO NOTHING`.
 - An existing object counts as success only when it is proven to be the same bytes.
@@ -64,11 +66,13 @@ npx tsx --env-file=.env.local scripts/image-derivatives-backfill.ts
 npx tsx --env-file=.env.local scripts/image-derivatives-backfill.ts --execute --limit 10
 # one photograph
 npx tsx --env-file=.env.local scripts/image-derivatives-backfill.ts --execute --only products/<key>
+# a specific tier (default: ACTIVE_TIERS)
+npx tsx --env-file=.env.local scripts/image-derivatives-backfill.ts --execute --limit 10 --tiers w1920
 ```
 
 - **Planning reads facts only.** It reads product rows, `storage.objects` and the registry over a read-only transaction.
 - **Each source is downloaded once,** through the service role's authenticated object route, then processed exactly like an upload.
-- **It is resumable.** Registered sources are skipped without a download.
+- **It is resumable.** A source whose requested tiers are all registered is skipped without a download.
 - **Every outcome is logged** to `reports/image-derivatives/ledger.ndjson`, which is git-ignored.
 - `--objects-only` makes and verifies objects without registering them, for use before 0071 exists.
 

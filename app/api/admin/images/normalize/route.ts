@@ -274,7 +274,8 @@ export async function POST(request: NextRequest) {
    * touched, and a tier that failed is simply not registered, so the storefront
    * keeps using the master for it until the backfill's next run fills it in.
    * The outcome goes back in the response and the log, so a partial result is
-   * visible rather than swallowed.
+   * visible rather than swallowed. Only the switched-on tiers are made
+   * (ACTIVE_TIERS in lib/imageVariants — w1080 only until w1920 is approved).
    */
   let derivatives: DerivativeReport;
   try {
