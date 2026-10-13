@@ -197,11 +197,14 @@ for (const route of [
     src.includes("imageAlt: (cover?.url === product.image_url ? cover?.alt : null) ?? product.name,"));
   ok(
     `${route}: og:image selection is untouched`,
-    src.includes('images: [product.image_url ? productImageUrl(product.image_url, "openGraph") : null],')
+    // Still the cover through the helper; the only addition is the registered
+    // delivery copy (lib/imageVariants), which is the master when none exists.
+    /images:\s*\[\s*product\.image_url\s*\?\s*productImageUrl\(imageFor\(product\.image_url, "detail", product\.imageVariants\), "openGraph"\)\s*:\s*null,?\s*\]/.test(src)
   );
 }
 ok("the gallery is still given the product name, plus each photo's written alt",
-  fs.readFileSync("components/product/ProductDetail.tsx", "utf8").includes("<ImageGallery images={urls} alts={images.map((i) => i.alt)} alt={product.name} />"));
+  /<ImageGallery\s+images=\{urls\}\s+alts=\{images\.map\(\(i\) => i\.alt\)\}\s+alt=\{product\.name\}\s+variants=\{product\.imageVariants\}\s*\/>/.test(
+    fs.readFileSync("components/product/ProductDetail.tsx", "utf8")));
 check("a written alt replaces the fallback, as written", productImageAlt(NAME, 1, 4, " Close-up of the border "), "Close-up of the border");
 check("a blank written alt is no alt: the fallback stands", productImageAlt(NAME, 1, 4, "  "), `${NAME} — image 2 of 4`);
 

@@ -375,6 +375,16 @@ fakeRsc.exports = {
       return { data: fn === "is_admin" ? scenario.isAdmin ?? true : null, error: null };
     },
     storage: new StorageClient(`${BASE}/storage/v1`, {}, storageServer),
+    // The derivative registry (0071), present as it will be in production. The
+    // route registers its delivery copies here after the master is proven; a
+    // clean upload must still log nothing. lib/imageDerivatives' own suite
+    // covers the registry failing.
+    from: (table: string) => ({
+      upsert: async () => {
+        calls.push({ method: "REGISTRY", path: table, headers: new Headers() });
+        return { error: null };
+      },
+    }),
   }),
 };
 require.cache[rscPath] = fakeRsc;

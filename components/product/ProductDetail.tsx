@@ -24,6 +24,7 @@ import { stockNote, stockState } from "@/lib/stock";
 import JsonLd from "@/components/seo/JsonLd";
 import AnalyticsBeacon from "@/components/analytics/AnalyticsBeacon";
 import { productImageUrl } from "@/lib/seo";
+import { imageFor } from "@/lib/imageVariants";
 import { careFor } from "@/lib/care";
 import { getPageBySlug } from "@/lib/pages";
 import { POLICY_PAGES, policySummary, type PolicySummary } from "@/lib/policySummary";
@@ -146,7 +147,9 @@ export default async function ProductDetail({
           // First-party optimizer URLs, not the raw storage ones Supabase marks
           // noindex. Order and count unchanged; the gallery below keeps the
           // stored URLs. See productImageUrl in lib/seo.
-          images: urls.map((src) => productImageUrl(src, "jsonLd")),
+          // The same file the gallery frame shows (its registered 1920 copy,
+          // else the master), so the markup still names what the page renders.
+          images: urls.map((src) => productImageUrl(imageFor(src, "detail", product.imageVariants), "jsonLd")),
           description: product.description,
           // The same column the Product details fabric row renders, so
           // the markup and the page cannot name two different materials.
@@ -196,7 +199,12 @@ export default async function ProductDetail({
           of it was pushing the price off the first screen. On two columns from
           lg: up it is horizontal breathing room and keeps its original 16. */}
       <div className="grid gap-8 sm:gap-12 lg:grid-cols-2 lg:gap-16">
-        <ImageGallery images={urls} alts={images.map((i) => i.alt)} alt={product.name} />
+        <ImageGallery
+          images={urls}
+          alts={images.map((i) => i.alt)}
+          alt={product.name}
+          variants={product.imageVariants}
+        />
 
         {/* STICKY ON DESKTOP, and it needs BOTH of these elements to work. A
             gallery is tall and a buy panel is short: without this, a piece with

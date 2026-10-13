@@ -89,6 +89,16 @@ export interface NormalizedImage {
    * yet; the route logs it.
    */
   delivery?: MasterDelivery;
+  /**
+   * The delivery-sized copies made from this master (lib/imageDerivatives).
+   * Anything but complete + registered means the shop will serve the master
+   * for this photo until the backfill fills the gap; the upload itself stands.
+   */
+  derivatives?: {
+    status: "complete" | "partial" | "failed";
+    registered: boolean;
+    tiers: { tier: string; status: string }[];
+  };
 }
 
 export async function uploadProductImage(file: File): Promise<NormalizedImage> {

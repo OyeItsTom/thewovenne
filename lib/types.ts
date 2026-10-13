@@ -1,3 +1,4 @@
+import type { ImageVariantMap } from "./imageVariants";
 import type { ProductProfile } from "./productInfo";
 
 // A catalogue category. Two levels: parents (Men/Women, parent_id = null) and
@@ -112,6 +113,13 @@ export interface Product {
    * shows no image navigation at all.
    */
   images?: string[];
+  /**
+   * Delivery-sized copies of this product's own photographs, keyed by master
+   * URL (lib/imageVariants, 0071). Absent until a photograph has registered
+   * derivatives — every surface then uses the master, as it always has. Ask
+   * imageFor(); never read this directly.
+   */
+  imageVariants?: ImageVariantMap;
   /** Admin only: where this product stands (lib/adminStatus). Never on a storefront payload. */
   publication?: PublicationFacts;
 }
@@ -152,6 +160,7 @@ export type ProductListing = Pick<
   | "discount_starts_at"
   | "discount_ends_at"
   | "images"
+  | "imageVariants"
 >;
 
 /**

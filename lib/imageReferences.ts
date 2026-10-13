@@ -217,6 +217,12 @@ export type Classification =
   | "REFERENCED_SHARED_SOURCE"
   | "REFERENCED_NON_PRODUCT_ASSET"
   | "ALREADY_NORMALIZED"
+  /**
+   * A delivery-sized copy under derived/ (lib/imageVariants, 0071). Nothing in
+   * the product tables names it — the derivative registry does — so reference
+   * counting would call it an orphan. It never is, and is never deletable here.
+   */
+  | "DERIVED_DELIVERY_COPY"
   | "CONFIRMED_ZERO_REFERENCE"
   | "HISTORICAL_REFERENCE_ONLY"
   | "RECENT_ZERO_REFERENCE"
@@ -256,6 +262,7 @@ export function classifyObject(input: {
   if (/\.hei[cf]$/i.test(key) || (object.mime ?? "").toLowerCase().includes("hei")) {
     return "HEIC_REVIEW";
   }
+  if (key.startsWith("derived/")) return "DERIVED_DELIVERY_COPY";
   if (/-v\d+\.(jpg|webp)$/i.test(key)) return "ALREADY_NORMALIZED";
   if (key.startsWith("staging/")) {
     // Staging is transient by design; it is never a backfill source, and the

@@ -396,7 +396,9 @@ check("zooming changes a transform, nothing else",
   viewer.includes("transform: `translate3d(") && !/toggleZoomAt[\s\S]{0,400}setDetail/.test(viewer));
 check("the detail request is still keyed to the image, not the zoom",
   viewer.includes("const detailReady = detail?.src === src;"));
-check("still exactly two image layers", (viewer.match(/<Image/g) ?? []).length === 2);
+// The layers render through DeliveryImage (lib/imageVariants), which is
+// next/image pointed at the registered copy — still exactly two of them.
+check("still exactly two image layers", (viewer.match(/<(?:Delivery)?Image\s/g) ?? []).length === 2);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

@@ -11,6 +11,7 @@ import { productHref } from "@/lib/urls";
 import { productSeo } from "@/lib/metadata";
 import ProductDetail from "@/components/product/ProductDetail";
 import { openGraph, productImageUrl } from "@/lib/seo";
+import { imageFor } from "@/lib/imageVariants";
 
 /**
  * The old flat product URL.
@@ -74,7 +75,11 @@ export async function generateMetadata({
       title: seo.heading,
       description: seo.description,
       path: productHref(product),
-      images: [product.image_url ? productImageUrl(product.image_url, "openGraph") : null],
+      images: [
+        product.image_url
+          ? productImageUrl(imageFor(product.image_url, "detail", product.imageVariants), "openGraph")
+          : null,
+      ],
       imageAlt: (cover?.url === product.image_url ? cover?.alt : null) ?? product.name,
     }),
   };

@@ -82,9 +82,14 @@ export type ProductImageVariant = keyof typeof PRODUCT_IMAGE_VARIANTS;
  * name and an image extension — nothing encoded, nothing nested, no query.
  * Journal images share the bucket but live under journal/, and are not ours to
  * rewrite here.
+ *
+ * ALSO a product photograph's delivery copy under derived/ (lib/imageVariants):
+ * the JSON-LD and og:image name the same file the page renders, and once a
+ * 1920 copy is registered that file is the copy. Only the exact derived name
+ * shape is accepted — the same one lib/imageVariants builds and 0071 checks.
  */
 const PRODUCT_IMAGE_PATH =
-  /^\/storage\/v1\/object\/public\/product-images\/products\/[A-Za-z0-9][A-Za-z0-9_-]*\.(?:jpe?g|png|webp)$/;
+  /^\/storage\/v1\/object\/public\/product-images\/(?:products\/[A-Za-z0-9][A-Za-z0-9_-]*\.(?:jpe?g|png|webp)|derived\/[A-Za-z0-9][A-Za-z0-9_-]*-w(?:1080|1920)-r\d+\.(?:jpg|webp))$/;
 
 /**
  * A journal article's cover: the same bucket and the same rules, under
