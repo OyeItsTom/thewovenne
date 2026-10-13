@@ -45,6 +45,33 @@ export type ImageUse = "card" | "detail";
 
 export const DERIVED_TIERS: readonly DerivedTier[] = ["w1080", "w1920"] as const;
 
+/**
+ * The tiers that are MADE — by the admin upload route and, by default, the
+ * backfill. Every tier is still READ: imageFor() uses whatever the registry
+ * says is ready, so turning a tier on later needs no storefront change.
+ *
+ * w1080 only, by owner decision (13 Oct 2026). Cards and thumbnails carry
+ * most of the optimizer's origin traffic, and w1080 is the bulk of the saving
+ * for ~73 MB of storage; w1920 would add ~200 MB more against the Free plan's
+ * 1 GB. PDP, gallery frame and zoom keep using the master until w1920 is
+ * separately approved — then add it here and run the backfill with
+ * `--tiers w1920`.
+ */
+export const ACTIVE_TIERS: readonly DerivedTier[] = ["w1080"] as const;
+
+/** Parse a comma-separated tier list (`w1080,w1920`). Throws on anything else. */
+export function parseTiers(raw: string): DerivedTier[] {
+  const out: DerivedTier[] = [];
+  for (const part of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
+    if (!(DERIVED_TIERS as readonly string[]).includes(part)) {
+      throw new Error(`unknown tier "${part}" — expected ${DERIVED_TIERS.join(" or ")}`);
+    }
+    if (!out.includes(part as DerivedTier)) out.push(part as DerivedTier);
+  }
+  if (out.length === 0) throw new Error("no tier given");
+  return out;
+}
+
 /** Pixel width of each derivative. */
 export const TIER_WIDTH: Record<DerivedTier, number> = { w1080: 1080, w1920: 1920 };
 

@@ -4,12 +4,16 @@
  *   # What would happen (the default — reads only, uploads nothing):
  *   npx tsx --env-file=.env.local scripts/image-derivatives-backfill.ts
  *
- *   # Do one batch (default 10, max 50):
+ *   # Do one batch (default 10, max 50) of the ACTIVE tiers (lib/imageVariants;
+ *   # w1080 only since 13 Oct 2026):
  *   npx tsx --env-file=.env.local scripts/image-derivatives-backfill.ts --execute --limit 10
  *
  *   # Exactly one photograph:
  *   npx tsx --env-file=.env.local scripts/image-derivatives-backfill.ts --execute \
  *     --only products/abc-v1.jpg
+ *
+ *   # Choose tiers explicitly (e.g. once w1920 is approved):
+ *   ... --execute --limit 10 --tiers w1920
  *
  *   # Before 0071 is applied: make and verify the objects, register nothing.
  *   ... --execute --only products/abc-v1.jpg --objects-only
@@ -23,7 +27,7 @@
  * SQL in a READ ONLY transaction. No image is fetched to plan.
  *
  * WHAT IT DOES PER PHOTOGRAPH, with --execute. Downloads the source ONCE, with
- * the service role through the authenticated object route, builds both tiers
+ * the service role through the authenticated object route, builds the requested tiers
  * (lib/imageDerivatives — the same code the admin upload route runs), uploads
  * each under its new derived/ name with upsert:false, proves each by a one-byte
  * ranged GET against its MD5, and inserts the registry rows ON CONFLICT DO
@@ -42,7 +46,7 @@ import { basename, join } from "node:path";
 import { createRequire } from "node:module";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { makeAndStoreDerivatives } from "../lib/imageDerivatives";
-import { IMAGE_BUCKET } from "../lib/imageVariants";
+import { ACTIVE_TIERS, IMAGE_BUCKET, parseTiers, type DerivedTier } from "../lib/imageVariants";
 import {
   parseLimit,
   planBackfill,
@@ -70,6 +74,7 @@ function parseArgs(argv: string[]) {
     only: [] as string[],
     limit: undefined as string | undefined,
     keepSource: undefined as string | undefined,
+    tiers: ACTIVE_TIERS as readonly DerivedTier[],
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -79,6 +84,7 @@ function parseArgs(argv: string[]) {
     else if (a === "--only") args.only.push(argv[++i] ?? "");
     else if (a === "--limit") args.limit = argv[++i];
     else if (a === "--keep-source") args.keepSource = argv[++i];
+    else if (a === "--tiers") args.tiers = parseTiers(argv[++i] ?? "");
     else throw new Error(`Unknown argument: ${a}`);
   }
   return { ...args, limitN: parseLimit(args.limit) };
@@ -134,8 +140,10 @@ async function main() {
     registry: facts.registry,
     only: args.only,
     limit: args.limitN,
+    tiers: args.tiers,
   });
 
+  console.log(`tiers: ${args.tiers.join(", ")}`);
   console.log(`registry: ${facts.hasRegistry ? `present (${facts.registry.length} rows)` : "ABSENT — 0071 not applied"}`);
   console.log(
     `sources: ${plan.items.length} referenced — done ${plan.counts.done}, to build ${plan.counts.build}, ` +
@@ -184,7 +192,12 @@ async function main() {
       writeFileSync(join(args.keepSource, basename(item.sourceKey)), source);
     }
 
-    const report = await makeAndStoreDerivatives(item.sourceKey, source, { storage: service, registry, supabaseUrl });
+    const report = await makeAndStoreDerivatives(
+      item.sourceKey,
+      source,
+      { storage: service, registry, supabaseUrl },
+      item.pendingTiers
+    );
     for (const t of report.tiers) if (t.status === "ready" && !t.duplicate) uploaded += t.bytes;
     if (report.status !== "complete" || (!report.registered && !args.objectsOnly)) problems += 1;
 

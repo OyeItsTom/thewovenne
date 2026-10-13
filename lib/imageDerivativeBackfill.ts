@@ -1,6 +1,6 @@
 import {
+  ACTIVE_TIERS,
   DERIVATIVE_RECIPE,
-  DERIVED_TIERS,
   storageKeyFromPublicUrl,
   type DerivedTier,
 } from "./imageVariants";
@@ -30,9 +30,9 @@ export interface RegistryEntry {
 }
 
 export type PlanAction =
-  /** Both tiers already have a row for this recipe. Nothing to do. */
+  /** Every requested tier already has a row for this recipe. Nothing to do. */
   | "done"
-  /** At least one tier has no row: download the source once, build, store, register. */
+  /** At least one requested tier has no row: download the source once, build, store, register. */
   | "build"
   /** Referenced, but the object is not in the bucket. Reported, never guessed at. */
   | "missing_source"
@@ -43,7 +43,7 @@ export interface PlanItem {
   sourceKey: string;
   action: PlanAction;
   bytes: number | null;
-  /** Tiers with no registry row for the current recipe. */
+  /** Requested tiers with no registry row for the current recipe. */
   pendingTiers: DerivedTier[];
   /** How many stored URLs name this source (live product rows). */
   references: number;
@@ -79,7 +79,10 @@ export function planBackfill(input: {
   only?: readonly string[];
   limit?: number;
   supabaseUrl?: string;
+  /** Tiers this run makes. Defaults to ACTIVE_TIERS; a tier not asked for is never pending. */
+  tiers?: readonly DerivedTier[];
 }): Plan {
+  const wantedTiers = input.tiers ?? ACTIVE_TIERS;
   const refs = new Map<string, number>();
   const unrecognised: string[] = [];
   for (const url of input.referencedUrls) {
@@ -101,7 +104,7 @@ export function planBackfill(input: {
   const items: PlanItem[] = [...refs.keys()].sort().map((sourceKey) => {
     const object = objects.get(sourceKey);
     const done = registered.get(sourceKey) ?? new Set<DerivedTier>();
-    const pendingTiers = DERIVED_TIERS.filter((t) => !done.has(t));
+    const pendingTiers = wantedTiers.filter((t) => !done.has(t));
     let action: PlanAction;
     if (!object) action = "missing_source";
     else if (/\.hei[cf]$/i.test(sourceKey) || (object.mime ?? "").toLowerCase().includes("hei")) action = "unsupported";
