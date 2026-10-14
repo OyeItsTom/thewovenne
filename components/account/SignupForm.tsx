@@ -8,7 +8,9 @@ import Button from "@/components/ui/Button";
 import AuthShell from "./AuthShell";
 import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
+import { GoogleSignInBlock } from "./GoogleSignInButton";
 import { signUp, passwordProblem } from "@/lib/customerAuth";
+import { safeNext } from "@/lib/safeRedirect";
 
 export default function SignupForm({ from }: { from?: string | null }) {
   const router = useRouter();
@@ -52,10 +54,9 @@ export default function SignupForm({ from }: { from?: string | null }) {
     }
     // Only relative paths are carried forward. An absolute URL here would make
     // this an open redirect that a phishing link could point anywhere.
-    const onward =
-      from && from.startsWith("/") && !from.startsWith("//")
-        ? `&from=${encodeURIComponent(from)}`
-        : "";
+    // safeNext also refuses `/\host`, which browsers read as `//host`.
+    const safe = safeNext(from, "");
+    const onward = safe ? `&from=${encodeURIComponent(safe)}` : "";
     router.push(
       `/in/verify?email=${encodeURIComponent(form.email.trim().toLowerCase())}${onward}`
     );
@@ -69,12 +70,20 @@ export default function SignupForm({ from }: { from?: string | null }) {
       footer={
         <>
           Already have one?{" "}
-          <Link href="/in/login" className="text-terracotta hover:underline">
+          <Link
+            href={safeNext(from, "") ? `/in/login?from=${encodeURIComponent(safeNext(from))}` : "/in/login"}
+            className="text-terracotta hover:underline"
+          >
             Log in
           </Link>
         </>
       }
     >
+      {/* Marketing is NOT implied by Google: a Google account starts opted out
+          and can opt in from account settings. The terms line is part of the
+          button, because the login page creates accounts this way too. */}
+      <GoogleSignInBlock from={from} />
+
       <form onSubmit={submit} className="space-y-5">
         {error && <AuthMessage tone="error">{error}</AuthMessage>}
 

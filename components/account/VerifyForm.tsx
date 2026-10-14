@@ -9,6 +9,7 @@ import AuthShell from "./AuthShell";
 import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
 import { verifySignupCode, resendSignupCode, AFTER_LOGIN } from "@/lib/customerAuth";
+import { safeNext } from "@/lib/safeRedirect";
 import { VERIFY_COPY, VERIFY_RESET_HREF, verifyLoginHref } from "@/lib/signupVerifyCopy";
 
 /**
@@ -56,8 +57,7 @@ export default function VerifyForm({
     // verifyOtp signs the customer in, so go straight where they were headed —
     // the checkout, if that is where they started. Relative paths only: an
     // absolute one would make this an open redirect.
-    const onward =
-      from && from.startsWith("/") && !from.startsWith("//") ? from : AFTER_LOGIN;
+    const onward = safeNext(from, AFTER_LOGIN);
     router.push(onward);
     router.refresh();
   }

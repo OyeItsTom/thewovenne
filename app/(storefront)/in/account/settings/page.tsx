@@ -26,6 +26,19 @@ export const dynamic = "force-dynamic";
  * (password, address, what we may send them), then the loyalty panel, then
  * deletion last and visually separated.
  */
+/**
+ * Whether this account has a password at all. A customer who joined with Google
+ * has only a Google identity, and a "current password" field would be one they
+ * can never fill in. Read from the identities Supabase validated in getUser(),
+ * so it reflects the account, not anything the browser sent.
+ */
+function signsInWithPassword(user: { identities?: { provider: string }[] | null }): boolean {
+  // No identities listed is treated as password-capable: the panel then works
+  // exactly as it always has.
+  if (!user.identities || user.identities.length === 0) return true;
+  return user.identities.some((i) => i.provider === "email");
+}
+
 export default async function SettingsPage() {
   const supabase = createRSCClient();
   const {
@@ -85,7 +98,10 @@ export default async function SettingsPage() {
         </p>
       </div>
 
-      <ChangePassword />
+      <ChangePassword
+        hasPassword={user ? signsInWithPassword(user) : true}
+        email={user?.email ?? ""}
+      />
 
       <DeliveryAddress address={addressForForm} phone={phoneForForm} />
 

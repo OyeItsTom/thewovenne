@@ -7,6 +7,7 @@ import { passwordProblem, setNewPassword } from "@/lib/customerAuth";
 import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
 import Button from "@/components/ui/Button";
+import Link from "next/link";
 
 /**
  * Change the password, current one required.
@@ -16,13 +17,42 @@ import Button from "@/components/ui/Button";
  * re-verified here by signing in with it first. Without that, anyone who found
  * a logged-in browser could lock the owner out of their own account.
  */
-export default function ChangePassword() {
+export default function ChangePassword({
+  hasPassword = true,
+  email = "",
+}: {
+  /** False for an account that signs in with Google only. */
+  hasPassword?: boolean;
+  email?: string;
+}) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // A Google-only account has no current password to confirm. Adding one goes
+  // through the emailed reset link, which proves the inbox is theirs — the
+  // same proof Google gave — rather than through an open session alone.
+  if (!hasPassword) {
+    return (
+      <section className="rounded-2xl border border-ink/10 bg-cream p-6">
+        <h2 className="font-heading text-xl text-ink">Password</h2>
+        <p className="mt-3 text-sm leading-relaxed text-ink/70">
+          You sign in with Google{email ? <> as <span className="text-ink">{email}</span></> : null}.
+          There&apos;s no password on this account.
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-ink/60">
+          Want one as well?{" "}
+          <Link href="/in/forgot-password" className="text-terracotta underline underline-offset-2">
+            Request a link to set a password
+          </Link>{" "}
+          and we&apos;ll email it to you.
+        </p>
+      </section>
+    );
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
