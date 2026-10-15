@@ -254,6 +254,32 @@ const qs = (o: Record<string, string>) => new URLSearchParams(o);
   const gate = read("components/cart/CheckoutGate.tsx");
   t("guest checkout still offered first", /Continue as guest/.test(gate) && gate.indexOf("Continue as guest") < gate.indexOf("Create an account"));
 
+  // ── 4. Settings → Password, by sign-in method ──
+  console.log("\nSettings password panel");
+  const { signsInWithPassword } = await import("../lib/signInMethods");
+  const ids = (...p: string[]) => ({ identities: p.map((provider) => ({ provider })) });
+  t("Google only → no password (set-a-password panel)", signsInWithPassword(ids("google")) === false);
+  t("email only → password form", signsInWithPassword(ids("email")) === true);
+  t("email + Google (linked) → password form kept", signsInWithPassword(ids("email", "google")) === true);
+  t("Google + email in either order → password form", signsInWithPassword(ids("google", "email")) === true);
+  t("no identities listed → password form, as before", signsInWithPassword({ identities: [] }) === true && signsInWithPassword({}) === true);
+  t("an email address alone never implies a password", signsInWithPassword({ ...ids("google"), email: "a@b.c", email_confirmed_at: "x" } as never) === false);
+
+  const settings = code(read("app/(storefront)/in/account/settings/page.tsx"));
+  t("Settings decides from getUser() identities via signsInWithPassword", /auth\.getUser\(\)/.test(settings) && /hasPassword=\{user \? signsInWithPassword\(user\) : true\}/.test(settings));
+
+  const cp = code(read("components/account/ChangePassword.tsx"));
+  const googleOnly = cp.slice(cp.indexOf("function SetPasswordByEmail"));
+  const passwordForm = cp.slice(cp.indexOf("export default function ChangePassword"), cp.indexOf("function SetPasswordByEmail"));
+  t("Google-only branch renders the set-a-password panel before any form", /if \(!hasPassword\) return <SetPasswordByEmail email=\{email\} \/>/.test(passwordForm));
+  t("Google-only panel has no Current password field", !/Current password|current-password|<AuthField/.test(googleOnly));
+  t("Google-only panel: the spec wording", /You currently sign in with Google\./.test(googleOnly) && /Want to also sign in with email and password\?/.test(googleOnly));
+  t("Google-only panel: exactly one action, \"Set a password\"", (googleOnly.match(/<Button\b/g) ?? []).length === 1 && /"Set a password"/.test(googleOnly) && !/<Link\b|<a\b|forgot-password/.test(googleOnly));
+  t("Set a password uses Supabase's emailed recovery (requestPasswordReset), no shortcut", /requestPasswordReset\(email\)/.test(googleOnly) && !/updateUser|setNewPassword/.test(googleOnly));
+  t("password form keeps Current / New / Confirm and re-verifies the current one", ["Current password", "New password", "Confirm new password"].every((l) => passwordForm.includes(`label="${l}"`)) && /signInWithPassword\(/.test(passwordForm));
+  const ca = read("lib/customerAuth.ts");
+  t("recovery link returns to this site's /reset-password page only", /resetPasswordForEmail\([\s\S]*redirectTo: `\$\{window\.location\.origin\}\$\{cPath\("\/reset-password"\)\}`/.test(ca));
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
