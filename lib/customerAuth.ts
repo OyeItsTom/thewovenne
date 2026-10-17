@@ -62,9 +62,22 @@ export function friendlyAuthError(message: string): string {
     return "That code has expired. Ask for a new one below.";
   if (m.includes("invalid token") || m.includes("token not found"))
     return "That code isn't right. Check it and try again.";
+  // Supabase's cooldown between two links to one address: "For security
+  // purposes, you can only request this after 52 seconds." Now that Settings
+  // sends a link with one click, a second click is the likely way to hit it.
+  if (m.includes("for security purposes") && m.includes("only request this after"))
+    return "We've just sent a link. Please wait a minute before asking for another.";
   if (m.includes("rate limit") || m.includes("too many"))
     return "Too many attempts just now. Please wait a few minutes and try again.";
-  if (m.includes("password should be") || m.includes("password must"))
+  // Supabase refuses the password the account already has (code same_password):
+  // "New password should be different from the old password." That contains
+  // "password should be", so it must be caught before the length message below,
+  // which it used to fall into — telling someone who typed a perfectly long
+  // password that it was too short.
+  if (m.includes("should be different from the old password"))
+    return "That's the password you already have. Please choose a different one.";
+  // The length rule: "Password should be at least 8 characters."
+  if (m.includes("password should be at least") || m.includes("password must be at least"))
     return "Please choose a password of at least 8 characters.";
   if (m.includes("weak password"))
     return "That password is too easy to guess. Try a longer one.";

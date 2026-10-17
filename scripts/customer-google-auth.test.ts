@@ -16,6 +16,11 @@
  *      fields; the admin login has no Google path; the callback is under /api
  *      so the country redirect cannot drop the code; analytics gets no auth
  *      identifiers.
+ *   4. Settings → Password: no password field for any account; one button that
+ *      emails Supabase's recovery link; account_has_password picks only the
+ *      words ("Change password" / "Set a password").
+ *   5. /in/reset-password opens its form only for a session made by that link
+ *      (amr `recovery`, within the hour); any other session is sent for a link.
  *
  * Exits non-zero on failure.
  */
@@ -258,13 +263,13 @@ const qs = (o: Record<string, string>) => new URLSearchParams(o);
   console.log("\nSettings password panel");
   const { hasPasswordFrom } = await import("../lib/signInMethods");
   const rpc = (data: unknown, error: unknown = null) => hasPasswordFrom({ data, error });
-  t("Google-only, no password (rpc false) → Set a password panel", rpc(false) === false);
-  t("Google-only AFTER setting a password (rpc true) → normal form", rpc(true) === true);
-  t("password-only account (rpc true) → normal form", rpc(true) === true);
-  t("Google + password account (rpc true) → normal form", rpc(true) === true);
-  t("unknown (rpc NULL: no live session) → normal form, never a false \"no password\"", rpc(null) === true);
-  t("rpc error (e.g. before 0072 is applied) → normal form", rpc(null, { message: "x" }) === true && rpc(false, { message: "x" }) === true);
-  t("anything but an exact false → normal form", [undefined, 0, "", "false", {}].every((v) => rpc(v) === true));
+  t("Google-only, no password (rpc false) → \"Set a password\"", rpc(false) === false);
+  t("Google-only AFTER setting a password (rpc true) → \"Change password\"", rpc(true) === true);
+  t("password-only account (rpc true) → \"Change password\"", rpc(true) === true);
+  t("Google + password account (rpc true) → \"Change password\"", rpc(true) === true);
+  t("unknown (rpc NULL: no live session) → \"Change password\", never a false \"no password\"", rpc(null) === true);
+  t("rpc error (e.g. before 0072 is applied) → \"Change password\"", rpc(null, { message: "x" }) === true && rpc(false, { message: "x" }) === true);
+  t("anything but an exact false → \"Change password\"", [undefined, 0, "", "false", {}].every((v) => rpc(v) === true));
 
   const settings = code(read("app/(storefront)/in/account/settings/page.tsx"));
   t("Settings asks the database (account_has_password), not the identities list",
@@ -277,16 +282,59 @@ const qs = (o: Record<string, string>) => new URLSearchParams(o);
     /revoke execute on function public\.account_has_password\(\) from public, anon;/.test(sql) && /grant execute on function public\.account_has_password\(\) to authenticated;/.test(sql));
 
   const cp = code(read("components/account/ChangePassword.tsx"));
-  const googleOnly = cp.slice(cp.indexOf("function SetPasswordByEmail"));
-  const passwordForm = cp.slice(cp.indexOf("export default function ChangePassword"), cp.indexOf("function SetPasswordByEmail"));
-  t("Google-only branch renders the set-a-password panel before any form", /if \(!hasPassword\) return <SetPasswordByEmail email=\{email\} \/>/.test(passwordForm));
-  t("Google-only panel has no Current password field", !/Current password|current-password|<AuthField/.test(googleOnly));
-  t("Google-only panel: the spec wording", /You currently sign in with Google\./.test(googleOnly) && /Want to also sign in with email and password\?/.test(googleOnly));
-  t("Google-only panel: exactly one action, \"Set a password\"", (googleOnly.match(/<Button\b/g) ?? []).length === 1 && /"Set a password"/.test(googleOnly) && !/<Link\b|<a\b|forgot-password/.test(googleOnly));
-  t("Set a password uses Supabase's emailed recovery (requestPasswordReset), no shortcut", /requestPasswordReset\(email\)/.test(googleOnly) && !/updateUser|setNewPassword/.test(googleOnly));
-  t("password form keeps Current / New / Confirm and re-verifies the current one", ["Current password", "New password", "Confirm new password"].every((l) => passwordForm.includes(`label="${l}"`)) && /signInWithPassword\(/.test(passwordForm));
+  t("Settings → Password has no password field of any kind", !/<AuthField|<input|type="password"|Current password|current-password|new-password/.test(cp));
+  t("Settings → Password never re-signs-in or writes a password", !/signInWithPassword|updateUser|setNewPassword|rpc\(/.test(cp));
+  t("one action for every account: Supabase's emailed recovery link to the account's own address", (cp.match(/<Button\b/g) ?? []).length === 1 && /requestPasswordReset\(email\)/.test(cp) && !/<Link\b|<a\b|forgot-password/.test(cp));
+  t("has a password → \"Change password\" with the spec wording", /"Use a secure email link to change your password\."/.test(cp) && /"Change password"/.test(cp));
+  t("Google only → \"Set a password\" with the spec wording", /"You currently sign in with Google\. You can also create a password for this account\."/.test(cp) && /"Set a password"/.test(cp));
+  t("hasPassword picks the wording only (both branches share the one send())", (cp.match(/async function send\(/g) ?? []).length === 1 && !/if \(!hasPassword\) return/.test(cp));
+  t("sent: says where the link went, and to open it in this browser", /We&apos;ve emailed a link to/.test(cp) && /in\s+this browser/.test(cp));
   const ca = read("lib/customerAuth.ts");
   t("recovery link returns to this site's /reset-password page only", /resetPasswordForEmail\([\s\S]*redirectTo: `\$\{window\.location\.origin\}\$\{cPath\("\/reset-password"\)\}`/.test(ca));
+  t("Forgot password? still sends the same link", /requestPasswordReset\(/.test(code(read("components/account/ForgotPasswordForm.tsx"))));
+  const { friendlyAuthError } = await import("../lib/customerAuth").catch(() => ({ friendlyAuthError: null as null | ((m: string) => string) }));
+  if (friendlyAuthError) {
+    t("a second click inside Supabase's cooldown gets a plain message", /wait a minute/.test(friendlyAuthError("For security purposes, you can only request this after 52 seconds.")));
+    // Supabase's own wording (GoTrue v2.197 api_user.go / password checks).
+    t("reusing the current password → \"already have\", not a length error", /already have/.test(friendlyAuthError("New password should be different from the old password.")) && !/8 characters/.test(friendlyAuthError("New password should be different from the old password.")));
+    t("too short → the length message", /at least 8 characters/.test(friendlyAuthError("Password should be at least 8 characters.")));
+    t("a character-class rule is passed through, not called a length problem", !/8 characters/.test(friendlyAuthError("Password should contain at least one character of each: abc, 123")));
+  } else {
+    t("a second click inside Supabase's cooldown gets a plain message", /for security purposes"\) && m\.includes\("only request this after"\)\)\s*return "We've just sent a link\. Please wait a minute/.test(ca));
+  }
+
+  // ── 5. The new-password page only opens for a recovery link ──
+  console.log("\nReset page");
+  const { recoverySessionOpen, RECOVERY_WINDOW_SECONDS } = await import("../lib/signInMethods");
+  const now = Date.UTC(2026, 9, 17, 14, 0, 0);
+  const s = now / 1000;
+  const b64u = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const jwt = (claims: unknown) => `${b64u({ alg: "HS256", typ: "JWT" })}.${b64u(claims)}.sig`;
+  const amr = (...e: unknown[]) => jwt({ sub: "u", amr: e });
+  t("recovery link used just now → form", recoverySessionOpen(amr({ method: "recovery", timestamp: s - 5 }), now));
+  t("recovery link used 14 min ago → form", recoverySessionOpen(amr({ method: "recovery", timestamp: s - 14 * 60 }), now));
+  t("recovery link opened over 15 min ago (abandoned) → no form", RECOVERY_WINDOW_SECONDS === 15 * 60);
+  t("recovery link used past the window → no form", !recoverySessionOpen(amr({ method: "recovery", timestamp: s - RECOVERY_WINDOW_SECONDS - 1 }), now));
+  t("password session → no form (a signed-in browser is not proof)", !recoverySessionOpen(amr({ method: "password", timestamp: s - 5 }), now));
+  t("Google session → no form", !recoverySessionOpen(amr({ method: "oauth", timestamp: s - 5 }), now));
+  t("signup-code session → no form", !recoverySessionOpen(amr({ method: "otp", timestamp: s - 5 }), now));
+  t("password session that also has a fresh recovery entry → form", recoverySessionOpen(amr({ method: "password", timestamp: s - 900 }, { method: "recovery", timestamp: s - 5 }), now));
+  t("timestamp far in the future → no form", !recoverySessionOpen(amr({ method: "recovery", timestamp: s + 3600 }), now));
+  t("string-only amr (no time) → no form", !recoverySessionOpen(jwt({ amr: ["recovery"] }), now));
+  t("no session / garbage token / no amr → no form", [null, undefined, "", "x", "a.b.c", "a.!!!.c", jwt({ sub: "u" }), jwt(null), jwt({ amr: "recovery" })].every((tk) => !recoverySessionOpen(tk as string, now)));
+  t("base64url payloads with - and _ decode", recoverySessionOpen(jwt({ pad: "??>>~~", amr: [{ method: "recovery", timestamp: s }] }), now));
+
+  const rp = code(read("components/account/ResetPasswordForm.tsx"));
+  t("reset page opens its form only for a recovery session, never for any session", (rp.match(/recoverySessionOpen\(/g) ?? []).length === 2 && !/if \(data\.session\) setReady|\|\| session\) setReady/.test(rp));
+  t("reset page asks for New + Confirm only", ["New password", "Confirm new password"].every((l) => rp.includes(`label="${l}"`)) && !/Current password|current-password/.test(rp));
+  t("reset page saves through updateUser on that session (setNewPassword), nothing custom", /await setNewPassword\(password\)/.test(rp) && !/service_role|SERVICE_ROLE|admin\.|fetch\(/.test(rp));
+  const afterSave = rp.slice(rp.indexOf("await setNewPassword(password)"), rp.indexOf("if (saved)"));
+  t("ONE USE: a saved password ends the recovery session before the confirmation shows", /if \(!result\.ok\)[\s\S]*return;[\s\S]*await logOut\(\);[\s\S]*setSaved\(true\)/.test(afterSave));
+  t("ONE USE: a failed save keeps the session (they can fix the password and retry)", /if \(!result\.ok\) \{[^}]*return;\s*\}/.test(afterSave) && !/if \(!result\.ok\) \{[^}]*logOut/.test(afterSave));
+  t("after saving: 'Your password is saved', signed out, links to sign in and the shop", /Your password is saved/.test(rp) && /signed you out/.test(rp) && /href="\/in\/login\?from=%2Fin%2Faccount%2Fsettings"/.test(rp) && /href="\/in"/.test(rp));
+  t("logOut ends only this device's session (scope local) and clears the cart", /resetForSignOut\(\)[\s\S]*signOut\(\{ scope: "local" \}\)/.test(code(read("lib/customerAuth.ts"))));
+  t("expired / used / other-browser link → explains and offers a fresh link", /That link has expired/.test(rp) && /href="\/in\/forgot-password"/.test(rp) && /browser you asked for them in/.test(rp));
+  t("reset page sends nothing to analytics and never prints the URL", !/analytics|track\(|location\.(href|search|hash)|console\./.test(rp));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
