@@ -9,15 +9,66 @@
  * Nor from the email address, its confirmation or the profile: an account that
  * joined with Google has a confirmed email and no password.
  *
- *   false                          → the "Set a password" panel
- *   true                           → the normal change-password form
- *   NULL, an error, anything else  → the normal form
+ * It only chooses the WORDING of Settings → Password. Both answers lead to the
+ * same emailed recovery link; neither shows a password field.
  *
- * Unknown falls back to the form because that is the case that cannot mislead
- * someone who has a password: a failed lookup never tells them they have none
- * and sends them round the set-up email again. A Google-only customer who hits
- * the fallback can still use "Forgot password?" on the login page.
+ *   false                          → "Set a password"
+ *   true                           → "Change password"
+ *   NULL, an error, anything else  → "Change password"
+ *
+ * Unknown falls back to "Change password" because that is the case that cannot
+ * mislead someone who has a password: a failed lookup never tells them they
+ * have none. The link it sends works the same either way.
  */
 export function hasPasswordFrom(answer: { data: unknown; error: unknown }): boolean {
   return !(answer.error == null && answer.data === false);
+}
+
+/** How long after opening a recovery link the new-password form stays open. */
+export const RECOVERY_WINDOW_SECONDS = 60 * 60;
+
+/**
+ * Whether this session came from an emailed recovery link, opened within the
+ * last RECOVERY_WINDOW_SECONDS.
+ *
+ * /in/reset-password used to show its form to ANY session. That made the page a
+ * way round the email: anyone at a signed-in browser could open it and replace
+ * the password without knowing the old one or touching the inbox. Supabase
+ * stamps how a session was made in the token's `amr` claim, and a recovery link
+ * stamps `recovery` with the time it was used, so that is what is asked for.
+ *
+ * This decides what the page SHOWS. It reads the token without verifying it,
+ * which is fine for that: a forged token gets a form whose save Supabase then
+ * refuses. Anything unreadable, any other method, or a string-only `amr` with no
+ * time on it is a no, and the page offers a fresh link instead.
+ */
+export function recoverySessionOpen(
+  accessToken: string | null | undefined,
+  nowMs: number = Date.now()
+): boolean {
+  const amr = tokenClaims(accessToken)?.amr;
+  if (!Array.isArray(amr)) return false;
+  const nowSeconds = nowMs / 1000;
+  return amr.some((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    const { method, timestamp } = entry as { method?: unknown; timestamp?: unknown };
+    return (
+      method === "recovery" &&
+      typeof timestamp === "number" &&
+      timestamp <= nowSeconds + 60 &&
+      nowSeconds - timestamp <= RECOVERY_WINDOW_SECONDS
+    );
+  });
+}
+
+function tokenClaims(token: string | null | undefined): Record<string, unknown> | null {
+  const part = token?.split(".")[1];
+  if (!part) return null;
+  try {
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), "=")));
+    return claims && typeof claims === "object" ? claims : null;
+  } catch {
+    return null;
+  }
 }

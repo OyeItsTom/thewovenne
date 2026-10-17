@@ -54,9 +54,10 @@ export default async function SettingsPage() {
         .maybeSingle()
     : { data: null };
 
-  // Whether the Password panel offers "Set a password" or the change form.
-  // Asked of the database (0072), not read off the identities: Supabase does
-  // not add an email identity when a Google account sets its first password.
+  // Whether the Password panel says "Set a password" or "Change password" —
+  // the wording only; both send the same emailed link. Asked of the database
+  // (0072), not read off the identities: Supabase does not add an email
+  // identity when a Google account sets its first password.
   const hasPassword = user
     ? hasPasswordFrom(await supabase.rpc("account_has_password"))
     : true;
