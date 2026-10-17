@@ -6,6 +6,7 @@ import LoyaltyPanel from "@/components/account/LoyaltyPanel";
 import ChangePassword from "@/components/account/ChangePassword";
 import DeliveryAddress from "@/components/account/DeliveryAddress";
 import DangerZone from "@/components/account/DangerZone";
+import { hasPasswordFrom } from "@/lib/signInMethods";
 
 export const metadata: Metadata = {
   title: "Settings | THE WOVENNE",
@@ -53,6 +54,13 @@ export default async function SettingsPage() {
         .maybeSingle()
     : { data: null };
 
+  // Whether the Password panel offers "Set a password" or the change form.
+  // Asked of the database (0072), not read off the identities: Supabase does
+  // not add an email identity when a Google account sets its first password.
+  const hasPassword = user
+    ? hasPasswordFrom(await supabase.rpc("account_has_password"))
+    : true;
+
   const saved = profile as {
     marketing_consent?: boolean;
     default_address?: Record<string, string> | null;
@@ -85,7 +93,10 @@ export default async function SettingsPage() {
         </p>
       </div>
 
-      <ChangePassword />
+      <ChangePassword
+        hasPassword={hasPassword}
+        email={user?.email ?? ""}
+      />
 
       <DeliveryAddress address={addressForForm} phone={phoneForForm} />
 

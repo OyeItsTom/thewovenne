@@ -820,6 +820,14 @@
     }
   },
   "functions": {
+    "account_has_password()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
     "admin_customers()": {
       "securityDefiner": true,
       "searchPath": "public",

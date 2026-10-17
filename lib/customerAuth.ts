@@ -2,6 +2,7 @@ import { getBrowserSupabase } from "./supabase";
 import { useCartStore } from "./store";
 import { cPath } from "./country";
 import { profileUpdateResult } from "./profileUpdate";
+import { safeNext } from "./safeRedirect";
 
 /**
  * Customer-facing auth.
@@ -162,6 +163,40 @@ export async function logIn(email: string, password: string): Promise<AuthResult
     error: friendlyAuthError(error.message),
     needsVerification: error.message.toLowerCase().includes("email not confirmed"),
   };
+}
+
+/**
+ * Start "Continue with Google". On success the browser leaves the site.
+ *
+ * SCOPES: none are added. Supabase asks Google for openid, email and profile —
+ * the minimum it needs to identify someone — and that is all this requests.
+ * No People API, no gender, birthday or contacts: signing in is not a way of
+ * collecting demographics.
+ *
+ * `prompt: select_account` makes Google show the account chooser every time,
+ * so a shared device does not silently sign the next person in as the last.
+ *
+ * The return goes to /api/auth/callback, which checks the account and then
+ * sends the customer on to `from` — but only after safeNext() has confirmed
+ * it is a customer page on this site.
+ */
+export async function startGoogleSignIn(from?: string | null): Promise<AuthResult> {
+  const next = safeNext(from, AFTER_LOGIN);
+  const redirectTo = `${window.location.origin}/api/auth/callback?next=${encodeURIComponent(next)}`;
+  const { error } = await getBrowserSupabase().auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo,
+      queryParams: { prompt: "select_account" },
+    },
+  });
+  return error
+    ? {
+        ok: false,
+        error:
+          "We couldn't open Google sign-in just now. Please try again, or use your email and password.",
+      }
+    : { ok: true, error: null };
 }
 
 /**

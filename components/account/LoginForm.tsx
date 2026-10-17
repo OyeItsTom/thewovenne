@@ -8,16 +8,22 @@ import Button from "@/components/ui/Button";
 import AuthShell from "./AuthShell";
 import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
+import { GoogleSignInBlock } from "./GoogleSignInButton";
 import { logIn, AFTER_LOGIN } from "@/lib/customerAuth";
+import { safeNext } from "@/lib/safeRedirect";
+import { OAUTH_FAILURE_COPY, type OAuthFailure } from "@/lib/oauthReturn";
 
 export default function LoginForm({
   /** Set when the middleware turned someone away from a signed-in-only page,
       so they arrive knowing why rather than wondering what happened. */
   from,
   justVerified,
+  /** Set when a Google sign-in came back without finishing. */
+  oauthFailure = null,
 }: {
   from: string | null;
   justVerified: boolean;
+  oauthFailure?: OAuthFailure | null;
 }) {
   const router = useRouter();
 
@@ -40,7 +46,9 @@ export default function LoginForm({
       setBusy(false);
       return;
     }
-    router.push(from && from.startsWith("/") ? from : AFTER_LOGIN);
+    // safeNext, not a startsWith("/") check: that let `//other-site` through,
+    // which the browser reads as a different host.
+    router.push(safeNext(from, AFTER_LOGIN));
     router.refresh();
   }
 
@@ -49,19 +57,36 @@ export default function LoginForm({
       eyebrow="Welcome back"
       title="Log in"
       intro={
-        from
-          ? "Log in to see this page."
-          : "Your orders, your wishlist, and a faster checkout."
+        // From the checkout, say so: "see this page" reads as if they were
+        // locked out, when they chose to sign in and their basket is waiting.
+        from?.startsWith("/in/checkout")
+          ? "Log in to carry on to checkout. Your basket is saved."
+          : from
+            ? "Log in to see this page."
+            : "Your orders, your wishlist, and a faster checkout."
       }
       footer={
         <>
           New here?{" "}
-          <Link href="/in/signup" className="text-terracotta hover:underline">
+          <Link
+            href={safeNext(from, "") ? `/in/signup?from=${encodeURIComponent(safeNext(from))}` : "/in/signup"}
+            className="text-terracotta hover:underline">
             Create an account
           </Link>
         </>
       }
     >
+      {/* Google first, the email form below an "or". Both full-width and the
+          same height, so neither reads as the lesser option. A Google return
+          that did not finish is explained here, above both, because it is
+          about the whole page rather than a field. */}
+      {oauthFailure && (
+        <div className="mb-5">
+          <AuthMessage tone="error">{OAUTH_FAILURE_COPY[oauthFailure]}</AuthMessage>
+        </div>
+      )}
+      <GoogleSignInBlock from={from} />
+
       <form onSubmit={submit} className="space-y-5">
         {justVerified && (
           <AuthMessage tone="success">

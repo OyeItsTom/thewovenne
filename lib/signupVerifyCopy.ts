@@ -16,6 +16,7 @@
  * way to check whether any address is registered.
  */
 import { cPath } from "./country";
+import { safeNext } from "./safeRedirect";
 
 export const VERIFY_COPY = {
   intro: (email: string) =>
@@ -32,10 +33,9 @@ export const VERIFY_COPY = {
  * relative — an absolute URL would make the link an open redirect.
  */
 export function verifyLoginHref(from?: string | null): string {
-  const onward =
-    from && from.startsWith("/") && !from.startsWith("//")
-      ? `?from=${encodeURIComponent(from)}`
-      : "";
+  // An unsafe path is dropped, not replaced: no `from` at all, as before.
+  const safe = safeNext(from, "");
+  const onward = safe ? `?from=${encodeURIComponent(safe)}` : "";
   return `${cPath("/login")}${onward}`;
 }
 

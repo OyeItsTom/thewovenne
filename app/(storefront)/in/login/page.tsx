@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import LoginForm from "@/components/account/LoginForm";
+import { isOAuthFailure } from "@/lib/oauthReturn";
 
 export const metadata: Metadata = {
   title: "Log in | THE WOVENNE",
@@ -15,12 +16,13 @@ export const metadata: Metadata = {
 export default function LoginPage({
   searchParams,
 }: {
-  searchParams: { from?: string; verified?: string };
+  searchParams: { from?: string; verified?: string; oauth?: string };
 }) {
   return (
     <LoginForm
       from={searchParams.from ?? null}
       justVerified={searchParams.verified === "1"}
+      oauthFailure={isOAuthFailure(searchParams.oauth) ? searchParams.oauth : null}
     />
   );
 }
