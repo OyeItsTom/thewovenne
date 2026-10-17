@@ -256,17 +256,25 @@ const qs = (o: Record<string, string>) => new URLSearchParams(o);
 
   // ── 4. Settings → Password, by sign-in method ──
   console.log("\nSettings password panel");
-  const { signsInWithPassword } = await import("../lib/signInMethods");
-  const ids = (...p: string[]) => ({ identities: p.map((provider) => ({ provider })) });
-  t("Google only → no password (set-a-password panel)", signsInWithPassword(ids("google")) === false);
-  t("email only → password form", signsInWithPassword(ids("email")) === true);
-  t("email + Google (linked) → password form kept", signsInWithPassword(ids("email", "google")) === true);
-  t("Google + email in either order → password form", signsInWithPassword(ids("google", "email")) === true);
-  t("no identities listed → password form, as before", signsInWithPassword({ identities: [] }) === true && signsInWithPassword({}) === true);
-  t("an email address alone never implies a password", signsInWithPassword({ ...ids("google"), email: "a@b.c", email_confirmed_at: "x" } as never) === false);
+  const { hasPasswordFrom } = await import("../lib/signInMethods");
+  const rpc = (data: unknown, error: unknown = null) => hasPasswordFrom({ data, error });
+  t("Google-only, no password (rpc false) → Set a password panel", rpc(false) === false);
+  t("Google-only AFTER setting a password (rpc true) → normal form", rpc(true) === true);
+  t("password-only account (rpc true) → normal form", rpc(true) === true);
+  t("Google + password account (rpc true) → normal form", rpc(true) === true);
+  t("unknown (rpc NULL: no live session) → normal form, never a false \"no password\"", rpc(null) === true);
+  t("rpc error (e.g. before 0072 is applied) → normal form", rpc(null, { message: "x" }) === true && rpc(false, { message: "x" }) === true);
+  t("anything but an exact false → normal form", [undefined, 0, "", "false", {}].every((v) => rpc(v) === true));
 
   const settings = code(read("app/(storefront)/in/account/settings/page.tsx"));
-  t("Settings decides from getUser() identities via signsInWithPassword", /auth\.getUser\(\)/.test(settings) && /hasPassword=\{user \? signsInWithPassword\(user\) : true\}/.test(settings));
+  t("Settings asks the database (account_has_password), not the identities list",
+    /hasPasswordFrom\(await supabase\.rpc\("account_has_password"\)\)/.test(settings) && !/identities/.test(settings) && /hasPassword=\{hasPassword\}/.test(settings));
+  t("account_has_password is called without arguments (it can only answer for the caller)", !/rpc\("account_has_password",/.test(settings));
+  const sql = read("supabase/migrations/0072_account_has_password.sql");
+  t("0072: no parameters, auth.uid() only, live session required, boolean only",
+    /create function public\.account_has_password\(\)\s*returns boolean/.test(sql) && /u\.id = auth\.uid\(\)/.test(sql) && /from auth\.sessions s/.test(sql) && !/returns (table|setof|text|jsonb)/i.test(sql));
+  t("0072: EXECUTE revoked from public and anon, granted to authenticated",
+    /revoke execute on function public\.account_has_password\(\) from public, anon;/.test(sql) && /grant execute on function public\.account_has_password\(\) to authenticated;/.test(sql));
 
   const cp = code(read("components/account/ChangePassword.tsx"));
   const googleOnly = cp.slice(cp.indexOf("function SetPasswordByEmail"));

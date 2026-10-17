@@ -58,6 +58,9 @@ create schema if not exists extensions;
 create table if not exists auth.users (
   id uuid primary key default gen_random_uuid(),
   email text,
+  -- As Supabase Auth has it: the password hash, NULL or '' when there is none.
+  -- Read only by account_has_password() (0072).
+  encrypted_password character varying(255),
   raw_user_meta_data jsonb default '{}'::jsonb,
   raw_app_meta_data jsonb default '{}'::jsonb,
   created_at timestamptz default now()
