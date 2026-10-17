@@ -24,8 +24,13 @@ export function hasPasswordFrom(answer: { data: unknown; error: unknown }): bool
   return !(answer.error == null && answer.data === false);
 }
 
-/** How long after opening a recovery link the new-password form stays open. */
-export const RECOVERY_WINDOW_SECONDS = 60 * 60;
+/**
+ * How long after opening a recovery link the new-password form stays open, for
+ * someone who opens it and does not save. Saving ends the session at once (see
+ * ResetPasswordForm), so this only bounds an abandoned one. The link itself
+ * opens straight onto the form, so a quarter of an hour is plenty.
+ */
+export const RECOVERY_WINDOW_SECONDS = 15 * 60;
 
 /**
  * Whether this session came from an emailed recovery link, opened within the

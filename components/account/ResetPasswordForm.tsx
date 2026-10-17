@@ -8,7 +8,7 @@ import { getBrowserSupabase } from "@/lib/supabase";
 import AuthShell from "./AuthShell";
 import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
-import { setNewPassword, passwordProblem } from "@/lib/customerAuth";
+import { setNewPassword, passwordProblem, logOut } from "@/lib/customerAuth";
 import { recoverySessionOpen } from "@/lib/signInMethods";
 
 /**
@@ -24,6 +24,13 @@ import { recoverySessionOpen } from "@/lib/signInMethods";
  * page is the only place a password is set, and a signed-in browser on its own
  * is not proof of who is holding it. Settings, "Set a password" and "Forgot
  * password?" all send the same link here.
+ *
+ * ONE USE. The emailed code is single-use already, but the session it creates
+ * is an ordinary, long-lived Supabase session, and Supabase keeps it when the
+ * password changes (it signs out every OTHER session). Left alone, that browser
+ * could come back here and change the password again. So once the new password
+ * is saved, this session is signed out too, and another change needs another
+ * email.
  */
 export default function ResetPasswordForm() {
   const [ready, setReady] = useState<boolean | null>(null);
@@ -70,6 +77,9 @@ export default function ResetPasswordForm() {
       setBusy(false);
       return;
     }
+    // End the recovery session (this device only; Supabase has already ended
+    // the others). logOut also clears the persisted cart, as on any sign-out.
+    await logOut();
     setBusy(false);
     setPassword("");
     setConfirm("");
@@ -81,7 +91,7 @@ export default function ResetPasswordForm() {
       <AuthShell
         eyebrow="All set"
         title="Your password is saved"
-        intro="You're signed in. Next time, you can sign in with your email and this password."
+        intro="For your security we've signed you out everywhere. Sign in again with your email and new password, or with Google if you use it."
         footer={
           <Link href="/in" className="text-terracotta hover:underline">
             Continue shopping
@@ -92,10 +102,10 @@ export default function ResetPasswordForm() {
           Nothing else about your account has changed.
         </AuthMessage>
         <Link
-          href="/in/account/settings"
+          href="/in/login?from=%2Fin%2Faccount%2Fsettings"
           className="mt-5 block text-center text-sm text-ink hover:underline"
         >
-          Back to your account settings
+          Sign in
         </Link>
       </AuthShell>
     );
