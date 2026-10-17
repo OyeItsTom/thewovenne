@@ -69,7 +69,15 @@ export function friendlyAuthError(message: string): string {
     return "We've just sent a link. Please wait a minute before asking for another.";
   if (m.includes("rate limit") || m.includes("too many"))
     return "Too many attempts just now. Please wait a few minutes and try again.";
-  if (m.includes("password should be") || m.includes("password must"))
+  // Supabase refuses the password the account already has (code same_password):
+  // "New password should be different from the old password." That contains
+  // "password should be", so it must be caught before the length message below,
+  // which it used to fall into — telling someone who typed a perfectly long
+  // password that it was too short.
+  if (m.includes("should be different from the old password"))
+    return "That's the password you already have. Please choose a different one.";
+  // The length rule: "Password should be at least 8 characters."
+  if (m.includes("password should be at least") || m.includes("password must be at least"))
     return "Please choose a password of at least 8 characters.";
   if (m.includes("weak password"))
     return "That password is too easy to guess. Try a longer one.";
