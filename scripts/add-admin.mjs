@@ -12,7 +12,7 @@
  *
  * Usage:
  *   node scripts/add-admin.mjs --email person@example.com
- *   node scripts/add-admin.mjs --email person@example.com --password 'Chosen-Pass'
+ *   node scripts/add-admin.mjs --email person@example.com --password 'a long chosen phrase'
  *   node scripts/add-admin.mjs --list
  *   node scripts/add-admin.mjs --email person@example.com --revoke
  *
@@ -109,6 +109,19 @@ if (revoke) {
   console.log(`\n${email} is no longer an admin. The login still exists — delete it in`);
   console.log("Supabase → Authentication → Users if you want it gone entirely.\n");
   process.exit(0);
+}
+
+// The rule in lib/passwordPolicy.ts (this script is plain node, so it can't
+// import it). Supabase refuses a shorter one too; this just says why first.
+if (chosenPassword !== undefined) {
+  if (Array.from(chosenPassword).length < 15) {
+    console.error("--password must be at least 15 characters.");
+    process.exit(1);
+  }
+  if (Buffer.byteLength(chosenPassword, "utf8") > 72) {
+    console.error("--password must be at most 72 bytes (bcrypt's limit).");
+    process.exit(1);
+  }
 }
 
 const password = chosenPassword ?? generatePassword();

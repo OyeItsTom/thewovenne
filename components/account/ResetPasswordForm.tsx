@@ -9,6 +9,7 @@ import AuthShell from "./AuthShell";
 import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
 import { setNewPassword, passwordProblem, logOut } from "@/lib/customerAuth";
+import { PASSWORD_HINT } from "@/lib/passwordPolicy";
 import { recoverySessionOpen } from "@/lib/signInMethods";
 
 /**
@@ -153,7 +154,7 @@ export default function ResetPasswordForm() {
           autoComplete="new-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          hint="At least 8 characters."
+          hint={PASSWORD_HINT}
         />
         <AuthField
           label="Confirm new password"

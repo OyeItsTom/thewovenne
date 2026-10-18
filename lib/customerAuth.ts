@@ -3,6 +3,11 @@ import { useCartStore } from "./store";
 import { cPath } from "./country";
 import { profileUpdateResult } from "./profileUpdate";
 import { safeNext } from "./safeRedirect";
+import {
+  passwordPolicyProblem,
+  PASSWORD_TOO_LONG,
+  PASSWORD_TOO_SHORT,
+} from "./passwordPolicy";
 
 /**
  * Customer-facing auth.
@@ -76,9 +81,13 @@ export function friendlyAuthError(message: string): string {
   // password that it was too short.
   if (m.includes("should be different from the old password"))
     return "That's the password you already have. Please choose a different one.";
-  // The length rule: "Password should be at least 8 characters."
+  // The length rule: "Password should be at least 15 characters."
   if (m.includes("password should be at least") || m.includes("password must be at least"))
-    return "Please choose a password of at least 8 characters.";
+    return PASSWORD_TOO_SHORT;
+  // bcrypt's ceiling, which GoTrue counts in bytes: "Password cannot be longer
+  // than 72 characters".
+  if (m.includes("password cannot be longer than"))
+    return PASSWORD_TOO_LONG;
   if (m.includes("weak password"))
     return "That password is too easy to guess. Try a longer one.";
   return message;
@@ -86,7 +95,8 @@ export function friendlyAuthError(message: string): string {
 
 /** Local checks, so obvious problems don't need a round trip. */
 export function passwordProblem(password: string, confirm?: string): string | null {
-  if (password.length < 8) return "Please use at least 8 characters.";
+  const policy = passwordPolicyProblem(password);
+  if (policy) return policy;
   if (confirm !== undefined && password !== confirm)
     return "The two passwords don't match.";
   return null;

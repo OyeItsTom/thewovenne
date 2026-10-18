@@ -10,8 +10,7 @@ import {
   getBrowserSupabase,
 } from "@/lib/supabase";
 import Button from "@/components/ui/Button";
-
-const MIN_LENGTH = 12;
+import { PASSWORD_MIN_LENGTH, passwordPolicyProblem } from "@/lib/passwordPolicy";
 
 export default function AdminAccountPage() {
   const [email, setEmail] = useState("");
@@ -33,8 +32,11 @@ export default function AdminAccountPage() {
     setError(null);
     setDone(false);
 
-    if (next.length < MIN_LENGTH) {
-      setError(`Use at least ${MIN_LENGTH} characters.`);
+    // The same rule as customers (lib/passwordPolicy.ts). Supabase enforces it
+    // too, so this only saves a round trip and words the refusal.
+    const policy = passwordPolicyProblem(next);
+    if (policy) {
+      setError(policy);
       return;
     }
     if (next !== confirm) {
@@ -116,7 +118,7 @@ export default function AdminAccountPage() {
             onChange={setCurrent}
           />
           <Field
-            label={`New password (${MIN_LENGTH}+ characters)`}
+            label={`New password (at least ${PASSWORD_MIN_LENGTH} characters)`}
             autoComplete="new-password"
             value={next}
             onChange={setNext}
