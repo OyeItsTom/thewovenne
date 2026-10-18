@@ -296,9 +296,9 @@ const qs = (o: Record<string, string>) => new URLSearchParams(o);
   if (friendlyAuthError) {
     t("a second click inside Supabase's cooldown gets a plain message", /wait a minute/.test(friendlyAuthError("For security purposes, you can only request this after 52 seconds.")));
     // Supabase's own wording (GoTrue v2.197 api_user.go / password checks).
-    t("reusing the current password → \"already have\", not a length error", /already have/.test(friendlyAuthError("New password should be different from the old password.")) && !/8 characters/.test(friendlyAuthError("New password should be different from the old password.")));
-    t("too short → the length message", /at least 8 characters/.test(friendlyAuthError("Password should be at least 8 characters.")));
-    t("a character-class rule is passed through, not called a length problem", !/8 characters/.test(friendlyAuthError("Password should contain at least one character of each: abc, 123")));
+    t("reusing the current password → \"already have\", not a length error", /already have/.test(friendlyAuthError("New password should be different from the old password.")) && !/15 characters/.test(friendlyAuthError("New password should be different from the old password.")));
+    t("too short → the length message", /at least 15 characters/.test(friendlyAuthError("Password should be at least 15 characters.")));
+    t("a character-class rule is passed through, not called a length problem", !/15 characters/.test(friendlyAuthError("Password should contain at least one character of each: abc, 123")));
   } else {
     t("a second click inside Supabase's cooldown gets a plain message", /for security purposes"\) && m\.includes\("only request this after"\)\)\s*return "We've just sent a link\. Please wait a minute/.test(ca));
   }

@@ -10,6 +10,7 @@ import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
 import { GoogleSignInBlock } from "./GoogleSignInButton";
 import { signUp, passwordProblem } from "@/lib/customerAuth";
+import { PASSWORD_HINT } from "@/lib/passwordPolicy";
 import { safeNext } from "@/lib/safeRedirect";
 
 export default function SignupForm({ from }: { from?: string | null }) {
@@ -110,7 +111,7 @@ export default function SignupForm({ from }: { from?: string | null }) {
           autoComplete="new-password"
           value={form.password}
           onChange={set("password")}
-          hint="At least 8 characters."
+          hint={PASSWORD_HINT}
         />
         <AuthField
           label="Confirm password"
