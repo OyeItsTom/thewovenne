@@ -336,6 +336,15 @@ const qs = (o: Record<string, string>) => new URLSearchParams(o);
   t("expired / used / other-browser link → explains and offers a fresh link", /That link has expired/.test(rp) && /href="\/in\/forgot-password"/.test(rp) && /browser you asked for them in/.test(rp));
   t("reset page sends nothing to analytics and never prints the URL", !/analytics|track\(|location\.(href|search|hash)|console\./.test(rp));
 
+  // Deleting an account frees the email (delete_my_account removes auth.users),
+  // so the same address can sign up again — as a NEW, empty account.
+  const dz = code(read("components/account/DangerZone.tsx")).replace(/\s+/g, " ");
+  t("delete copy never claims they can't sign back in", !/won&apos;t be able to sign back in|can&apos;t sign back in/.test(dz));
+  t("delete copy: same email or Google later makes a new, empty account; nothing comes back", /sign up again later with the same email, or continue with Google, but that makes a new, empty account/.test(dz) && /Nothing deleted here comes back/.test(dz));
+  t("delete copy names what cascades: profile, saved address, wishlist, basket, reviews", /Your profile, saved address, wishlist, saved basket, reviews and preferences are deleted/.test(dz));
+  t("delete copy: orders kept as records with name, email, phone and address removed", /Past orders are kept as financial records, but with your name, email, phone and address removed/.test(dz));
+  t("delete still goes through delete_my_account, then signs out", /rpc\(\s*"delete_my_account"\s*\)/.test(dz) && /await logOut\(\)/.test(dz));
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
