@@ -9,7 +9,7 @@
  * generates is accepted as typed.
  *
  * Supabase Auth must be set to the same minimum (Dashboard → Authentication →
- * Providers → Email → Minimum password length = 15, Password requirements =
+ * Providers → Email → Minimum password length = 12, Password requirements =
  * none), so a direct API call cannot get round the forms. It only checks when a
  * password is SET; signing in with an older, shorter password still works.
  *
@@ -18,11 +18,11 @@
  * the byte count — so anything this accepts, Supabase accepts too. The maximum
  * is bcrypt's 72 bytes, checked in bytes, because "é" is two and an emoji four.
  */
-export const PASSWORD_MIN_LENGTH = 15;
+export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_BYTES = 72;
 
-export const PASSWORD_HINT = `At least ${PASSWORD_MIN_LENGTH} characters. Spaces are fine — a short phrase works well.`;
-export const PASSWORD_TOO_SHORT = `Please use at least ${PASSWORD_MIN_LENGTH} characters.`;
+export const PASSWORD_HINT = `Use at least ${PASSWORD_MIN_LENGTH} characters. Spaces are allowed, so a short phrase works well.`;
+export const PASSWORD_TOO_SHORT = `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`;
 export const PASSWORD_TOO_LONG =
   "That password is too long. Please keep it to 72 letters, or fewer if it has emoji or accented letters.";
 
