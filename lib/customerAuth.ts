@@ -81,7 +81,7 @@ export function friendlyAuthError(message: string): string {
   // password that it was too short.
   if (m.includes("should be different from the old password"))
     return "That's the password you already have. Please choose a different one.";
-  // The length rule: "Password should be at least 15 characters."
+  // The length rule: "Password should be at least 12 characters."
   if (m.includes("password should be at least") || m.includes("password must be at least"))
     return PASSWORD_TOO_SHORT;
   // bcrypt's ceiling, which GoTrue counts in bytes: "Password cannot be longer
