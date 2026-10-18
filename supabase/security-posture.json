@@ -1005,6 +1005,14 @@
         "service_role"
       ]
     },
+    "approve_style(uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
     "assign_invoice_number(uuid)": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -1554,8 +1562,22 @@
         "service_role"
       ]
     },
-    "style_photo_base()": {
+    "style_gallery_base()": {
       "securityDefiner": false,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_gallery_name_ok(text,uuid)": {
+      "securityDefiner": false,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_gallery_url_ok(text,uuid)": {
+      "securityDefiner": true,
       "searchPath": "public",
       "execute": [
         "service_role"
@@ -1575,7 +1597,7 @@
         "service_role"
       ]
     },
-    "style_photo_unused(text)": {
+    "style_photo_upload_allowed(uuid)": {
       "securityDefiner": true,
       "searchPath": "public",
       "execute": [
@@ -1583,19 +1605,10 @@
         "service_role"
       ]
     },
-    "style_photo_upload_allowed(text)": {
+    "style_submission_media_guard()": {
       "securityDefiner": true,
       "searchPath": "public",
       "execute": [
-        "authenticated",
-        "service_role"
-      ]
-    },
-    "style_photo_url_ok(text,uuid,uuid)": {
-      "securityDefiner": true,
-      "searchPath": "public",
-      "execute": [
-        "authenticated",
         "service_role"
       ]
     },
@@ -2248,7 +2261,7 @@
         "authenticated"
       ],
       "using": null,
-      "check": "((user_id = auth.uid()) AND has_purchased(product_id) AND (consented_at IS NOT NULL) AND (status = 'pending'::text) AND style_photo_url_ok(photo_url, user_id, product_id))"
+      "check": "((user_id = auth.uid()) AND has_purchased(product_id) AND (consented_at IS NOT NULL) AND (status = 'pending'::text))"
     },
     "public.wishlists.Customers manage own wishlist": {
       "cmd": "ALL",
@@ -2286,40 +2299,13 @@
       "using": null,
       "check": "((bucket_id = 'product-images'::text) AND is_admin())"
     },
-    "storage.objects.Admins remove style photos": {
-      "cmd": "DELETE",
-      "permissive": "PERMISSIVE",
-      "roles": [
-        "authenticated"
-      ],
-      "using": "((bucket_id = 'style-photos'::text) AND is_admin())",
-      "check": null
-    },
-    "storage.objects.Customers upload their own style photos": {
-      "cmd": "INSERT",
-      "permissive": "PERMISSIVE",
-      "roles": [
-        "authenticated"
-      ],
-      "using": null,
-      "check": "((bucket_id = 'style-photos'::text) AND style_photo_upload_allowed(name))"
-    },
-    "storage.objects.Owners and admins see style photo records": {
+    "storage.objects.Admins read style submissions": {
       "cmd": "SELECT",
       "permissive": "PERMISSIVE",
       "roles": [
         "authenticated"
       ],
-      "using": "((bucket_id = 'style-photos'::text) AND (((storage.foldername(name))[1] = (auth.uid())::text) OR is_admin()))",
-      "check": null
-    },
-    "storage.objects.Owners remove their own unused style photos": {
-      "cmd": "DELETE",
-      "permissive": "PERMISSIVE",
-      "roles": [
-        "authenticated"
-      ],
-      "using": "((bucket_id = 'style-photos'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text) AND style_photo_unused(name))",
+      "using": "((bucket_id = 'style-photos'::text) AND is_admin())",
       "check": null
     },
     "storage.objects.Public read product images": {
@@ -2336,8 +2322,11 @@
     "product-images": {
       "public": true
     },
-    "style-photos": {
+    "style-gallery": {
       "public": true
+    },
+    "style-photos": {
+      "public": false
     }
   }
 }

@@ -1,34 +1,24 @@
 /**
- * Customer style photographs at the storage boundary (0073).
+ * Customer style photographs: private until approved (0073).
  *
  *   PG_HARNESS_DIR=/tmp/pgh npx --cache /tmp/npmcache --yes tsx@4.19.2 scripts/style-photo-storage.test.ts
  *
- * The database half replays every migration, unmodified, and acts through the
- * real policies as each role: anonymous, a signed-in non-buyer, two buyers of
- * the same piece, and an aal2 admin. storage.objects is given Supabase's own
- * grants to the API roles, so a refusal below is a POLICY refusing, not a
- * missing grant.
+ * Three halves:
  *
- * What is proven:
- *   1. Upload: anonymous and non-buyers refused; a buyer may write only
- *      <own id>/<bought product>/<uuid>.jpg, at most five per piece; every
- *      path trick refused; nobody overwrites.
- *   2. Reading records: no listing for anonymous or another customer; owner
- *      and admin see theirs/all.
- *   3. Removing: another customer cannot; the owner only an unused file; the
- *      admin can.
- *   4. photo_url must be this bucket's address for an existing object in the
- *      submitter's own folder for the same piece — on insert and resubmit.
- *   5. style_photo_garbage: owner gone, consent withdrawn, unused after a day;
- *      never a used file; service role only. Account deletion makes exactly
- *      that account's files removable, and selectForRemoval never reaches
- *      another folder.
- *   6. The bucket: public, 8 MiB, image/jpeg only. Admin queue and moderation
- *      still work; delete_my_account still anonymises orders.
- *   7. Source: the form uploads to the 0073 path as image/jpeg and cleans up
- *      after a failed save; Delete Account goes through the route; withdrawal
- *      and admin delete remove the file; the admin queue runs the backstop
- *      sweep; every route checks origin or admin; still no cron.
+ *   A. THE BYTES (real sharp, real files). normalizeStylePhoto accepts a real
+ *      JPEG and returns a fresh one without its EXIF or anything appended;
+ *      refuses PNG, GIF, SVG, HTML and random bytes however they are labelled,
+ *      a truncated JPEG, an empty or oversized file, and a pixel bomb.
+ *   B. THE SOURCE. The browser never writes to storage; /api/style/submit is the
+ *      only writer and checks session → purchase → bytes → private store →
+ *      save-with-the-customer's-session → removes its file on failure. Every
+ *      route checks origin or admin; withdrawal, rejection, take-off, admin
+ *      delete and account deletion each remove their files; the admin queue
+ *      shows originals by signed URL, unoptimised; still no cron.
+ *   C. THE DATABASE. Every migration replayed, unmodified, acting through the
+ *      real policies as anonymous, a non-buyer, two buyers of one piece, an aal2
+ *      admin and the service role. storage.objects has Supabase's own grants
+ *      to the API roles, so a refusal below is a POLICY refusing.
  *
  * Without embedded-postgres the database half is skipped and the run exits
  * non-zero rather than passing.
@@ -36,8 +26,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { selectForRemoval, stylePhotoNameFromUrl, stylePhotoPath } from "../lib/stylePhotoStorage";
-import { asAdmin, asRoot, asService, asUser, failure, makeAdmin, startEngine, type Client } from "./pg-world";
+import sharp from "sharp";
+import {
+  STYLE_GALLERY_BUCKET,
+  STYLE_PHOTO_BUCKET,
+  STYLE_PHOTO_MAX_BYTES,
+  isUuid,
+  selectForRemoval,
+  styleGalleryName,
+  stylePhotoPath,
+} from "../lib/stylePhotoStorage";
+import { normalizeStylePhoto, StylePhotoRejected } from "../lib/stylePhotoValidate";
+import { asAdmin, asRoot, asService, asUser, failure, makeAdmin, startEngine } from "./pg-world";
 
 let pass = 0;
 let fail = 0;
@@ -47,61 +47,176 @@ function t(name: string, ok: boolean, detail = "") {
   else fail++;
 }
 const read = (p: string) => fs.readFileSync(path.join(process.cwd(), p), "utf8");
-const BASE = "https://wxumlixnmwgeqswknhpw.supabase.co/storage/v1/object/public/style-photos/";
+const GALLERY = "https://wxumlixnmwgeqswknhpw.supabase.co/storage/v1/object/public/style-gallery/";
 const uuid = () => crypto.randomUUID();
 
-// ── Pure: what a cleanup may touch ───────────
-console.log("\nselectForRemoval — a second lock on what gets deleted");
-const A = "11111111-1111-4111-8111-111111111111";
-const B = "22222222-2222-4222-8222-222222222222";
-const P = "33333333-3333-4333-8333-333333333333";
-const F = "44444444-4444-4444-8444-444444444444";
-const rows = [
-  { name: `${A}/${P}/${F}.jpg`, reason: "owner gone" },
-  { name: `${B}/${P}/${F}.jpg`, reason: "unused" },
-  { name: `${A}/../${B}/${F}.jpg`, reason: "unused" },
-  { name: `${A}/${P}/${F}.jpg.html`, reason: "unused" },
-  { name: `${A}/${F}.jpg`, reason: "unused" },
-];
-t("one account's cleanup reaches only that account's folder", JSON.stringify(selectForRemoval(rows, A)) === JSON.stringify([`${A}/${P}/${F}.jpg`]));
-t("…case-insensitively on the id it is given", selectForRemoval(rows, A.toUpperCase()).length === 1);
-t("the daily sweep takes every well-formed name and no malformed one", JSON.stringify(selectForRemoval(rows)) === JSON.stringify([`${A}/${P}/${F}.jpg`, `${B}/${P}/${F}.jpg`]));
-t("stylePhotoPath is <owner>/<product>/<id>.jpg", stylePhotoPath(A, P, F) === `${A}/${P}/${F}.jpg`);
-const SB = "https://wxumlixnmwgeqswknhpw.supabase.co";
-t("stylePhotoNameFromUrl reads our own address back to its key", stylePhotoNameFromUrl(`${SB}/storage/v1/object/public/style-photos/${A}/${P}/${F}.jpg`, SB) === `${A}/${P}/${F}.jpg`);
-t("…and refuses anyone else's address, another bucket, or a malformed key",
-  [`https://other.supabase.co/storage/v1/object/public/style-photos/${A}/${P}/${F}.jpg`, `${SB}/storage/v1/object/public/product-images/${A}/${P}/${F}.jpg`, `${SB}/storage/v1/object/public/style-photos/${A}/../${F}.jpg`, null]
-    .every((u) => stylePhotoNameFromUrl(u, SB) === null));
-
-// ── Source rules ─────────────────────────────
-console.log("\nsource: the browser, the routes, the schedule");
-const form = read("components/style/StyleSubmissionForm.tsx");
-const danger = read("components/account/DangerZone.tsx");
-const delRoute = read("app/api/account/delete/route.ts");
-const cleanup = read("app/api/style/cleanup/route.ts");
-const sweepRoute = read("app/api/admin/style/sweep/route.ts");
-const manager = read("components/admin/StyleManager.tsx");
-const share = read("components/style/ShareYourStyle.tsx");
-t("the form uploads to stylePhotoPath(user, product, uuid) as image/jpeg, never upsert",
-  /stylePhotoPath\(user\.id, productId, crypto\.randomUUID\(\)\)/.test(form) && /contentType: "image\/jpeg"/.test(form) && /upsert: false/.test(form));
-t("a failed save removes the photograph it just uploaded", /catch \(e\) \{[\s\S]*if \(uploadedPath\) \{[\s\S]*\.remove\(\[uploadedPath\]\)/.test(form));
-t("Delete Account posts to /api/account/delete and no longer calls the RPC from the browser",
-  /fetch\("\/api\/account\/delete", \{ method: "POST" \}\)/.test(danger) && !/rpc\(/.test(danger));
-t("the delete route: same-origin only, the user from the session, delete_my_account BEFORE any file is touched",
-  /new URL\(origin\)\.host === new URL\(request\.url\)\.host/.test(delRoute) && /auth\.getUser\(\)/.test(delRoute)
-  && delRoute.indexOf('rpc("delete_my_account")') < delRoute.indexOf("sweepStylePhotos(") && /if \(!result\?\.ok\) return/.test(delRoute));
-t("the delete route sweeps only that user's folder", /sweepStylePhotos\(createServiceClient\(\), \{ onlyOwnerId: user\.id \}\)/.test(delRoute));
-t("the delete route reads no account id from the request body", !/request\.json\(\)|searchParams/.test(delRoute));
-t("the customer cleanup route: same-origin, the session's own folder only, nothing read from the request",
-  /new URL\(origin\)\.host === new URL\(request\.url\)\.host/.test(cleanup) && /onlyOwnerId: user\.id/.test(cleanup) && !/request\.json\(\)|searchParams/.test(cleanup));
-t("withdrawing consent asks for the file to be taken down", /withdrawn_at[\s\S]*setWithdrawn\(true\);[\s\S]*fetch\("\/api\/style\/cleanup", \{ method: "POST" \}\)/.test(share));
-t("the admin sweep route is behind adminApiGate and is_admin", /await adminApiGate\(request\)/.test(sweepRoute) && /rpc\("is_admin"\)[\s\S]*isAdmin !== true/.test(sweepRoute) && /sweepStylePhotos\(createServiceClient\(\)\)/.test(sweepRoute));
-t("opening the admin queue runs the backstop sweep", /fetch\("\/api\/admin\/style\/sweep", \{ method: "POST" \}\)/.test(manager));
-t("an admin delete removes the submission's file too", /\.from\("style_submissions"\)\s*\.delete\(\)[\s\S]*stylePhotoNameFromUrl\(row\.photo_url, SUPABASE_URL\)[\s\S]*\.remove\(\[file\]\)/.test(manager));
-t("still no Vercel cron (the project keeps none)", !fs.existsSync("vercel.json") && !fs.existsSync("app/api/cron"));
-t("delete_my_account itself is untouched by 0073", !/delete_my_account/.test(read("supabase/migrations/0073_style_photo_storage_security.sql").replace(/^--.*$/gm, "")));
-
 (async () => {
+  // ══ A. The bytes ══════════════════════════════
+  console.log("\nA. what counts as a photograph (real sharp)");
+  const refused = async (bytes: Uint8Array) => {
+    try {
+      await normalizeStylePhoto(bytes);
+      return false;
+    } catch (e) {
+      return e instanceof StylePhotoRejected;
+    }
+  };
+  const photo = await sharp({ create: { width: 1200, height: 1500, channels: 3, background: { r: 150, g: 40, b: 30 } } })
+    .jpeg({ quality: 80 })
+    .withExif({ IFD0: { Artist: "secret-artist-tag" }, IFD3: { GPSLatitudeRef: "N", GPSLatitude: "9/1 58/1 0/1" } })
+    .toBuffer();
+  t("the test photograph really carries EXIF", Boolean((await sharp(photo).metadata()).exif) && photo.includes("secret-artist-tag"));
+  const ok = await normalizeStylePhoto(new Uint8Array(photo));
+  t("a real JPEG is accepted and re-encoded as JPEG", ok.jpeg[0] === 0xff && ok.jpeg[1] === 0xd8 && (await sharp(ok.jpeg).metadata()).format === "jpeg");
+  t("its real dimensions are reported (1200×1500)", ok.width === 1200 && ok.height === 1500);
+  t("EXIF — camera details, GPS position — is gone from what is stored",
+    !(await sharp(ok.jpeg).metadata()).exif && !ok.jpeg.includes("secret-artist-tag"));
+
+  const payload = Buffer.from("<script>alert(document.cookie)</script><html><body>x</body></html>");
+  const polyglot = await normalizeStylePhoto(new Uint8Array(Buffer.concat([photo, payload])));
+  t("a script appended after the image does not survive re-encoding", !polyglot.jpeg.includes("<script>") && !polyglot.jpeg.includes("<html>"));
+  // A COM segment (FF FE) carrying HTML, inserted straight after SOI.
+  const comment = Buffer.from("<svg onload=alert(1)>");
+  const com = Buffer.concat([photo.subarray(0, 2), Buffer.from([0xff, 0xfe, 0, comment.length + 2]), comment, photo.subarray(2)]);
+  const fromCom = await normalizeStylePhoto(new Uint8Array(com));
+  t("HTML hidden in a JPEG comment does not survive either", !fromCom.jpeg.includes("onload"));
+
+  const big = await sharp({ create: { width: 3000, height: 4500, channels: 3, background: "#777" } }).jpeg().toBuffer();
+  const shrunk = await normalizeStylePhoto(new Uint8Array(big));
+  t("an over-wide photograph is brought within 2000px wide", shrunk.width === 2000 && shrunk.height === 3000);
+
+  const png = await sharp(photo).png().toBuffer();
+  const gif = await sharp(photo).gif().toBuffer();
+  const webp = await sharp(photo).webp().toBuffer();
+  t("PNG bytes are refused, whatever they are called", await refused(new Uint8Array(png)));
+  t("GIF bytes are refused", await refused(new Uint8Array(gif)));
+  t("WebP bytes are refused (the browser always sends JPEG)", await refused(new Uint8Array(webp)));
+  t("SVG is refused", await refused(new Uint8Array(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"></svg>'))));
+  t("HTML is refused", await refused(new Uint8Array(Buffer.from("<!doctype html><html><script>alert(1)</script></html>"))));
+  t("a JPEG signature followed by junk is refused (it must decode)",
+    await refused(new Uint8Array(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), crypto.randomBytes(5000)]))));
+  t("a truncated JPEG is refused", await refused(new Uint8Array(photo.subarray(0, Math.floor(photo.length / 2)))));
+  t("an empty file is refused", await refused(new Uint8Array(0)));
+  t("a file over 4 MiB is refused before decoding",
+    await refused(new Uint8Array(Buffer.concat([photo, Buffer.alloc(STYLE_PHOTO_MAX_BYTES)]))));
+  const bomb = await sharp({ create: { width: 7000, height: 7000, channels: 3, background: "#fff" } }).jpeg({ quality: 10 }).toBuffer();
+  t(`a small file that decodes to 49 megapixels is refused (${Math.round(bomb.length / 1024)} KB on disk)`, await refused(new Uint8Array(bomb)));
+
+  // ── Pure: names and what a cleanup may touch ──
+  console.log("\nnames, and what one cleanup may touch");
+  const A = "11111111-1111-4111-8111-111111111111";
+  const B = "22222222-2222-4222-8222-222222222222";
+  const Pp = "33333333-3333-4333-8333-333333333333";
+  const F = "44444444-4444-4444-8444-444444444444";
+  const S1 = "55555555-5555-4555-8555-555555555555";
+  const S2 = "66666666-6666-4666-8666-666666666666";
+  const rows = [
+    { bucket: STYLE_PHOTO_BUCKET, name: `${A}/${Pp}/${F}.jpg`, reason: "owner gone" },
+    { bucket: STYLE_PHOTO_BUCKET, name: `${B}/${Pp}/${F}.jpg`, reason: "unused" },
+    { bucket: STYLE_PHOTO_BUCKET, name: `${A}/../${B}/${F}.jpg`, reason: "unused" },
+    { bucket: STYLE_PHOTO_BUCKET, name: `${A}/${Pp}/${F}.jpg.html`, reason: "unused" },
+    { bucket: STYLE_GALLERY_BUCKET, name: `${S1}/${F}.jpg`, reason: "submission gone" },
+    { bucket: STYLE_GALLERY_BUCKET, name: `${S2}/${F}.jpg`, reason: "not published" },
+    { bucket: STYLE_GALLERY_BUCKET, name: `${S1}/../${F}.jpg`, reason: "not published" },
+    { bucket: "product-images", name: `${A}/${Pp}/${F}.jpg`, reason: "unused" },
+  ];
+  const mineOnly = selectForRemoval(rows, { ownerId: A, submissionIds: [S1] });
+  t("one customer's cleanup: their originals and their submissions' copies only",
+    JSON.stringify(mineOnly) === JSON.stringify({ originals: [`${A}/${Pp}/${F}.jpg`], copies: [`${S1}/${F}.jpg`] }));
+  t("…case-insensitively", selectForRemoval(rows, { ownerId: A.toUpperCase(), submissionIds: [S1.toUpperCase()] }).copies.length === 1);
+  const all = selectForRemoval(rows);
+  t("the admin sweep takes every well-formed name in the two style buckets, nothing else",
+    all.originals.length === 2 && all.copies.length === 2 && !JSON.stringify(all).includes(".."));
+  t("stylePhotoPath is <owner>/<product>/<id>.jpg", stylePhotoPath(A, Pp, F) === `${A}/${Pp}/${F}.jpg`);
+  t("styleGalleryName is <submission>/<id>.jpg", styleGalleryName(S1, F) === `${S1}/${F}.jpg`);
+  const L = "abcdef01-2345-4789-8abc-def012345678";
+  t("isUuid refuses anything but a lowercase uuid", isUuid(L) && !isUuid(L.toUpperCase()) && !isUuid(`${L}/x`) && !isUuid(42));
+
+  // ══ B. Source ═════════════════════════════════
+  console.log("\nB. source: who writes, who removes");
+  const form = read("components/style/StyleSubmissionForm.tsx");
+  const share = read("components/style/ShareYourStyle.tsx");
+  const manager = read("components/admin/StyleManager.tsx");
+  const submit = read("app/api/style/submit/route.ts");
+  const withdraw = read("app/api/style/withdraw/route.ts");
+  const delRoute = read("app/api/account/delete/route.ts");
+  const moderate = read("app/api/admin/style/moderate/route.ts");
+  const adminDelete = read("app/api/admin/style/delete/route.ts");
+  const reject = read("app/api/admin/style/reject/route.ts");
+  const sweepRoute = read("app/api/admin/style/sweep/route.ts");
+  const danger = read("components/account/DangerZone.tsx");
+  const sameOrigin = /isSameOrigin\(request\)/;
+  const adminGate = /await adminApiGate\(request\)[\s\S]*rpc\("is_admin"\)[\s\S]*isAdmin !== true/;
+
+  const componentFiles: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.tsx?$/.test(e.name)) componentFiles.push(p);
+    }
+  };
+  walk("components");
+  t("no component writes to storage or holds the service key",
+    componentFiles.every((f) => { const s = fs.readFileSync(f, "utf8"); return !/\.upload\(/.test(s) && !/createServiceClient/.test(s); }));
+  t("the form posts everything to /api/style/submit and touches no storage itself",
+    /fetch\("\/api\/style\/submit", \{ method: "POST", body \}\)/.test(form) && !/\.storage\b/.test(form) && !/from\("style_submissions"\)/.test(form));
+
+  t("submit: same-origin, the user from the session", sameOrigin.test(submit) && /auth\.getUser\(\)/.test(submit) && !/form\.get\("user_id"\)/.test(submit));
+  const order = ["auth.getUser()", 'rpc("style_photo_upload_allowed"', "normalizeStylePhoto(", ".upload(path", 'from("style_submissions")'];
+  const at = order.map((s) => submit.indexOf(s));
+  t("submit: session → purchase check → bytes → private store → save, in that order",
+    at.every((i) => i > 0) && at.every((i, k) => k === 0 || i > at[k - 1]), JSON.stringify(at));
+  t("submit: the size is checked before the bytes are read", submit.indexOf("photo.size > STYLE_PHOTO_MAX_BYTES") < submit.indexOf("photo.arrayBuffer()"));
+  t("submit: stores only in the PRIVATE bucket, at a name it makes, never upsert",
+    /storage\.from\(STYLE_PHOTO_BUCKET\)\.upload\(path, normalized\.jpeg/.test(submit) && /stylePhotoPath\(user\.id, productId, randomUUID\(\)\)/.test(submit)
+    && /upsert: false/.test(submit) && /contentType: "image\/jpeg"/.test(submit) && !/STYLE_GALLERY_BUCKET/.test(submit));
+  t("submit: the submission is saved with the CUSTOMER'S session (RLS + trigger judge it)",
+    /await supabase\s*\.from\("style_submissions"\)\s*\.insert/.test(submit) && /supabase\.rpc\("resubmit_style"/.test(submit));
+  t("submit: a failed save removes the file it stored before replying",
+    /catch \(e\) \{\s*\/\/ Saved nothing, so keep nothing\.\s*if \(stored\) await service\.storage\.from\(STYLE_PHOTO_BUCKET\)\.remove\(\[stored\.path\]\)/.test(submit));
+  t("submit: a resubmission removes the previous original, only inside the customer's folder",
+    /previousPath\.startsWith\(`\$\{user\.id\}\/`\)[\s\S]*remove\(\[previousPath\]\)/.test(submit));
+
+  t("withdraw: same-origin, session, the customer's own row, then their files before replying",
+    sameOrigin.test(withdraw) && /auth\.getUser\(\)/.test(withdraw) && /\.update\(\{ withdrawn_at:[\s\S]*\.eq\("user_id", user\.id\)/.test(withdraw)
+    && /sweepStylePhotos\(createServiceClient\(\), \{ ownerId: user\.id, submissionIds: \[id\] \}\)/.test(withdraw));
+  t("taking it down from the site goes through that route", /fetch\("\/api\/style\/withdraw"/.test(share) && !/\.update\(/.test(share));
+
+  t("Delete Account posts to /api/account/delete", /fetch\("\/api\/account\/delete", \{ method: "POST" \}\)/.test(danger) && !/rpc\(/.test(danger));
+  t("account delete: same-origin, session, ids noted BEFORE delete_my_account, files AFTER it",
+    sameOrigin.test(delRoute) && /auth\.getUser\(\)/.test(delRoute)
+    && delRoute.indexOf('from("style_submissions").select("id")') < delRoute.indexOf('rpc("delete_my_account")')
+    && delRoute.indexOf('rpc("delete_my_account")') < delRoute.indexOf("sweepStylePhotos(") && /if \(!result\?\.ok\) return/.test(delRoute));
+  t("account delete: scoped to that customer, nothing read from the request",
+    /sweepStylePhotos\(createServiceClient\(\), \{ ownerId: user\.id, submissionIds \}\)/.test(delRoute) && !/request\.json\(\)|searchParams|formData/.test(delRoute));
+
+  t("moderate: admin-gated", adminGate.test(moderate));
+  t("approve: original read privately, copy written to the PUBLIC bucket, recorded with the ADMIN'S session",
+    /storage\.from\(STYLE_PHOTO_BUCKET\)\.download\(row\.photo_path\)/.test(moderate) && /storage\.from\(STYLE_GALLERY_BUCKET\)\.upload\(copy!\.name/.test(moderate)
+    && /supabase\.rpc\("approve_style", \{ p_id: id, p_public_name: copy\.name \}\)/.test(moderate));
+  t("approve: if recording fails the copy is removed; if a sweep raced it, it is made again",
+    /if \(rpcError\) \{\s*await service\.storage\.from\(STYLE_GALLERY_BUCKET\)\.remove\(\[copy\.name\]\)/.test(moderate) && /exists\(copy\.name\)[\s\S]*if \(!there\) await put\(\)/.test(moderate));
+  t("take off / silent reject: moderate_style with the admin's session, then the sweep",
+    /supabase\.rpc\("moderate_style"/.test(moderate) && /sweepStylePhotos\(service\)/.test(moderate));
+  t("reject with a reason also takes the public copy down", adminGate.test(reject) && reject.indexOf('rpc("moderate_style"') < reject.indexOf("sweepStylePhotos(createServiceClient())"));
+  t("admin delete: admin-gated, row deleted with the admin's session, original removed by name, then the sweep",
+    adminGate.test(adminDelete) && /await supabase\s*\.from\("style_submissions"\)\s*\.delete\(\)/.test(adminDelete)
+    && /storage\.from\(STYLE_PHOTO_BUCKET\)\.remove\(\[original\]\)/.test(adminDelete) && /sweepStylePhotos\(service\)/.test(adminDelete));
+  t("the sweep route is admin-gated", adminGate.test(sweepRoute) && /sweepStylePhotos\(createServiceClient\(\)\)/.test(sweepRoute));
+  t("the admin queue: actions through the routes, never the RPC or table from the browser",
+    /fetch\("\/api\/admin\/style\/moderate"/.test(manager) && /fetch\("\/api\/admin\/style\/delete"/.test(manager)
+    && !/rpc\("moderate_style"/.test(manager) && !/\.delete\(\)/.test(manager));
+  t("the admin queue shows originals by 10-minute signed URL, unoptimised",
+    /createSignedUrls\(paths, 600\)/.test(manager) && /src=\{previews\[row\.photo_path\]\}[\s\S]{0,200}unoptimized/.test(manager));
+  t("opening the admin queue runs the backstop sweep", /fetch\("\/api\/admin\/style\/sweep", \{ method: "POST" \}\)/.test(manager));
+  t("the old browser cleanup route is gone", !fs.existsSync("app/api/style/cleanup"));
+  t("still no Vercel cron (the project keeps none)", !fs.existsSync("vercel.json") && !fs.existsSync("app/api/cron"));
+  t("the gallery still renders the public photo_url through next/image",
+    /<Image\s+src=\{item\.photoUrl\}/.test(read("components/style/StyleCard.tsx")) && /hostname: "\*\.supabase\.co"/.test(read("next.config.mjs")));
+  t("delete_my_account itself is untouched by 0073", !/delete_my_account/.test(read("supabase/migrations/0073_style_photo_storage_security.sql").replace(/^--.*$/gm, "")));
+
+  // ══ C. The database ════════════════════════════
   const engine = await startEngine();
   if (!engine) {
     console.log("\n  SKIP  database half — embedded-postgres not found (set PG_HARNESS_DIR)");
@@ -141,11 +256,23 @@ t("delete_my_account itself is untouched by 0073", !/delete_my_account/.test(rea
       await c.query("set role anon");
       await c.query("select set_config('request.jwt.claims', '{\"role\":\"anon\"}', false)");
     };
-    const put = (name: string) => c.query("insert into storage.objects (bucket_id, name) values ('style-photos', $1)", [name]);
-    const sel = async () => (await c.query("select name from storage.objects where bucket_id = 'style-photos'")).rows.map((r) => r.name as string);
-    const del = async (name: string) => (await c.query("delete from storage.objects where bucket_id = 'style-photos' and name = $1", [name])).rowCount ?? 0;
-    const okPut = async (name: string) => (await failure(() => put(name))) === "";
-    const exists = async (name: string) => { await asRoot(c); return (await c.query("select 1 from storage.objects where bucket_id='style-photos' and name=$1", [name])).rowCount === 1; };
+    /** What the service key does in /api/style/submit and /api/admin/style/moderate. */
+    const store = async (bucket: string, name: string, age = "0 seconds") => {
+      await asRoot(c);
+      await c.query("insert into storage.objects (bucket_id, name, created_at) values ($1, $2, now() - $3::interval)", [bucket, name, age]);
+    };
+    const put = (bucket: string, name: string) => failure(() => c.query("insert into storage.objects (bucket_id, name) values ($1, $2)", [bucket, name]));
+    const list = async (bucket: string) => (await c.query("select name from storage.objects where bucket_id = $1", [bucket])).rows.map((r) => r.name as string);
+    const del = async (bucket: string, name: string) => (await c.query("delete from storage.objects where bucket_id = $1 and name = $2", [bucket, name]).catch(() => ({ rowCount: 0 }))).rowCount ?? 0;
+    const upd = async (bucket: string, name: string) => (await c.query("update storage.objects set name = name where bucket_id = $1 and name = $2", [bucket, name]).catch(() => ({ rowCount: 0 }))).rowCount ?? 0;
+    const allowed = async (product: string) => (await c.query("select style_photo_upload_allowed($1) a", [product]).catch(() => ({ rows: [{ a: false }] }))).rows[0].a === true;
+    const row = async (id: string) => { await asRoot(c); return (await c.query("select * from style_submissions where id = $1", [id])).rows[0]; };
+    const garbage = async (grace = "1 hour") => {
+      await asService(c);
+      return (await c.query("select bucket, name, reason from style_photo_garbage($1::interval)", [grace])).rows as { bucket: string; name: string; reason: string }[];
+    };
+    const named = (g: { bucket: string; name: string; reason: string }[], bucket: string, name: string, reason?: string) =>
+      g.some((r) => r.bucket === bucket && r.name === name && (!reason || r.reason === reason));
 
     await customer("buyer");    // delivered P1
     await customer("buyer2");   // delivered P1 too
@@ -154,157 +281,232 @@ t("delete_my_account itself is untouched by 0073", !/delete_my_account/.test(rea
     await delivered("buyer2", P1);
     const admin = await makeAdmin(c, "admin@example.test");
 
-    // ── 6. The bucket ──
-    console.log("\nthe bucket");
+    console.log("\nC1. the buckets");
     await asRoot(c);
-    const bucket = (await c.query("select public, file_size_limit, allowed_mime_types from storage.buckets where id = 'style-photos'")).rows[0];
-    t("still public (approved photographs are served by URL)", bucket.public === true);
-    t("8 MiB limit (PHOTO_GUIDANCE.maxBytes)", Number(bucket.file_size_limit) === 8 * 1024 * 1024);
-    t("image/jpeg only", JSON.stringify(bucket.allowed_mime_types) === JSON.stringify(["image/jpeg"]));
+    const bucket = async (id: string) => (await c.query("select public, file_size_limit, allowed_mime_types from storage.buckets where id = $1", [id])).rows[0];
+    const orig = await bucket("style-photos");
+    const gal = await bucket("style-gallery");
+    t("style-photos (what customers send) is PRIVATE", orig.public === false);
+    t("style-gallery (approved copies) is public", gal?.public === true);
+    t("both: 4 MiB, image/jpeg only",
+      [orig, gal].every((b) => Number(b.file_size_limit) === 4 * 1024 * 1024 && JSON.stringify(b.allowed_mime_types) === JSON.stringify(["image/jpeg"])));
     t("product-images is untouched", (await c.query("select file_size_limit, allowed_mime_types from storage.buckets where id = 'product-images'")).rows.every((r) => r.file_size_limit === null));
+    const policies = (await c.query("select policyname, cmd from pg_policies where schemaname='storage' and tablename='objects' and (qual like '%style-%' or with_check like '%style-%')")).rows;
+    t("exactly one storage policy names a style bucket: admins may READ originals",
+      policies.length === 1 && policies[0].policyname === "Admins read style submissions" && policies[0].cmd === "SELECT", JSON.stringify(policies));
 
-    // ── 1. Upload ──
-    console.log("\nupload: who, where, how many");
-    const mine = `${users.buyer}/${P1}/${uuid()}.jpg`;
+    console.log("\nC2. nobody writes to storage directly");
+    const buyerFile = `${users.buyer}/${P1}/${uuid()}.jpg`;
+    for (const [who, enter] of [["anonymous", asAnon], ["a non-buyer", () => as("stranger")], ["a buyer", () => as("buyer")], ["an aal2 admin", () => asAdmin(c, admin)]] as const) {
+      await enter();
+      const r1 = await put("style-photos", who === "a buyer" ? buyerFile : `${users.stranger}/${P1}/${uuid()}.jpg`);
+      const r2 = await put("style-gallery", `${uuid()}/${uuid()}.jpg`);
+      t(`${who}: direct upload refused in both buckets`, r1 !== "" && r2 !== "");
+    }
+    await as("buyer");
+    t("a customer still cannot write to product-images", (await put("product-images", `${users.buyer}/${uuid()}.jpg`)) !== "");
+
+    console.log("\nC3. may this customer send one? (style_photo_upload_allowed)");
     await asAnon();
-    t("anonymous upload refused", !(await okPut(`${users.buyer}/${P1}/${uuid()}.jpg`)));
+    t("anonymous: no", !(await allowed(P1)));
     await as("stranger");
-    t("signed-in NON-buyer refused, even in their own folder", !(await okPut(`${users.stranger}/${P1}/${uuid()}.jpg`)));
+    t("signed in, bought nothing: no", !(await allowed(P1)));
     await as("buyer");
-    t("buyer uploads <own id>/<bought product>/<uuid>.jpg", await okPut(mine));
-    t("buyer refused for a product they did not buy", !(await okPut(`${users.buyer}/${P2}/${uuid()}.jpg`)));
-    t("buyer refused in another buyer's folder", !(await okPut(`${users.buyer2}/${P1}/${uuid()}.jpg`)));
-    const tricks = [
-      `${users.buyer}/${P1}/../${uuid()}.jpg`,
-      `${users.buyer}/${P1}/${uuid()}.png`,
-      `${users.buyer}/${P1}/${uuid()}.jpg.html`,
-      `${users.buyer}/${P1}/${uuid()}.JPG`,
-      `${users.buyer}/${P1}/${uuid().toUpperCase()}.jpg`,
-      `${users.buyer}/${P1}/sub/${uuid()}.jpg`,
-      `${users.buyer}/${P1}//${uuid()}.jpg`,
-      `/${users.buyer}/${P1}/${uuid()}.jpg`,
-      `${users.buyer}/${uuid()}.jpg`,
-      `${users.buyer}/${P1}/photo.jpg`,
-      `${users.buyer}/not-a-uuid/${uuid()}.jpg`,
-      `${users.buyer}/${P1}/${uuid()}.jpg\n`,
-      `${users.buyer}/${P1}/${uuid()}.jpg/x`,
-      "",
-    ];
-    const accepted: string[] = [];
-    for (const name of tricks) if (await okPut(name)) accepted.push(JSON.stringify(name));
-    t(`every path trick refused (${tricks.length} shapes)`, accepted.length === 0, accepted.join(", "));
-    const wrongBucket = await failure(() => c.query("insert into storage.objects (bucket_id, name) values ('product-images', $1)", [`${users.buyer}/${P1}/${uuid()}.jpg`]));
-    t("a customer still cannot write to product-images", wrongBucket !== "");
-    for (let i = 0; i < 4; i++) await put(`${users.buyer}/${P1}/${uuid()}.jpg`);
-    t("five per piece, then refused", !(await okPut(`${users.buyer}/${P1}/${uuid()}.jpg`)));
-    const overwrite = await c.query("update storage.objects set name = name where name = $1", [mine]).then((r) => r.rowCount ?? 0).catch(() => 0);
-    t("nobody overwrites a photograph (no UPDATE policy)", overwrite === 0);
+    t("a delivered buyer, for that piece: yes", await allowed(P1));
+    t("…for a piece they did not buy: no", !(await allowed(P2)));
+    for (let i = 0; i < 5; i++) await store("style-photos", `${users.buyer}/${P1}/${uuid()}.jpg`);
+    await as("buyer");
+    t("five files for one piece, then no", !(await allowed(P1)));
+    await asRoot(c);
+    await c.query("delete from storage.objects where bucket_id = 'style-photos'");
 
-    // ── 2. Reading records ──
-    console.log("\nwho can see the records");
-    await asAnon();
-    t("anonymous cannot list the bucket", (await sel()).length === 0);
-    await as("buyer2");
+    console.log("\nC4. a pending photograph is private");
+    const mine = `${users.buyer}/${P1}/${uuid()}.jpg`;
     const theirs = `${users.buyer2}/${P1}/${uuid()}.jpg`;
-    await put(theirs);
-    t("another customer sees only their own", JSON.stringify(await sel()) === JSON.stringify([theirs]));
+    await store("style-photos", mine);
+    await store("style-photos", theirs);
+    await asAnon();
+    t("anonymous sees no original (cannot list or sign one)", (await list("style-photos")).length === 0);
+    await as("buyer2");
+    t("another customer cannot see the buyer's original", !(await list("style-photos")).includes(mine));
     await as("buyer");
-    t("the owner sees their five", (await sel()).length === 5 && !(await sel()).includes(theirs));
+    t("…and the owner does not need to: no customer reads originals", (await list("style-photos")).length === 0);
     await asAdmin(c, admin);
-    t("an admin sees all six", (await sel()).length === 6);
+    t("an admin can read originals, to review them", (await list("style-photos")).length === 2);
+    t("nobody lists the public gallery bucket, not even an admin", (await list("style-gallery")).length === 0);
+    for (const [who, enter] of [["another customer", () => as("buyer2")], ["the owner", () => as("buyer")], ["an admin", () => asAdmin(c, admin)]] as const) {
+      await enter();
+      t(`${who} cannot delete or overwrite an original directly`, (await del("style-photos", mine)) === 0 && (await upd("style-photos", mine)) === 0);
+    }
 
-    // ── 4. photo_url ──
-    console.log("\nphoto_url must be ours, theirs, for this piece");
+    console.log("\nC5. a submission names only its owner's own original");
     await as("buyer");
-    const submit = (url: string | null, product = P1, video: string | null = null) =>
+    const insert = (photoPath: string | null, product = P1, extra: Record<string, unknown> = {}) =>
       failure(() => c.query(
-        `insert into style_submissions (product_id, user_id, photo_url, video_platform, video_url, consented_at)
-         values ($1, $2, $3, $4, $5, now())`, [product, users.buyer, url, video ? "youtube" : null, video]));
-    t("an outside address refused", (await submit("https://evil.example/x.jpg")) !== "");
-    t("another Supabase project's address refused", (await submit(`https://other.supabase.co/storage/v1/object/public/style-photos/${mine}`)) !== "");
-    t("our address for a file that does not exist refused", (await submit(`${BASE}${users.buyer}/${P1}/${uuid()}.jpg`)) !== "");
-    t("our address for ANOTHER customer's file refused", (await submit(`${BASE}${theirs}`)) !== "");
-    t("a file of the right owner but another product refused", (await submit(`${BASE}${mine}`, P2)) !== "");
-    t("a suffix after a real address refused", (await submit(`${BASE}${mine}?x=1`)) !== "");
-    t("our address for their own existing file accepted", (await submit(`${BASE}${mine}`)) === "");
+        `insert into style_submissions (product_id, user_id, photo_path, photo_url, video_platform, video_url, consented_at)
+         values ($1, $2, $3, $4, $5, $6, now())`,
+        [product, users.buyer, photoPath, extra.photo_url ?? null, extra.video ? "youtube" : null, extra.video ?? null]));
+    t("a path that does not exist refused", /did not upload properly/.test(await insert(`${users.buyer}/${P1}/${uuid()}.jpg`)));
+    t("ANOTHER customer's original refused", /did not upload properly/.test(await insert(theirs)));
+    t("their own original under another piece refused", (await insert(mine, P2)) !== "");
+    t("a malformed path refused", /did not upload properly/.test(await insert(`${users.buyer}/${P1}/../${mine}`)));
+    t("neither a photograph nor a link refused", (await insert(null)) !== "");
+    t("their own existing original accepted", (await insert(mine, P1, { photo_url: `${GALLERY}x/y.jpg` })) === "");
     await asRoot(c);
     const sid = (await c.query("select id from style_submissions where user_id = $1", [users.buyer])).rows[0].id as string;
-    await c.query("update style_submissions set status = 'rejected', reject_reason = 'blurry' where id = $1", [sid]);
+    t("…and a public address smuggled into the insert is dropped (pending has none)", (await row(sid)).photo_url === null);
     await as("buyer");
-    const resub = (url: string) => failure(() => c.query("select resubmit_style($1, $2, 1200, 1500)", [sid, url]));
-    t("resubmit with an outside address refused", /did not upload properly/.test(await resub("https://evil.example/y.jpg")));
-    t("resubmit with another customer's file refused", /did not upload properly/.test(await resub(`${BASE}${theirs}`)));
-    const second = `${users.buyer}/${P1}/${uuid()}.jpg`;
-    await asRoot(c);
-    await c.query("delete from storage.objects where name like $1 and name <> $2", [`${users.buyer}/${P1}/%`, mine]);
-    await as("buyer");
-    await put(second);
-    t("resubmit with their own new file accepted", (await resub(`${BASE}${second}`)) === "");
-
-    // ── 3. Removing ──
-    console.log("\nwho can remove a file");
+    t("a customer cannot change photo_path or photo_url themselves",
+      (await failure(() => c.query("update style_submissions set photo_path = $1 where id = $2", [theirs, sid]))) !== ""
+      && (await failure(() => c.query("update style_submissions set photo_url = $1 where id = $2", [`${GALLERY}${sid}/${uuid()}.jpg`, sid]))) !== "");
     await as("buyer2");
-    t("another customer cannot remove the buyer's file", (await del(second)) === 0 && (await exists(second)));
+    const sid2 = (await c.query(
+      "insert into style_submissions (product_id, user_id, photo_path, photo_width, photo_height, consented_at) values ($1, $2, $3, 1200, 1500, now()) returning id",
+      [P1, users.buyer2, theirs])).rows[0].id as string;
     await as("buyer");
-    t("the owner cannot remove a file a submission uses", (await del(second)) === 0 && (await exists(second)));
-    t("the owner CAN remove their own unused file (failed-save cleanup)", (await del(mine)) === 1 && !(await exists(mine)));
-    await asAdmin(c, admin);
-    const extra = `${users.buyer2}/${P1}/${uuid()}.jpg`;
-    await asRoot(c); await c.query("insert into storage.objects (bucket_id, name) values ('style-photos', $1)", [extra]);
-    await asAdmin(c, admin);
-    t("an admin can remove any style photo", (await del(extra)) === 1);
+    t("a customer cannot read another customer's submission row", (await c.query("select 1 from style_submissions where id = $1", [sid2])).rowCount === 0);
 
-    // ── 5. Garbage ──
-    console.log("\nwhat the sweep may remove");
-    const garbage = async (grace = "24 hours") => {
-      await asService(c);
-      return (await c.query("select name, reason from style_photo_garbage($1::interval)", [grace])).rows as { name: string; reason: string }[];
-    };
-    await asRoot(c);
-    const stale = `${users.buyer2}/${P1}/${uuid()}.jpg`;
-    await c.query("insert into storage.objects (bucket_id, name, created_at) values ('style-photos', $1, now() - interval '2 days')", [stale]);
+    console.log("\nC6. the shop is told there is a photograph");
+    await as("buyer");
+    const claim = (await c.query("select claim_style_notification($1) n", [sid])).rows[0].n as { has_photo: boolean };
+    t("claim_style_notification still says has_photo for a private original", claim?.has_photo === true);
+    await asAdmin(c, admin);
+    const queue = (await c.query("select admin_style_submissions() q")).rows[0].q as Array<{ id: string; photo_path: string; photo_url: string | null }>;
+    t("the admin queue carries photo_path (to sign) and no public address yet",
+      queue.some((r) => r.id === sid && r.photo_path === mine && r.photo_url === null));
+
+    console.log("\nC7. approval publishes a COPY, and only approval does");
+    await asAdmin(c, admin);
+    t("moderate_style cannot approve a photograph (no public copy)", /approve_style/.test(await failure(() => c.query("select moderate_style($1, 'approved')", [sid]))));
+    t("approve_style without a copy name refused", /not made/.test(await failure(() => c.query("select approve_style($1, null)", [sid]))));
+    t("approve_style with a name whose file does not exist refused", (await failure(() => c.query("select approve_style($1, $2)", [sid, styleGalleryName(sid, uuid())]))) !== "");
+    const elsewhere = styleGalleryName(sid2, uuid());
+    await store("style-gallery", elsewhere);
+    await asAdmin(c, admin);
+    t("approve_style with ANOTHER submission's copy refused", /not made/.test(await failure(() => c.query("select approve_style($1, $2)", [sid, elsewhere]))));
+    const copy1 = styleGalleryName(sid, uuid());
+    await store("style-gallery", copy1);
+    await as("buyer");
+    t("a customer cannot approve their own", /Only admins/.test(await failure(() => c.query("select approve_style($1, $2)", [sid, copy1]))));
+    await asAdmin(c, admin);
+    t("an admin approves with the copy", (await failure(() => c.query("select approve_style($1, $2)", [sid, copy1]))) === "");
+    t("photo_url is exactly the public copy's address", (await row(sid)).photo_url === `${GALLERY}${copy1}` && (await row(sid)).reviewed_by === admin);
+    await asAnon();
+    t("anonymous sees it in the public view", (await c.query("select photo_url from public_style_submissions")).rows.some((r) => r.photo_url === `${GALLERY}${copy1}`));
+    t("…and the view still shows nothing pending", (await c.query("select 1 from public_style_submissions where id = $1", [sid2])).rowCount === 0);
+    await asAdmin(c, admin);
+    t("an admin cannot point photo_url anywhere else by hand",
+      (await failure(() => c.query("update style_submissions set photo_url = 'https://evil.example/x.jpg' where id = $1", [sid]))) !== ""
+      && (await failure(() => c.query("update style_submissions set photo_url = $1 where id = $2", [`${GALLERY}${elsewhere}`, sid]))) !== "");
     let g = await garbage();
-    t("a fresh unused file is left alone (an upload may be mid-save)", !g.some((r) => r.name === theirs));
-    t("an unused file older than a day is named", g.some((r) => r.name === stale && r.reason === "unused"));
-    t("a file a submission uses is never named", !g.some((r) => r.name === second));
+    t("the published copy and its original are never named", !named(g, "style-gallery", copy1) && !named(g, "style-photos", mine));
+    t("a copy no published row uses is named at once ('not published')", named(g, "style-gallery", elsewhere, "not published"));
+
+    console.log("\nC8. taken off, rejected, withdrawn: the public copy goes");
+    await asAdmin(c, admin);
+    await c.query("select moderate_style($1, 'pending')", [sid]);
+    t("taking it off clears photo_url", (await row(sid)).photo_url === null);
+    g = await garbage();
+    t("…and names the copy at once", named(g, "style-gallery", copy1, "not published"));
+    const copy2 = styleGalleryName(sid, uuid());
+    await store("style-gallery", copy2);
+    await asAdmin(c, admin);
+    await c.query("select approve_style($1, $2)", [sid, copy2]);
+    g = await garbage();
+    t("re-approval publishes a NEW copy; the old one stays named", named(g, "style-gallery", copy1) && !named(g, "style-gallery", copy2));
+    await asAdmin(c, admin);
+    await c.query("select moderate_style($1, 'rejected', 'blurry')", [sid]);
+    t("rejecting clears photo_url", (await row(sid)).photo_url === null);
+    g = await garbage();
+    t("…and names the copy at once; the private original is kept for the customer's resubmission",
+      named(g, "style-gallery", copy2, "not published") && !named(g, "style-photos", mine));
+
+    await as("buyer");
+    t("resubmit with another customer's original refused", /did not upload properly/.test(await failure(() => c.query("select resubmit_style($1, $2, 1200, 1500)", [sid, theirs]))));
+    const second = `${users.buyer}/${P1}/${uuid()}.jpg`;
+    await store("style-photos", second);
+    await as("buyer");
+    t("resubmit with their own new original accepted", (await failure(() => c.query("select resubmit_style($1, $2, 1200, 1500)", [sid, second]))) === "");
+    await store("style-photos", `${users.buyer}/${P1}/${uuid()}.jpg`, "2 hours");
+    g = await garbage();
+    t("the replaced original is unused (the route removes it at once; the sweep after an hour)",
+      !named(g, "style-photos", mine) && (await garbage("0 seconds")).some((r) => r.name === mine && r.reason === "unused"));
+    t("an unused original older than an hour is named (a request that died mid-save)",
+      g.some((r) => r.bucket === "style-photos" && r.reason === "unused" && r.name !== mine));
+
+    const copy3 = styleGalleryName(sid, uuid());
+    await store("style-gallery", copy3);
+    await asAdmin(c, admin);
+    await c.query("select approve_style($1, $2)", [sid, copy3]);
     await as("buyer");
     await c.query("update style_submissions set withdrawn_at = now() where id = $1", [sid]);
-    g = await garbage();
-    t("a withdrawn submission's file is named at once", g.some((r) => r.name === second && r.reason === "consent withdrawn"));
-    await as("buyer");
-    t("customers cannot call it", (await failure(() => c.query("select * from style_photo_garbage()"))) !== "");
+    t("withdrawing (the customer's own update) clears photo_url in the same statement", (await row(sid)).photo_url === null);
     await asAnon();
-    t("anonymous cannot call it", (await failure(() => c.query("select * from style_photo_garbage()"))) !== "");
+    t("…and it is out of the public view", (await c.query("select 1 from public_style_submissions where id = $1", [sid])).rowCount === 0);
+    g = await garbage();
+    t("the withdrawn copy is named at once", named(g, "style-gallery", copy3, "not published"));
+    t("the withdrawn original is named at once", named(g, "style-photos", second, "consent withdrawn"));
+    const r1 = selectForRemoval(g, { ownerId: users.buyer, submissionIds: [sid] });
+    t("the withdraw route's scoped cleanup takes both", r1.copies.includes(copy3) && r1.originals.includes(second));
+    const r2 = selectForRemoval(g, { ownerId: users.buyer2, submissionIds: [sid2] });
+    t("another customer's scoped cleanup could not reach them", !r2.copies.includes(copy3) && !r2.originals.includes(second));
+    await asAdmin(c, admin);
+    t("a withdrawn submission cannot be approved again", /withdrawn/.test(await failure(() => c.query("select approve_style($1, $2)", [sid, copy3]))));
 
-    // ── Account deletion ──
-    console.log("\naccount deletion");
+    console.log("\nC9. who may run the sweep");
+    for (const [who, enter] of [["a customer", () => as("buyer")], ["an admin's own session", () => asAdmin(c, admin)], ["anonymous", asAnon]] as const) {
+      await enter();
+      t(`${who} cannot call style_photo_garbage`, (await failure(() => c.query("select * from style_photo_garbage()"))) !== "");
+    }
+
+    console.log("\nC10. admin delete");
+    const copyB2 = styleGalleryName(sid2, uuid());
+    await store("style-gallery", copyB2);
+    await asAdmin(c, admin);
+    await c.query("select approve_style($1, $2)", [sid2, copyB2]);
+    await asAdmin(c, admin);
+    const gone = (await c.query("delete from style_submissions where id = $1 returning photo_path", [sid2])).rows[0];
+    t("an admin deletes the row and learns its original (the route removes it by name)", gone?.photo_path === theirs);
+    g = await garbage();
+    t("its public copies are named at once ('submission gone')", named(g, "style-gallery", copyB2, "submission gone") && named(g, "style-gallery", elsewhere, "submission gone"));
+    await asAnon();
+    t("…and it left the public view with the row", (await c.query("select 1 from public_style_submissions where id = $1", [sid2])).rowCount === 0);
+
+    console.log("\nC11. account deletion");
     await asRoot(c);
-    await c.query("update style_submissions set withdrawn_at = null where id = $1", [sid]);
-    await c.query("insert into orders (customer_email, customer_name, total_inr, items, payment_status, status) values ('buyer@example.test', 'Buyer', 500, '[]'::jsonb, 'paid', 'delivered')");
-    const buyerFiles = (await c.query("select name from storage.objects where name like $1", [`${users.buyer}/%`])).rows.map((r) => r.name as string);
+    await c.query("delete from storage.objects");
+    await c.query("delete from style_submissions");
+    const live = `${users.buyer}/${P1}/${uuid()}.jpg`;
+    const other = `${users.buyer2}/${P1}/${uuid()}.jpg`;
+    await store("style-photos", live);
+    await store("style-photos", other);
     await as("buyer");
+    const sidA = (await c.query("insert into style_submissions (product_id, user_id, photo_path, consented_at) values ($1, $2, $3, now()) returning id", [P1, users.buyer, live])).rows[0].id as string;
+    await as("buyer2");
+    const sidB = (await c.query("insert into style_submissions (product_id, user_id, photo_path, consented_at) values ($1, $2, $3, now()) returning id", [P1, users.buyer2, other])).rows[0].id as string;
+    const pubA = styleGalleryName(sidA, uuid());
+    const pubB = styleGalleryName(sidB, uuid());
+    await store("style-gallery", pubA);
+    await store("style-gallery", pubB);
+    await asAdmin(c, admin);
+    await c.query("select approve_style($1, $2)", [sidA, pubA]);
+    await asAdmin(c, admin);
+    await c.query("select approve_style($1, $2)", [sidB, pubB]);
+    await asRoot(c);
+    await c.query("insert into orders (customer_email, customer_name, total_inr, items, payment_status, status) values ('buyer@example.test', 'Buyer', 500, '[]'::jsonb, 'paid', 'delivered')");
+    await as("buyer");
+    const ids = (await c.query("select id from style_submissions where user_id = $1", [users.buyer])).rows.map((r) => r.id as string);
+    t("the route can read the customer's submission ids first", JSON.stringify(ids) === JSON.stringify([sidA]));
     const res = (await c.query("select delete_my_account() r")).rows[0].r as { ok: boolean; orders_anonymised: number };
     t("delete_my_account still succeeds and anonymises orders", res.ok === true && res.orders_anonymised === 2, JSON.stringify(res));
     g = await garbage();
-    const removable = selectForRemoval(g, users.buyer);
-    t("every one of that account's files becomes removable ('owner gone')", buyerFiles.length > 0 && buyerFiles.every((f) => removable.includes(f)) && g.filter((r) => buyerFiles.includes(r.name)).every((r) => r.reason === "owner gone"));
-    t("the per-account cleanup touches no other customer's file", removable.every((n) => n.startsWith(`${users.buyer}/`)) && !removable.includes(theirs));
-    t("the other buyer's in-use or fresh files are not garbage", !g.some((r) => r.name === theirs));
-
-    // ── Admin flow ──
-    console.log("\nadmin flow still works");
-    await asRoot(c);
-    const okFile = `${users.buyer2}/${P1}/${uuid()}.jpg`;
-    await c.query("insert into storage.objects (bucket_id, name) values ('style-photos', $1)", [okFile]);
-    await as("buyer2");
-    await c.query("insert into style_submissions (product_id, user_id, photo_url, photo_width, photo_height, consented_at) values ($1, $2, $3, 1200, 1500, now())", [P1, users.buyer2, `${BASE}${okFile}`]);
-    await asAdmin(c, admin);
-    const queue = (await c.query("select admin_style_submissions() q")).rows[0].q as Array<{ id: string; photo_url: string }>;
-    t("the admin queue lists it with its photo_url", queue.some((r) => r.photo_url === `${BASE}${okFile}`));
-    const sub2 = queue.find((r) => r.photo_url === `${BASE}${okFile}`)!.id;
-    t("the admin can approve it", (await failure(() => c.query("select moderate_style($1, 'approved')", [sub2]))) === "");
+    t("their original is named ('owner gone') and their public copy ('submission gone')",
+      named(g, "style-photos", live, "owner gone") && named(g, "style-gallery", pubA, "submission gone"));
     await asAnon();
-    t("approved → in the public view, with its URL", (await c.query("select photo_url from public_style_submissions")).rows.some((r) => r.photo_url === `${BASE}${okFile}`));
+    t("their photograph left the public view at once", !(await c.query("select photo_url from public_style_submissions")).rows.some((r) => r.photo_url === `${GALLERY}${pubA}`));
+    const scoped = selectForRemoval(g, { ownerId: users.buyer, submissionIds: ids });
+    t("the route's scoped cleanup takes exactly those two", JSON.stringify(scoped) === JSON.stringify({ originals: [live], copies: [pubA] }));
+    t("the other buyer's published photograph is untouched", !named(g, "style-photos", other) && !named(g, "style-gallery", pubB));
 
     await c.end();
   } finally {

@@ -90,23 +90,23 @@ function Status({ submission }: { submission: MySubmission }) {
   const [withdrawn, setWithdrawn] = useState(Boolean(submission.withdrawnAt));
 
   /**
-   * Withdrawal is one UPDATE the customer is allowed to make themselves (0047),
-   * and it takes effect immediately — the public view filters on withdrawn_at, so
-   * nothing waits on an admin. That is the point: under the DPDP Act taking
-   * consent back must be as easy as giving it.
+   * Withdrawal takes effect immediately — the public view filters on
+   * withdrawn_at, so nothing waits on an admin. That is the point: under the
+   * DPDP Act taking consent back must be as easy as giving it. The route makes
+   * the customer's own UPDATE (0047) and removes the photograph's files before
+   * it answers (0073).
    */
   async function withdraw() {
     setBusy(true);
-    const { error } = await getBrowserSupabase()
-      .from("style_submissions")
-      .update({ withdrawn_at: new Date().toISOString() })
-      .eq("id", submission.id);
+    const ok = await fetch("/api/style/withdraw", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: submission.id }),
+    })
+      .then((r) => r.ok)
+      .catch(() => false);
     setBusy(false);
-    if (!error) {
-      setWithdrawn(true);
-      // Take the photograph itself down too, not only the listing (0073).
-      void fetch("/api/style/cleanup", { method: "POST" }).catch(() => {});
-    }
+    if (ok) setWithdrawn(true);
   }
 
   if (withdrawn) {

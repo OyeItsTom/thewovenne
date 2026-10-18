@@ -97,7 +97,7 @@ t("a video-only submission is never called soft", !isBelowComfortable(null, null
 t("HEIC is accepted by the picker", PHOTO_GUIDANCE.acceptAttribute.includes("heic"),
   "it is re-encoded to JPEG in the browser, never stored as HEIC");
 t("the help text quotes the real numbers", PHOTO_GUIDANCE.help.includes("1200×1500")
-  && PHOTO_GUIDANCE.help.includes("8MB"));
+  && PHOTO_GUIDANCE.help.includes("12MB"));
 t("and does not read as a requirement", /perfect|doesn't need/.test(PHOTO_GUIDANCE.help),
   "the copy has to invite a phone photo, not audition one");
 t("the max upload width is above the recommended one",

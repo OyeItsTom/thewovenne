@@ -1,6 +1,8 @@
 import { adminApiGate } from "@/lib/adminApiGate";
 import { NextRequest, NextResponse } from "next/server";
 import { createRSCClient } from "@/lib/supabaseRSC";
+import { createServiceClient } from "@/lib/supabase";
+import { sweepStylePhotos } from "@/lib/stylePhotoStorage";
 import { sendEmail } from "@/lib/email";
 import {
   styleRejectedHtml,
@@ -11,8 +13,8 @@ import {
 /**
  * Turn a submission down, and tell the customer why.
  *
- * WHY A ROUTE. moderate_style() could be called straight from the browser — the
- * approve path does exactly that. Rejection cannot, because a browser cannot
+ * WHY A ROUTE. moderate_style() could be called straight from the browser.
+ * Rejection cannot, because a browser cannot
  * send email, and the whole decision recorded in 0052 was that a customer hears
  * the reason. Keeping the two together means a rejection cannot be recorded
  * without the message going out, or the message going out for something that was
@@ -58,6 +60,11 @@ export async function POST(request: NextRequest) {
   if (rpcError) {
     return NextResponse.json({ error: rpcError.message }, { status: 400 });
   }
+
+  // If it was on the site, 0073's trigger has cleared its public address; take
+  // the public copy down now rather than at the next queue visit.
+  const sweep = await sweepStylePhotos(createServiceClient());
+  if (sweep.failed) console.error(`style reject ${id}: ${sweep.failed}`);
 
   // ── Tell them ──────────────────────────────────
   // Past this point the decision is recorded. A failure here is reported and

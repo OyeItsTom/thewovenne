@@ -5,14 +5,16 @@ import { createServiceClient } from "@/lib/supabase";
 import { sweepStylePhotos } from "@/lib/stylePhotoStorage";
 
 /**
- * Remove every style photograph style_photo_garbage() names (0073).
+ * Remove every style photograph style_photo_garbage() names (0073), in both
+ * buckets.
  *
- * Run whenever an admin opens the style queue — which is when submissions are
- * arriving, and so when leftovers are made. It catches what the immediate paths
- * cannot: an upload whose tab closed before the submission saved (removed once
- * it is a day old), and anything an earlier removal failed on. Account
- * deletion, withdrawal and the admin's own delete each remove their file at the
- * time; this is the backstop, not the mechanism.
+ * Every action removes its own files at the time: a failed save, a
+ * resubmission, withdrawal, rejection, taking it off the site, an admin delete,
+ * account deletion. This is the backstop for what those cannot guarantee — a
+ * request that died between storing a file and saving the row, a Storage call
+ * that failed, or a withdrawal made straight through the API rather than the
+ * site. It runs whenever an admin opens the style queue, which is when
+ * submissions are arriving.
  *
  * No Vercel cron on purpose: the project keeps none, and two test suites guard
  * that (no vercel.json, no app/api/cron).

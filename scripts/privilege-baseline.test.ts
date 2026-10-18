@@ -199,7 +199,9 @@ async function rowsOrCode(c: Client, sql: string): Promise<string> {
     for (const f of ["resolve_product_path(text)", "product_rating(uuid)", "product_reviews_for(uuid)"]) {
       t(`anon executes ${f} (storefront)`, P.functions[f]?.execute.includes("anon") === true);
     }
-    for (const b of ["product-images", "style-photos"]) t(`bucket ${b} exists and is public`, P.buckets[b]?.public === true);
+    for (const b of ["product-images", "style-gallery"]) t(`bucket ${b} exists and is public`, P.buckets[b]?.public === true);
+    // 0073: what customers send is private until approved; style-gallery holds the approved copies.
+    t("bucket style-photos exists and is PRIVATE", P.buckets["style-photos"]?.public === false);
     await c.end();
 
     // ── 8. the baseline is what makes the difference ──
