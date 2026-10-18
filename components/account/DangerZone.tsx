@@ -70,13 +70,21 @@ export default function DangerZone() {
               This cannot be undone.
             </p>
             <ul className="mt-3 list-disc space-y-1 pl-5">
-              <li>Your profile, wishlist, saved basket and preferences are deleted.</li>
+              <li>
+                Your profile, saved address, wishlist, saved basket, reviews and
+                preferences are deleted.
+              </li>
               <li>Any loyalty points are lost — they can&apos;t be transferred.</li>
               <li>
                 Past orders are kept as financial records, but with your name,
-                email, phone and address removed from them.
+                email, phone and address removed, so they can&apos;t be linked
+                back to you.
               </li>
-              <li>You&apos;ll be signed out and won&apos;t be able to sign back in.</li>
+              <li>
+                You&apos;ll be signed out. You can sign up again later with the
+                same email, or continue with Google, but that makes a new, empty
+                account. Nothing deleted here comes back.
+              </li>
             </ul>
             <p className="mt-3">
               If an order is still on its way, we&apos;ll ask you to wait until it
