@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { Check, ExternalLink, Loader2, Trash2, Undo2, X } from "lucide-react";
-import { getBrowserSupabase } from "@/lib/supabase";
+import { getBrowserSupabase, SUPABASE_URL } from "@/lib/supabase";
+import { STYLE_PHOTO_BUCKET, stylePhotoNameFromUrl } from "@/lib/stylePhotoStorage";
 import { parseStyleLink, watchLabel } from "@/lib/styleMedia";
 
 /**
@@ -80,6 +81,9 @@ export default function StyleManager() {
 
   useEffect(() => {
     void load();
+    // The backstop sweep for leftover style photographs (0073). Fire and
+    // forget: the queue does not wait on it, and a failure is logged server-side.
+    void fetch("/api/admin/style/sweep", { method: "POST" }).catch(() => {});
   }, [load]);
 
   const counts = useMemo(() => {
@@ -144,16 +148,24 @@ export default function StyleManager() {
   }
 
   async function remove(row: Submission) {
-    if (!window.confirm("Delete this submission entirely? The photograph stays in storage but the record is gone.")) {
+    if (!window.confirm("Delete this submission entirely? Its photograph is deleted from storage too.")) {
       return;
     }
     setBusy(row.id);
-    const { error: deleteError } = await getBrowserSupabase()
+    const client = getBrowserSupabase();
+    const { error: deleteError } = await client
       .from("style_submissions")
       .delete()
       .eq("id", row.id);
+    if (deleteError) {
+      setBusy(null);
+      return setError(deleteError.message);
+    }
+    // The file does not go with the row. "Admins remove style photos" (0052)
+    // lets this session remove it; if that fails, the queue's sweep will.
+    const file = stylePhotoNameFromUrl(row.photo_url, SUPABASE_URL);
+    if (file) await client.storage.from(STYLE_PHOTO_BUCKET).remove([file]);
     setBusy(null);
-    if (deleteError) return setError(deleteError.message);
     await load();
   }
 

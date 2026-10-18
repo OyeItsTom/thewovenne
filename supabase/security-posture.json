@@ -1554,6 +1554,51 @@
         "service_role"
       ]
     },
+    "style_photo_base()": {
+      "securityDefiner": false,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_photo_garbage(interval)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_photo_name_ok(text,uuid,uuid)": {
+      "securityDefiner": false,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_photo_unused(text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "style_photo_upload_allowed(text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "style_photo_url_ok(text,uuid,uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
     "sync_published_product_extras()": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -2203,7 +2248,7 @@
         "authenticated"
       ],
       "using": null,
-      "check": "((user_id = auth.uid()) AND has_purchased(product_id) AND (consented_at IS NOT NULL) AND (status = 'pending'::text))"
+      "check": "((user_id = auth.uid()) AND has_purchased(product_id) AND (consented_at IS NOT NULL) AND (status = 'pending'::text) AND style_photo_url_ok(photo_url, user_id, product_id))"
     },
     "public.wishlists.Customers manage own wishlist": {
       "cmd": "ALL",
@@ -2257,7 +2302,25 @@
         "authenticated"
       ],
       "using": null,
-      "check": "((bucket_id = 'style-photos'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text))"
+      "check": "((bucket_id = 'style-photos'::text) AND style_photo_upload_allowed(name))"
+    },
+    "storage.objects.Owners and admins see style photo records": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "((bucket_id = 'style-photos'::text) AND (((storage.foldername(name))[1] = (auth.uid())::text) OR is_admin()))",
+      "check": null
+    },
+    "storage.objects.Owners remove their own unused style photos": {
+      "cmd": "DELETE",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "((bucket_id = 'style-photos'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text) AND style_photo_unused(name))",
+      "check": null
     },
     "storage.objects.Public read product images": {
       "cmd": "SELECT",
@@ -2266,15 +2329,6 @@
         "public"
       ],
       "using": "(bucket_id = 'product-images'::text)",
-      "check": null
-    },
-    "storage.objects.Style photos are publicly readable": {
-      "cmd": "SELECT",
-      "permissive": "PERMISSIVE",
-      "roles": [
-        "public"
-      ],
-      "using": "(bucket_id = 'style-photos'::text)",
       "check": null
     }
   },

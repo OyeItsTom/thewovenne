@@ -7,6 +7,7 @@ import { getBrowserSupabase } from "@/lib/supabase";
 import { PHOTO_GUIDANCE, LINK_HELP, parseStyleLink } from "@/lib/styleMedia";
 import { PhotoUnreadableError, prepareStylePhoto, type PreparedPhoto } from "@/lib/stylePhoto";
 import type { MySubmission } from "@/lib/style";
+import { STYLE_PHOTO_BUCKET, stylePhotoPath } from "@/lib/stylePhotoStorage";
 
 /**
  * "Share your style" — a customer sending us a photograph of something they own.
@@ -85,6 +86,7 @@ export default function StyleSubmissionForm({
 
     setStage("sending");
     const client = getBrowserSupabase();
+    let uploadedPath: string | null = null;
 
     try {
       const {
@@ -94,14 +96,22 @@ export default function StyleSubmissionForm({
 
       let photoUrl: string | null = null;
       if (photo) {
-        // The path starts with the user's id because the storage policy (0052)
-        // requires it: a customer may only write inside their own folder.
-        const path = `${user.id}/${crypto.randomUUID()}.jpg`;
+        // The only shape the storage policy (0073) accepts: the customer's own
+        // folder, then the product they bought, then a fresh uuid. Storage
+        // also refuses anything but a JPEG under 8 MiB.
+        uploadedPath = stylePhotoPath(user.id, productId, crypto.randomUUID());
         const { error: uploadError } = await client.storage
-          .from("style-photos")
-          .upload(path, photo.file, { cacheControl: "31536000", upsert: false });
-        if (uploadError) throw uploadError;
-        photoUrl = client.storage.from("style-photos").getPublicUrl(path).data.publicUrl;
+          .from(STYLE_PHOTO_BUCKET)
+          .upload(uploadedPath, photo.file, {
+            cacheControl: "31536000",
+            contentType: "image/jpeg",
+            upsert: false,
+          });
+        if (uploadError) {
+          uploadedPath = null;
+          throw uploadError;
+        }
+        photoUrl = client.storage.from(STYLE_PHOTO_BUCKET).getPublicUrl(uploadedPath).data.publicUrl;
       }
 
       const shared = {
@@ -170,6 +180,12 @@ export default function StyleSubmissionForm({
       setStage("done");
       onDone?.();
     } catch (e) {
+      // The photograph went up but the submission did not save: take it back
+      // down. 0073 lets an owner remove their own file that nothing uses. If
+      // this does not happen (the tab closed), the admin queue's sweep does it.
+      if (uploadedPath) {
+        void client.storage.from(STYLE_PHOTO_BUCKET).remove([uploadedPath]).catch(() => {});
+      }
       setStage("idle");
       const message = e instanceof Error ? e.message : "Something went wrong.";
       setError(

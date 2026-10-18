@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Loader2 } from "lucide-react";
-import { getBrowserSupabase } from "@/lib/supabase";
 import { logOut } from "@/lib/customerAuth";
 import AuthMessage from "./AuthMessage";
 
@@ -30,15 +29,11 @@ export default function DangerZone() {
     setBusy(true);
     setError(null);
 
-    const { data, error: rpcError } = await getBrowserSupabase().rpc(
-      "delete_my_account"
-    );
-    if (rpcError) {
-      setBusy(false);
-      return setError(rpcError.message);
-    }
-
-    const result = data as { ok: boolean; reason?: string };
+    // The route runs delete_my_account() with this session, then removes the
+    // account's stored photographs, which the database cannot do (0073).
+    const result = (await fetch("/api/account/delete", { method: "POST" })
+      .then((r) => r.json())
+      .catch(() => null)) as { ok: boolean; reason?: string } | null;
     if (!result?.ok) {
       setBusy(false);
       return setError(result?.reason ?? "We couldn't delete the account.");

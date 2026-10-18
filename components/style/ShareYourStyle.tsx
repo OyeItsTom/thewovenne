@@ -102,7 +102,11 @@ function Status({ submission }: { submission: MySubmission }) {
       .update({ withdrawn_at: new Date().toISOString() })
       .eq("id", submission.id);
     setBusy(false);
-    if (!error) setWithdrawn(true);
+    if (!error) {
+      setWithdrawn(true);
+      // Take the photograph itself down too, not only the listing (0073).
+      void fetch("/api/style/cleanup", { method: "POST" }).catch(() => {});
+    }
   }
 
   if (withdrawn) {
