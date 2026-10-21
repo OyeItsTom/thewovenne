@@ -9,8 +9,8 @@ older, longer history and is not current beyond early October.
 
 | | |
 |---|---|
-| `main` | `0569e30` (merge of PR #207) |
-| Production deployment | Vercel `7230021215`, built from `bbb5b4c`, same tree as `0569e30` |
+| `main` | `fed2bc9` (PR #209, docs only). App code is unchanged since `0569e30` (PR #207) |
+| Production deployment | Vercel `7230948592`, built from `fed2bc9` at 16:10 UTC (GitHub deployment record). Same app code as `0569e30` |
 | Migration ledger | 73 rows, latest `0073_style_photo_storage_security.sql` (`public.schema_migrations`) |
 | Security posture | `scripts/security-posture.ts --production` → MATCHES `supabase/security-posture.json` |
 | Background processes | None |
@@ -62,34 +62,67 @@ The original problem: anyone signed in could upload any file to a public, listab
 **STYLE PHOTO E2E LIFECYCLE TEST: DEFERRED — NO SAFE PAID + DELIVERED ORDER FIXTURE.**
 On 21 Oct no production order was paid *and* delivered, so no customer is eligible. Run the test, including live measurement of the 60 s cache and CDN removal, once a genuine delivered order or a deliberately created safe test fixture exists. Do not fake or edit a real order to run it.
 
-## OPEN OPERATIONAL ISSUE — Vercel Git auto-deploy
+## OPERATIONAL ISSUE (WP-00) — Vercel Git auto-deploy: MITIGATED, not yet verified
 
-As of 21 Oct 2026, Vercel stopped reacting to Git pushes and merges after about 14:42 UTC:
+**Probable cause: GitHub's incident [`nms1dpzmh9d9`](https://www.githubstatus.com/incidents/nms1dpzmh9d9), "Delays for Pull Requests and Webhook deliveries".** It was posted at 14:52 UTC on 21 Oct 2026 and was still open at 18:18 UTC. It is not a Vercel configuration fault.
 
-- The #207 merge `0569e30` did **not** trigger a production deployment.
-- The #208 docs merge `b4a3f45` did **not** trigger a deployment.
-- The docs branch push `f2f36db` did not get a preview deployment either.
-- The last automatic deployment was the `bbb5b4c` preview at 14:42 UTC.
+Read-only checks on 21 Oct found the Vercel settings correct:
+- the connected repository is `OyeItsTom/thewovenne`;
+- the Production branch is `main`;
+- the Ignored Build Step is "Automatic", and "skip unchanged" is off;
+- there are no deploy hooks.
 
-The #207 code reached production only through a manual promotion or redeploy, as deployment `7230021215`. Production runs `bbb5b4c`, which has the same code as `main`'s #207 contents. `main` adds only documentation after that.
+Git events reached Vercel late or not at all. Before 21 Oct they arrived about 4 s after a push.
 
-**Before the next code merge:**
-1. Check Vercel → Project → Settings → Git.
-2. Confirm the connected GitHub repository is correct.
-3. Confirm the Production Branch is `main`.
-4. Check whether an Ignored Build Step or another deployment rule is blocking builds.
-5. Confirm the GitHub–Vercel integration and its webhooks are still connected.
-6. Don't assume a merge has deployed just because GitHub says it merged.
-7. After every code merge, check which commit production is actually running, until auto-deploy is proven fixed.
+| Git event (UTC) | Vercel deployment |
+|---|---|
+| push `bbb5b4c`, 14:27 | preview, started 14:39 (~13 min late) |
+| merge `0569e30` (#207), 14:39 | **none, ever** |
+| manual "Production rebuild" of the `bbb5b4c` preview, 15:26 | production `7230021215` |
+| push `f2f36db`, 15:37 | preview, started 15:48 (~11 min late) |
+| merge `b4a3f45` (#208), 15:40 | **production, automatic**, started 15:50 |
+| push `f1434f6`, 15:52 | preview, started 15:58 |
+| merge `fed2bc9` (#209), 15:52 | production `7230948592`, started 16:07 (~15 min late) |
+
+The earlier version of this section said `b4a3f45` and `f2f36db` never deployed. That was written during the delay, and both did deploy.
+
+`bbb5b4c` and `0569e30` have the identical tree, so the missing `0569e30` build lost nothing.
+
+**Still to verify:** once GitHub marks the incident resolved, make a docs-only push and merge. Pass if:
+- Vercel creates a preview for the branch head SHA and a production deployment for the merge SHA, each within about a minute;
+- the deployments list shows *branch + SHA*, not "Redeploy" or "Production rebuild";
+- production's Source shows `main` at the merge SHA.
+
+Until then, after every code merge, check which commit production actually runs. Never assume a merge has deployed.
 
 ## Standing rule — Supabase Data API grants (platform change, 30 Oct 2026)
 
-From 30 October, new tables in `public` must not rely on automatic Data API grants.
+From 30 October, new tables and sequences in `public` get **no** automatic Data API grants. That applies to `anon`, `authenticated` and **`service_role`**. The full rules are in `supabase/README.md` ("Rules for new migrations" and "Supabase's 30 October 2026 Data API change").
 
-- Every `CREATE TABLE` migration makes an explicit, least-privilege `GRANT` decision. Never blanket `grant all` to `anon` or `authenticated`.
-- `GRANT` decides whether a role can reach a table through the API at all; RLS separately decides which rows. Both are needed.
-- A fresh environment, preview branch or `db reset` must reproduce the intended grants from migrations alone. The posture replay checks this.
-- Existing tables are not changed by the platform change.
+- **One explicit decision per object.** Every new table, view and sequence makes a grant/revoke decision for each of `anon`, `authenticated` and `service_role`. That includes a sequence created by an identity or serial column. The simplest form is `revoke all … from anon, authenticated, service_role`, then grant only what a real caller does.
+- **Never blanket `grant all`** to `anon` or `authenticated`.
+- **`service_role` only when needed.** It gets grants only where trusted server code (`createServiceClient()`) uses the table. "No Data API access" is a valid decision.
+- **`GRANT` decides reach; RLS decides rows.** A grant decides whether a role can reach a table through the API at all; RLS separately decides which rows. Both are needed. Direct database connections (`scripts/`) are not the Data API and never justify an API grant.
+- **Migrations alone.** A fresh environment, preview branch or `db reset` must reproduce the intended grants from migrations alone. The posture replay checks this.
+- **0004 is not proof.** Its default privileges still give `service_role` every new table *in rebuilds*, so a plain replay passes a migration that will fail in production. `scripts/privilege-baseline.test.ts` section 9 models Supabase's change after `0073` and fails such a migration.
+- **Existing objects keep their grants.** Thirteen legacy objects get `service_role` access only from 0004's defaults. They are listed in the README, and the test pins that list.
+
+**Audit status (WP-01A, 21 Oct 2026): PASS WITH FINDINGS.**
+- Existing tables, RLS and `anon`/`authenticated` grants are compatible.
+- The gap was future `service_role` access, masked by 0004.
+
+**WP-01B (21 Oct 2026): rules and tests done.** Local results:
+- `privilege-baseline.test.ts` passes, with section 9 and the text-rule cases.
+- `security-posture.ts --replay` → MATCHES.
+- Mutation checks confirmed that both guards fail when they should.
+
+**Open, owner approval needed:** read-only production checks, now and after 30 Oct.
+- Live `pg_default_acl` for `postgres` in `public`.
+- `security-posture.ts --production` → MATCHES.
+
+These were not run in WP-01A.
+
+**Not done, by decision:** R3 (recording default ACLs in the posture tool) and R4 (a no-op `0074` granting the 13 legacy objects explicitly).
 
 ## Search & AI Discovery — one programme
 
@@ -123,7 +156,9 @@ This is one programme. Do not create separate GEO, AEO or LLMO projects.
 
 ## Roadmap — in this order
 
-1. Supabase Data API grant compatibility and security audit.
+1. Supabase Data API grant compatibility and security audit. Audit and rules/tests are done (WP-01A/B).
+   - **Next (WP-01C):** the owner-approved read-only production check of default privileges and posture, before and after 30 Oct (see Standing rule).
+   - **In parallel:** WP-00 verification, once GitHub resolves its incident.
 2. Catalogue triage: inspect every current product, read-only.
 3. Owner decides KEEP / IMPROVE / REBUILD / RETIRE for each product.
 4. Rebuild and fix the final catalogue.

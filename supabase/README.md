@@ -71,10 +71,35 @@ not get these defaults.
 
 **Rules for new migrations:**
 
-- Assume **no access**. A new table, view, sequence or function is reachable by
-  anon/authenticated only through a `grant` in the same migration. Grant the
-  least that the feature needs (column-level where it matters, e.g.
-  `profiles`).
+- Assume **no access, for every API role — `service_role` included** (see
+  "Supabase's 30 October 2026 Data API change" below). Every new table, view
+  and sequence in `public` gets its grant decision in the same migration,
+  written so the result does not depend on any default privileges:
+
+  ```sql
+  revoke all on table public.x from anon, authenticated, service_role;
+  grant select, insert on table public.x to service_role;  -- only what a real caller does
+  ```
+
+  - `anon` / `authenticated`: grant only what the browser or a signed-in
+    customer actually does through the Data API, column-level where it matters
+    (e.g. `profiles`, `product_reviews`). Never `grant all` to either.
+  - `service_role`: grant only what a trusted server workflow
+    (`createServiceClient()`) actually does. A table no server code touches
+    through the Data API gets nothing.
+  - **No Data API access at all** is a valid decision — the `revoke all` line
+    alone, as for the analytics tables reached only by functions and cron.
+  - **Sequences**, including the one an `identity` or `serial` column creates
+    (`pg_get_serial_sequence('public.x', 'id')` names it): `revoke all … from
+    anon, authenticated, service_role` too. Grant `usage` only to a role that
+    inserts through a `default nextval(…)`; an `identity` column needs no
+    sequence grant.
+- `GRANT` decides whether a role reaches a table through the Data API at all;
+  RLS decides which rows. A grant without RLS exposes every row; RLS without a
+  grant returns `42501`. `service_role` bypasses RLS, so its grant is the only
+  limit on it. Direct database connections (`SUPABASE_DB_URL`, used only by
+  `scripts/`) bypass the Data API entirely — they never justify a grant to an
+  API role.
 - Enable RLS on every new table, even one only functions touch (`site_pages`,
   0064, is the lesson: RLS off plus a stray grant is a hole).
 - A new function is executable by everyone through PUBLIC unless the migration
@@ -94,6 +119,47 @@ production is a separate, reviewed change.
 
 The test databases (`scripts/pg-world.ts`) are built the same way: a standard
 Supabase project's grants, then this baseline, then the migrations.
+
+## Supabase's 30 October 2026 Data API change
+
+From 30 October 2026 Supabase stops granting `select, insert, update, delete`
+on new `public` tables, and `usage, select` on new sequences, to `anon`,
+`authenticated` **and `service_role`** (changelog 45329; it alters the default
+privileges of role `postgres` in `public`). Existing objects keep their grants.
+
+For Wovenne, `anon`/`authenticated` already work this way (above). The change
+that matters is **`service_role`: a new table without an explicit grant is
+unreachable by server code** — every `createServiceClient()` call on it fails
+with `42501`.
+
+**Why 0004 is not proof that a new migration is safe.** `0004` runs
+`alter default privileges … grant all on tables to service_role`, and the
+baseline does the same, so every rebuild — the posture replay included — still
+hands `service_role` each new table by default. A migration that forgets
+`service_role` passes the replay and fails in production.
+`scripts/privilege-baseline.test.ts` section 9 closes that gap: it builds a
+database with Supabase's statements applied after `0073` (production's path)
+and requires every later migration to produce exactly the same privileges as
+the plain rebuild, and to state its decision in text: for each new table, view
+or sequence, a `grant` or `revoke` naming each of `anon`, `authenticated` and
+`service_role`, and RLS on for tables.
+
+**Historic exceptions.** These objects, created after `0004`, get their
+`service_role` access only from those default privileges. Production holds it
+and keeps it; a rebuild re-creates it through `0004`. Section 9 pins this exact
+list — nothing may be added:
+`coupon_redemptions`, `coupons`, `credit_notes`, `expenses`,
+`public_style_submissions` (view), `razorpay_webhook_events` (beyond its
+explicit insert/select), `schema_migrations`, `stock_movements`,
+`stock_requests` (beyond its explicit select), `style_submissions`, and the
+sequences `analytics_events_id_seq`, `credit_note_number_seq`,
+`invoice_number_seq`.
+
+**Not yet verified on production:** its live `pg_default_acl`, and how
+Supabase's rollout treats this project's non-standard defaults. After 30
+October, read-only: `npx tsx scripts/security-posture.ts --production` must
+say MATCHES, and `postgres`'s default privileges in `public` should no longer
+grant `service_role` table DML.
 
 ## The files
 
@@ -156,4 +222,6 @@ rejects, putting ten broken products back on the live shop. The categories and
 defaults were not in place on this project, so every `service_role` query
 failed with `42501` — which silently broke order recording, since the Razorpay
 route writes the order with that key after verifying the payment signature. The privilege baseline now grants service_role
-by default too; 0004's explicit grants stay, harmlessly.
+by default too; 0004's explicit grants stay, harmlessly. Those defaults cover
+rebuilds only: from 30 October 2026 production gives new tables nothing, so a
+new migration grants `service_role` explicitly (see the Data API change above).
