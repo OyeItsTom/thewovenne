@@ -62,7 +62,25 @@ The original problem: anyone signed in could upload any file to a public, listab
 **STYLE PHOTO E2E LIFECYCLE TEST: DEFERRED — NO SAFE PAID + DELIVERED ORDER FIXTURE.**
 On 21 Oct no production order was paid *and* delivered, so no customer is eligible. Run the test, including live measurement of the 60 s cache and CDN removal, once a genuine delivered order or a deliberately created safe test fixture exists. Do not fake or edit a real order to run it.
 
-**Watch the next merge.** Merging #207 did not trigger a Vercel production deployment; a manual redeploy was needed. Check that the next merge to `main` deploys by itself.
+## OPEN OPERATIONAL ISSUE — Vercel Git auto-deploy
+
+As of 21 Oct 2026, Vercel stopped reacting to Git pushes and merges after about 14:42 UTC:
+
+- The #207 merge `0569e30` did **not** trigger a production deployment.
+- The #208 docs merge `b4a3f45` did **not** trigger a deployment.
+- The docs branch push `f2f36db` did not get a preview deployment either.
+- The last automatic deployment was the `bbb5b4c` preview at 14:42 UTC.
+
+The #207 code reached production only through a manual promotion or redeploy, as deployment `7230021215`. Production runs `bbb5b4c`, which has the same code as `main`'s #207 contents. `main` adds only documentation after that.
+
+**Before the next code merge:**
+1. Check Vercel → Project → Settings → Git.
+2. Confirm the connected GitHub repository is correct.
+3. Confirm the Production Branch is `main`.
+4. Check whether an Ignored Build Step or another deployment rule is blocking builds.
+5. Confirm the GitHub–Vercel integration and its webhooks are still connected.
+6. Don't assume a merge has deployed just because GitHub says it merged.
+7. After every code merge, check which commit production is actually running, until auto-deploy is proven fixed.
 
 ## Standing rule — Supabase Data API grants (platform change, 30 Oct 2026)
 
