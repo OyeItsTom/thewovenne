@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { Check, Loader2, Upload, X } from "lucide-react";
-import { getBrowserSupabase } from "@/lib/supabase";
 import { PHOTO_GUIDANCE, LINK_HELP, parseStyleLink } from "@/lib/styleMedia";
 import { PhotoUnreadableError, prepareStylePhoto, type PreparedPhoto } from "@/lib/stylePhoto";
 import type { MySubmission } from "@/lib/style";
@@ -12,7 +11,8 @@ import type { MySubmission } from "@/lib/style";
  * "Share your style" — a customer sending us a photograph of something they own.
  *
  * THE RULES ARE NOT HERE. Verified purchase, consent, one per product, nobody
- * self-approving: all of that is enforced by RLS and by 0053's function. This
+ * self-approving, a real photograph: all of that is enforced by
+ * /api/style/submit, RLS, 0053's function and 0073's trigger. This
  * form's job is to ask well and to explain what happens next; if it disagreed
  * with the database the database would win, which is the correct way round.
  *
@@ -84,69 +84,25 @@ export default function StyleSubmissionForm({
     if (!consent) return setError("We need your permission before we can show it.");
 
     setStage("sending");
-    const client = getBrowserSupabase();
 
     try {
-      const {
-        data: { user },
-      } = await client.auth.getUser();
-      if (!user) throw new Error("Please sign in again — your session has expired.");
+      // Everything goes to the server in one request (0073): the photograph
+      // cannot be written to storage from here. The route checks the purchase,
+      // proves the bytes are a photograph, stores it privately and saves the
+      // submission — or, if the save fails, removes what it stored.
+      const body = new FormData();
+      body.set("product_id", productId);
+      if (existing) body.set("existing_id", existing.id);
+      if (photo) body.set("photo", photo.file);
+      if (parsedLink) body.set("link", parsedLink.url);
+      body.set("caption", caption.trim());
+      body.set("credit_name", creditName.trim());
+      body.set("consent", "yes");
 
-      let photoUrl: string | null = null;
-      if (photo) {
-        // The path starts with the user's id because the storage policy (0052)
-        // requires it: a customer may only write inside their own folder.
-        const path = `${user.id}/${crypto.randomUUID()}.jpg`;
-        const { error: uploadError } = await client.storage
-          .from("style-photos")
-          .upload(path, photo.file, { cacheControl: "31536000", upsert: false });
-        if (uploadError) throw uploadError;
-        photoUrl = client.storage.from("style-photos").getPublicUrl(path).data.publicUrl;
-      }
-
-      const shared = {
-        photo_url: photoUrl,
-        photo_width: photo?.width ?? null,
-        photo_height: photo?.height ?? null,
-        video_platform: parsedLink?.platform ?? null,
-        video_url: parsedLink?.url ?? null,
-        caption: caption.trim() || null,
-        credit_name: creditName.trim() || null,
-      };
-
-      let submissionId = existing?.id ?? null;
-
-      if (existing) {
-        // A second INSERT is refused by the one-per-customer-per-product index,
-        // so a replacement goes through 0053's function — which also puts it back
-        // in front of an admin and clears the old rejection.
-        const { error: rpcError } = await client.rpc("resubmit_style", {
-          p_id: existing.id,
-          p_photo_url: shared.photo_url,
-          p_photo_width: shared.photo_width,
-          p_photo_height: shared.photo_height,
-          p_video_platform: shared.video_platform,
-          p_video_url: shared.video_url,
-          p_caption: shared.caption,
-          p_credit_name: shared.credit_name,
-        });
-        if (rpcError) throw rpcError;
-      } else {
-        const { data: inserted, error: insertError } = await client
-          .from("style_submissions")
-          .insert({
-            product_id: productId,
-            user_id: user.id,
-            ...shared,
-            // The moment permission was given, recorded as a fact rather than
-            // inferred later from the row existing.
-            consented_at: new Date().toISOString(),
-          })
-          .select("id")
-          .single();
-        if (insertError) throw insertError;
-        submissionId = inserted?.id ?? null;
-      }
+      const res = await fetch("/api/style/submit", { method: "POST", body });
+      const result = (await res.json().catch(() => null)) as { ok?: boolean; id?: string; error?: string } | null;
+      if (!res.ok || !result?.ok) throw new Error(result?.error ?? "Something went wrong. Please try again.");
+      const submissionId = result.id ?? null;
 
       // ── Ask the server to tell the shop ──
       // AFTER the submission is saved and OUTSIDE its error handling, on
@@ -171,15 +127,9 @@ export default function StyleSubmissionForm({
       onDone?.();
     } catch (e) {
       setStage("idle");
-      const message = e instanceof Error ? e.message : "Something went wrong.";
-      setError(
-        // The database's own words are usually right — 0053 raises sentences on
-        // purpose — but a duplicate-key error is machine noise, so it is
-        // translated into the thing that actually happened.
-        /duplicate key|already exists/i.test(message)
-          ? "You've already shared a photograph of this piece. We'll be in touch about it."
-          : message
-      );
+      // The route already speaks in sentences — the database's own, or its own
+      // translation of a duplicate.
+      setError(e instanceof Error ? e.message : "Something went wrong.");
     }
   }
 

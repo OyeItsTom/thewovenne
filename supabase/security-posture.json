@@ -1005,6 +1005,14 @@
         "service_role"
       ]
     },
+    "approve_style(uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
     "assign_invoice_number(uuid)": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -1551,6 +1559,56 @@
       "execute": [
         "anon",
         "authenticated",
+        "service_role"
+      ]
+    },
+    "style_gallery_base()": {
+      "securityDefiner": false,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_gallery_name_ok(text,uuid)": {
+      "securityDefiner": false,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_gallery_url_ok(text,uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_photo_garbage(interval)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_photo_name_ok(text,uuid,uuid)": {
+      "securityDefiner": false,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_photo_upload_allowed(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "style_submission_media_guard()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
         "service_role"
       ]
     },
@@ -2241,23 +2299,14 @@
       "using": null,
       "check": "((bucket_id = 'product-images'::text) AND is_admin())"
     },
-    "storage.objects.Admins remove style photos": {
-      "cmd": "DELETE",
+    "storage.objects.Admins read style submissions": {
+      "cmd": "SELECT",
       "permissive": "PERMISSIVE",
       "roles": [
         "authenticated"
       ],
       "using": "((bucket_id = 'style-photos'::text) AND is_admin())",
       "check": null
-    },
-    "storage.objects.Customers upload their own style photos": {
-      "cmd": "INSERT",
-      "permissive": "PERMISSIVE",
-      "roles": [
-        "authenticated"
-      ],
-      "using": null,
-      "check": "((bucket_id = 'style-photos'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text))"
     },
     "storage.objects.Public read product images": {
       "cmd": "SELECT",
@@ -2267,23 +2316,17 @@
       ],
       "using": "(bucket_id = 'product-images'::text)",
       "check": null
-    },
-    "storage.objects.Style photos are publicly readable": {
-      "cmd": "SELECT",
-      "permissive": "PERMISSIVE",
-      "roles": [
-        "public"
-      ],
-      "using": "(bucket_id = 'style-photos'::text)",
-      "check": null
     }
   },
   "buckets": {
     "product-images": {
       "public": true
     },
-    "style-photos": {
+    "style-gallery": {
       "public": true
+    },
+    "style-photos": {
+      "public": false
     }
   }
 }

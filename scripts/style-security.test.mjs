@@ -41,20 +41,23 @@ try{
   const asRole=async(r)=>c.query(`set local role ${r}`);
 
   console.log("\n=== verified purchase is enforced by the DATABASE ===");
+  // Video-link submissions: these checks are about purchase and consent. A
+  // photograph's photo_url must name a real object in the customer's own folder
+  // (0073), which scripts/style-photo-storage.test.ts proves on its own.
   await asRole("authenticated"); await asUser(other.id);
-  const nonBuyer=await sp("s1",()=>c.query(`insert into style_submissions (product_id,user_id,photo_url,consented_at)
-    values ('${prod.id}','${other.id}','https://x/y.jpg',now())`));
+  const nonBuyer=await sp("s1",()=>c.query(`insert into style_submissions (product_id,user_id,video_platform,video_url,consented_at)
+    values ('${prod.id}','${other.id}','youtube','https://youtu.be/y',now())`));
   t("a NON-buyer cannot submit", !nonBuyer.ok, (nonBuyer.e||"").slice(0,60));
 
   await asUser(cust.id);
-  const buyer=await sp("s2",()=>c.query(`insert into style_submissions (product_id,user_id,photo_url,consented_at,credit_name)
-    values ('${prod.id}','${cust.id}','https://x/y.jpg',now(),'Ananya') returning id`));
+  const buyer=await sp("s2",()=>c.query(`insert into style_submissions (product_id,user_id,video_platform,video_url,consented_at,credit_name)
+    values ('${prod.id}','${cust.id}','youtube','https://youtu.be/y',now(),'Ananya') returning id`));
   t("a verified purchaser CAN submit", buyer.ok, (buyer.e||"").slice(0,60));
   const sid=buyer.r?.rows?.[0]?.id;
 
   console.log("\n=== consent and self-approval ===");
-  const noConsent=await sp("s3",()=>c.query(`insert into style_submissions (product_id,user_id,photo_url,consented_at)
-    values ('${prod.id}','${cust.id}','https://x/z.jpg',null)`));
+  const noConsent=await sp("s3",()=>c.query(`insert into style_submissions (product_id,user_id,video_platform,video_url,consented_at)
+    values ('${prod.id}','${cust.id}','youtube','https://youtu.be/z',null)`));
   t("no consent -> refused", !noConsent.ok);
   const selfApprove=await sp("s4",()=>c.query(`update style_submissions set status='approved' where id='${sid}'`));
   t("a customer cannot approve their own", !selfApprove.ok, "column grant holds");

@@ -42,11 +42,14 @@ const nextConfig = {
      * hourly and was re-optimized — paying its full write cost again, forever,
      * for bytes that had not changed.
      *
-     * They cannot change. Both upload paths in this codebase
-     * (lib/storage.ts and components/style/StyleSubmissionForm.tsx) write to a
-     * fresh `crypto.randomUUID()` filename with `upsert: false`, so an existing
+     * They cannot change. The product upload path (lib/storage.ts) writes to
+     * a fresh `crypto.randomUUID()` filename with `upsert: false`, so an existing
      * object cannot be overwritten — replacing a photograph produces a new URL,
-     * which is a new cache key. No code path deletes storage objects either.
+     * which is a new cache key.
+     *
+     * Customers' style photographs are the exception, and are kept OUT of
+     * this cache: they can be taken down at any time, and 31 days is far too
+     * long for a copy to outlive that. See the supabase.co pattern below.
      *
      * The one caveat is operational rather than architectural: overwriting an
      * object by hand in the Supabase dashboard would leave the old bytes cached
@@ -90,9 +93,13 @@ const nextConfig = {
         hostname: "i.ytimg.com",
       },
       {
-        // Product photos, and customers' style photographs, in Supabase Storage.
+        // Product photos in Supabase Storage — that bucket ONLY. Customers'
+        // style photographs (style-gallery) must never enter the optimizer's
+        // 31-day cache; StyleCard serves them unoptimised, and this pathname
+        // means /_next/image refuses one even when asked for it directly.
         protocol: "https",
         hostname: "*.supabase.co",
+        pathname: "/storage/v1/object/public/product-images/**",
       },
     ],
   },

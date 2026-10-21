@@ -343,7 +343,7 @@ const qs = (o: Record<string, string>) => new URLSearchParams(o);
   t("delete copy: same email or Google later makes a new, empty account; nothing comes back", /sign up again later with the same email, or continue with Google, but that makes a new, empty account/.test(dz) && /Nothing deleted here comes back/.test(dz));
   t("delete copy names what cascades: profile, saved address, wishlist, basket, reviews", /Your profile, saved address, wishlist, saved basket, reviews and preferences are deleted/.test(dz));
   t("delete copy: orders kept as records with name, email, phone and address removed", /Past orders are kept as financial records, but with your name, email, phone and address removed/.test(dz));
-  t("delete still goes through delete_my_account, then signs out", /rpc\(\s*"delete_my_account"\s*\)/.test(dz) && /await logOut\(\)/.test(dz));
+  t("delete still goes through delete_my_account (via /api/account/delete, 0073), then signs out", /fetch\("\/api\/account\/delete", \{ method: "POST" \}\)/.test(dz) && /rpc\("delete_my_account"\)/.test(read("app/api/account/delete/route.ts")) && /await logOut\(\)/.test(dz));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

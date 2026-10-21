@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { Check, ExternalLink, Loader2, Trash2, Undo2, X } from "lucide-react";
 import { getBrowserSupabase } from "@/lib/supabase";
+import { STYLE_PHOTO_BUCKET } from "@/lib/stylePhotoStorage";
 import { parseStyleLink, watchLabel } from "@/lib/styleMedia";
 
 /**
@@ -31,6 +32,8 @@ interface Submission {
   product_name: string | null;
   product_slug: string | null;
   photo_url: string | null;
+  /** The private original (0073). Shown here through a short-lived signed URL. */
+  photo_path: string | null;
   photo_width: number | null;
   photo_height: number | null;
   video_platform: string | null;
@@ -60,6 +63,8 @@ const REASONS = [
 
 export default function StyleManager() {
   const [rows, setRows] = useState<Submission[] | null>(null);
+  /** photo_path → signed URL. Originals are private; only an admin may sign them. */
+  const [previews, setPreviews] = useState<Record<string, string>>({});
   const [tab, setTab] = useState<Tab>("pending");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,11 +80,24 @@ export default function StyleManager() {
       setRows([]);
       return;
     }
-    setRows((data ?? []) as Submission[]);
+    const list = (data ?? []) as Submission[];
+    setRows(list);
+    // Ten minutes is enough to look and decide; the page signs again on reload.
+    const paths = list.filter((r) => r.photo_path && !r.withdrawn_at).map((r) => r.photo_path as string);
+    if (paths.length) {
+      const { data: signed } = await getBrowserSupabase().storage.from(STYLE_PHOTO_BUCKET).createSignedUrls(paths, 600);
+      const map: Record<string, string> = {};
+      for (const s of signed ?? []) if (s.path && s.signedUrl) map[s.path] = s.signedUrl;
+      setPreviews(map);
+    }
   }, []);
 
   useEffect(() => {
     void load();
+    // The backstop sweep for leftover style photographs (0073): files whose
+    // removal failed or whose request died mid-way. Fire and forget: the queue
+    // does not wait on it, and a failure is logged server-side.
+    void fetch("/api/admin/style/sweep", { method: "POST" }).catch(() => {});
   }, [load]);
 
   const counts = useMemo(() => {
@@ -97,13 +115,16 @@ export default function StyleManager() {
     setBusy(row.id);
     setError(null);
     setNotice(null);
-    const { error: rpcError } = await getBrowserSupabase().rpc("moderate_style", {
-      p_id: row.id,
-      p_status: status,
-      p_reason: null,
-    });
+    // Through the route, not the RPC: approving publishes a public copy and
+    // taking it off removes one, which needs the server (0073).
+    const res = await fetch("/api/admin/style/moderate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: row.id, action: status === "approved" ? "approve" : status }),
+    }).catch(() => null);
+    const data = (await res?.json().catch(() => null)) as { error?: string } | null;
     setBusy(null);
-    if (rpcError) return setError(rpcError.message);
+    if (!res?.ok) return setError(data?.error ?? "That did not go through. Try again.");
     setNotice(
       status === "approved"
         ? "Published. It is on the site now."
@@ -144,16 +165,19 @@ export default function StyleManager() {
   }
 
   async function remove(row: Submission) {
-    if (!window.confirm("Delete this submission entirely? The photograph stays in storage but the record is gone.")) {
+    if (!window.confirm("Delete this submission entirely? Its photograph is deleted from storage too.")) {
       return;
     }
     setBusy(row.id);
-    const { error: deleteError } = await getBrowserSupabase()
-      .from("style_submissions")
-      .delete()
-      .eq("id", row.id);
+    // The route deletes the row and both of its files (0073).
+    const res = await fetch("/api/admin/style/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: row.id }),
+    }).catch(() => null);
+    const data = (await res?.json().catch(() => null)) as { error?: string } | null;
     setBusy(null);
-    if (deleteError) return setError(deleteError.message);
+    if (!res?.ok) return setError(data?.error ?? "That did not go through. Try again.");
     await load();
   }
 
@@ -199,14 +223,23 @@ export default function StyleManager() {
         return (
           <section key={row.id} className="rounded-2xl border border-ink/10 bg-cream p-5">
             <div className="flex flex-wrap gap-5">
-              {row.photo_url ? (
+              {row.photo_path && previews[row.photo_path] ? (
+                // Unoptimised ON PURPOSE: a signed URL through next/image would
+                // be cached by the optimizer for a month under an address that
+                // no longer needs the signature. Straight from storage, it
+                // expires when the signature does.
                 <Image
-                  src={row.photo_url}
+                  src={previews[row.photo_path]}
                   alt=""
                   width={row.photo_width ?? 400}
                   height={row.photo_height ?? 500}
+                  unoptimized
                   className="h-40 w-auto rounded-lg object-cover"
                 />
+              ) : row.photo_path ? (
+                <div className="flex h-40 w-32 items-center justify-center rounded-lg bg-linen/60 text-center text-xs text-ink/50">
+                  {row.withdrawn_at ? "Photograph removed" : "Photograph unavailable"}
+                </div>
               ) : (
                 <div className="flex h-40 w-32 items-center justify-center rounded-lg bg-linen/60 text-center text-xs text-ink/50">
                   Link only

@@ -29,8 +29,12 @@ export const PHOTO_GUIDANCE = {
   minComfortableWidth: 800,
   /** Anything larger is downscaled in the browser before it is uploaded. */
   maxUploadWidth: 2000,
-  /** After downscaling, nothing should come near this. Refused if it does. */
-  maxBytes: 8 * 1024 * 1024,
+  /**
+   * After downscaling, nothing should come near this. Refused if it does — and
+   * by the server (0073: STYLE_PHOTO_MAX_BYTES), whose request body tops out
+   * near 4.5 MB.
+   */
+  maxBytes: 4 * 1024 * 1024,
   /**
    * HEIC IS ACCEPTED HERE AND NOWHERE ELSE IN THE CODEBASE, and it is not a
    * contradiction of lib/storage.ts. That module refuses HEIC because Chrome,
@@ -46,7 +50,9 @@ export const PHOTO_GUIDANCE = {
   /** What the form says, kept here so the copy and the numbers cannot drift. */
   get help(): string {
     return `Around ${this.recommendedWidth}×${this.recommendedHeight} or larger looks best — but a phone photo is perfect, it doesn't need to be a shoot. Daylight and a plain background photograph beautifully. JPEG, PNG, WebP or an iPhone HEIC, up to ${Math.round(
-      this.maxBytes / (1024 * 1024)
+      // The file they pick, which prepareStylePhoto accepts up to three times
+      // maxBytes and shrinks before sending; maxBytes is what the server takes.
+      (this.maxBytes * 3) / (1024 * 1024)
     )}MB.`;
   },
 } as const;
