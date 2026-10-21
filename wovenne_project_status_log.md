@@ -1,5 +1,8 @@
 # THE WOVENNE — project status log
 
+> **Current state (21 October 2026) is in [`docs/project-handoff.md`](docs/project-handoff.md).**
+> This log is the older, longer history and is not current beyond early October.
+
 Last updated: 15 August 2026 (repository reconstruction)
 
 > **`main` is `a6138c4` — PR #129, merged 14 August 2026.** The two newest
