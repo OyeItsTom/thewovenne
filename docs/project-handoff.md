@@ -9,8 +9,8 @@ older, longer history and is not current beyond early October.
 
 | | |
 |---|---|
-| `main` | `fed2bc9` (PR #209, docs only). App code is unchanged since `0569e30` (PR #207) |
-| Production deployment | Vercel `7230948592`, built from `fed2bc9` at 16:10 UTC (GitHub deployment record). Same app code as `0569e30` |
+| `main` | `3e83d93` (PR #210: docs, tests and README only). App code is unchanged since `0569e30` (PR #207) |
+| Production deployment | Vercel `7235810837`, Git-triggered from `main` at `3e83d93`; succeeded 19:52 UTC. Same app code as `0569e30` |
 | Migration ledger | 73 rows, latest `0073_style_photo_storage_security.sql` (`public.schema_migrations`) |
 | Security posture | `scripts/security-posture.ts --production` → MATCHES `supabase/security-posture.json` |
 | Background processes | None |
@@ -62,41 +62,17 @@ The original problem: anyone signed in could upload any file to a public, listab
 **STYLE PHOTO E2E LIFECYCLE TEST: DEFERRED — NO SAFE PAID + DELIVERED ORDER FIXTURE.**
 On 21 Oct no production order was paid *and* delivered, so no customer is eligible. Run the test, including live measurement of the 60 s cache and CDN removal, once a genuine delivered order or a deliberately created safe test fixture exists. Do not fake or edit a real order to run it.
 
-## OPERATIONAL ISSUE (WP-00) — Vercel Git auto-deploy: MITIGATED, not yet verified
+## WP-00 — Vercel Git auto-deploy: VERIFIED (21 Oct 2026)
 
-**Probable cause: GitHub's incident [`nms1dpzmh9d9`](https://www.githubstatus.com/incidents/nms1dpzmh9d9), "Delays for Pull Requests and Webhook deliveries".** It was posted at 14:52 UTC on 21 Oct 2026 and was still open at 18:18 UTC. It is not a Vercel configuration fault.
+The 21 Oct delays were GitHub's incident [`nms1dpzmh9d9`](https://www.githubstatus.com/incidents/nms1dpzmh9d9) ("Delays for Pull Requests and Webhook deliveries"), not Vercel configuration. Read-only checks found the Vercel settings correct (repo `OyeItsTom/thewovenne`, Production branch `main`, Ignored Build Step "Automatic", no deploy hooks).
 
-Read-only checks on 21 Oct found the Vercel settings correct:
-- the connected repository is `OyeItsTom/thewovenne`;
-- the Production branch is `main`;
-- the Ignored Build Step is "Automatic", and "skip unchanged" is off;
-- there are no deploy hooks.
+**Verification merge:** PR #210 merged at 19:49:46 UTC as `3e83d930330b0af7fdaba5a72155363a3ca81ecf`.
+- Vercel set the commit status to pending at 19:49:49 UTC, about 3 s after the merge.
+- Production deployment `7235810837` (GitHub deployment record by `vercel[bot]`, environment Production, ref = the merge SHA) succeeded at 19:52:57 UTC.
+- It was Git-triggered for `main` at the merge SHA, not a redeploy or manual rebuild, and the live domain served the new build.
+- The branch head `e7403ad` had also got a Git-triggered preview (`7234330232`).
 
-Git events reached Vercel late or not at all. Before 21 Oct they arrived about 4 s after a push.
-
-| Git event (UTC) | Vercel deployment |
-|---|---|
-| push `bbb5b4c`, 14:27 | preview, started 14:39 (~13 min late) |
-| merge `0569e30` (#207), 14:39 | **none, ever** |
-| manual "Production rebuild" of the `bbb5b4c` preview, 15:26 | production `7230021215` |
-| push `f2f36db`, 15:37 | preview, started 15:48 (~11 min late) |
-| merge `b4a3f45` (#208), 15:40 | **production, automatic**, started 15:50 |
-| push `f1434f6`, 15:52 | preview, started 15:58 |
-| merge `fed2bc9` (#209), 15:52 | production `7230948592`, started 16:07 (~15 min late) |
-| push `e7403ad` (PR #210), 18:39 | preview `7234330232`, Git-triggered for branch + SHA, started 18:42 (~3 min) |
-
-**Git-triggered Preview: confirmed** (`e7403ad`). By about 18:50 UTC GitHub reported webhooks operational, though the incident stayed open for an audit-log backlog. **Automatic Production deployment on merge: not yet verified.** No merge has happened since `fed2bc9`.
-
-The earlier version of this section said `b4a3f45` and `f2f36db` never deployed. That was written during the delay, and both did deploy.
-
-`bbb5b4c` and `0569e30` have the identical tree, so the missing `0569e30` build lost nothing.
-
-**Still to verify:** the next docs-only merge (PR #210 is the natural one). Pass if:
-- Vercel creates a preview for the branch head SHA and a production deployment for the merge SHA, each within about a minute;
-- the deployments list shows *branch + SHA*, not "Redeploy" or "Production rebuild";
-- production's Source shows `main` at the merge SHA.
-
-Until then, after every code merge, check which commit production actually runs. Never assume a merge has deployed.
+During the incident, merge `0569e30` (#207) never deployed; production was rebuilt manually from the identical tree `bbb5b4c` (`7230021215`), so nothing was lost. Keep checking which commit production runs after each code merge.
 
 ## Standing rule — Supabase Data API grants (platform change, 30 Oct 2026)
 
@@ -119,6 +95,8 @@ From 30 October, new tables and sequences in `public` get **no** automatic Data 
 - `security-posture.ts --replay` → MATCHES.
 - Mutation checks confirmed that both guards fail when they should.
 
+**WP-01A–E: COMPLETE (21 Oct 2026), all before Supabase's 30 Oct rollout.** A = audit, B = rules and 114 passing regression tests, C = production baseline (below), D = baseline recorded here and in the README, E = controlled merge of PR #210 (`3e83d93`) and production verification (see WP-00). No migration was added; the ledger stays at 73 rows, latest `0073`.
+
 **WP-01C (21 Oct 2026, about 18:47 UTC): production pre-rollout baseline verified.** Read-only: a `READ ONLY` transaction, catalog queries only, rolled back. No production database changes were made. Production runs PostgreSQL 17.6, and the ledger has 73 rows, latest `0073`.
 - `security-posture.ts --production` → MATCHES: 40 tables/views, 105 functions, 75 RLS policies, 4 sequences.
 - Default privileges of `postgres` in `public`, from `pg_default_acl`:
@@ -128,9 +106,11 @@ From 30 October, new tables and sequences in `public` get **no** automatic Data 
 - **What MATCHES does not cover:** the posture tool compares existing objects only. It does not compare default ACLs, and it does not compare TRUNCATE, REFERENCES or TRIGGER held by `anon`/`authenticated` (54 such grants across 27 tables, reported only). The default ACL above was read separately.
 - **At this measurement, the legacy defaults were still in place; the rollout's actual effect on this project is unverified.** Expected after 30 Oct: `service_role` loses SELECT, INSERT, UPDATE and DELETE on new tables, and USAGE and SELECT on new sequences, while `anon`/`authenticated` are unchanged. Supabase may treat this project's non-standard defaults differently.
 
-**Still open:**
-- PR #210 (WP-01B and this record) is pending merge.
-- After 30 Oct, repeat both read-only checks: the `pg_default_acl` query for `postgres` in `public` and `security-posture.ts --production` → MATCHES. They must also confirm that the rollout has actually reached the project.
+**Still open — read-only post-rollout check, after 30 Oct (not yet done):**
+- the `pg_default_acl` query for `postgres` in `public`, confirming the rollout has actually reached the project;
+- `scripts/security-posture.ts --production` → MATCHES;
+- the 13 legacy objects still have their `service_role` access;
+- record any rollout-specific deviation from the expected change above.
 
 **Deferred decisions:**
 - R3: recording default ACLs in the posture tool.
@@ -169,11 +149,9 @@ This is one programme. Do not create separate GEO, AEO or LLMO projects.
 
 ## Roadmap — in this order
 
-1. Supabase Data API grant compatibility and security audit. Audit and rules/tests are done (WP-01A/B).
-   - WP-01A audit, WP-01B rules and regression tests, and WP-01C production pre-rollout baseline are done. PR #210 is pending merge.
-   - **Next:** after 30 Oct, repeat the read-only default-ACL and posture checks (see Standing rule).
-   - **In parallel:** the final WP-00 check, automatic Production deployment on merge.
-2. Catalogue triage: inspect every current product, read-only.
+1. Supabase Data API grant compatibility and security audit. **WP-01A–E complete** (merged `3e83d93`, live). WP-00 verified.
+   - **Remaining:** after 30 Oct, the read-only post-rollout check (see Standing rule).
+2. **NEXT ACTIVE — WP-02:** catalogue triage: inspect every current product, read-only.
 3. Owner decides KEEP / IMPROVE / REBUILD / RETIRE for each product.
 4. Rebuild and fix the final catalogue.
 5. Preserve URLs, with redirects where needed.
