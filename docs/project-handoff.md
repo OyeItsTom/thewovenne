@@ -83,12 +83,15 @@ Git events reached Vercel late or not at all. Before 21 Oct they arrived about 4
 | merge `b4a3f45` (#208), 15:40 | **production, automatic**, started 15:50 |
 | push `f1434f6`, 15:52 | preview, started 15:58 |
 | merge `fed2bc9` (#209), 15:52 | production `7230948592`, started 16:07 (~15 min late) |
+| push `e7403ad` (PR #210), 18:39 | preview `7234330232`, Git-triggered for branch + SHA, started 18:42 (~3 min) |
+
+**Git-triggered Preview: confirmed** (`e7403ad`). By about 18:50 UTC GitHub reported webhooks operational, though the incident stayed open for an audit-log backlog. **Automatic Production deployment on merge: not yet verified.** No merge has happened since `fed2bc9`.
 
 The earlier version of this section said `b4a3f45` and `f2f36db` never deployed. That was written during the delay, and both did deploy.
 
 `bbb5b4c` and `0569e30` have the identical tree, so the missing `0569e30` build lost nothing.
 
-**Still to verify:** once GitHub marks the incident resolved, make a docs-only push and merge. Pass if:
+**Still to verify:** the next docs-only merge (PR #210 is the natural one). Pass if:
 - Vercel creates a preview for the branch head SHA and a production deployment for the merge SHA, each within about a minute;
 - the deployments list shows *branch + SHA*, not "Redeploy" or "Production rebuild";
 - production's Source shows `main` at the merge SHA.
@@ -116,13 +119,23 @@ From 30 October, new tables and sequences in `public` get **no** automatic Data 
 - `security-posture.ts --replay` → MATCHES.
 - Mutation checks confirmed that both guards fail when they should.
 
-**Open, owner approval needed:** read-only production checks, now and after 30 Oct.
-- Live `pg_default_acl` for `postgres` in `public`.
-- `security-posture.ts --production` → MATCHES.
+**WP-01C (21 Oct 2026, about 18:47 UTC): production pre-rollout baseline verified.** Read-only: a `READ ONLY` transaction, catalog queries only, rolled back. No production database changes were made. Production runs PostgreSQL 17.6, and the ledger has 73 rows, latest `0073`.
+- `security-posture.ts --production` → MATCHES: 40 tables/views, 105 functions, 75 RLS policies, 4 sequences.
+- Default privileges of `postgres` in `public`, from `pg_default_acl`:
+  - Tables: `service_role` gets SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER and MAINTAIN. This is the legacy automatic grant, still present. `anon`/`authenticated` get no SELECT, INSERT, UPDATE or DELETE. They keep legacy non-CRUD TRUNCATE, REFERENCES, TRIGGER and MAINTAIN.
+  - Sequences: `service_role` gets SELECT, UPDATE and USAGE. `anon`/`authenticated` get nothing.
+- The 13 legacy objects keep their intended `service_role` privileges.
+- **What MATCHES does not cover:** the posture tool compares existing objects only. It does not compare default ACLs, and it does not compare TRUNCATE, REFERENCES or TRIGGER held by `anon`/`authenticated` (54 such grants across 27 tables, reported only). The default ACL above was read separately.
+- **At this measurement, the legacy defaults were still in place; the rollout's actual effect on this project is unverified.** Expected after 30 Oct: `service_role` loses SELECT, INSERT, UPDATE and DELETE on new tables, and USAGE and SELECT on new sequences, while `anon`/`authenticated` are unchanged. Supabase may treat this project's non-standard defaults differently.
 
-These were not run in WP-01A.
+**Still open:**
+- PR #210 (WP-01B and this record) is pending merge.
+- After 30 Oct, repeat both read-only checks: the `pg_default_acl` query for `postgres` in `public` and `security-posture.ts --production` → MATCHES. They must also confirm that the rollout has actually reached the project.
 
-**Not done, by decision:** R3 (recording default ACLs in the posture tool) and R4 (a no-op `0074` granting the 13 legacy objects explicitly).
+**Deferred decisions:**
+- R3: recording default ACLs in the posture tool.
+- R4: a no-op `0074` granting the 13 legacy objects explicitly.
+- Removing the legacy non-CRUD table privileges held by `anon`/`authenticated`.
 
 ## Search & AI Discovery — one programme
 
@@ -157,8 +170,9 @@ This is one programme. Do not create separate GEO, AEO or LLMO projects.
 ## Roadmap — in this order
 
 1. Supabase Data API grant compatibility and security audit. Audit and rules/tests are done (WP-01A/B).
-   - **Next (WP-01C):** the owner-approved read-only production check of default privileges and posture, before and after 30 Oct (see Standing rule).
-   - **In parallel:** WP-00 verification, once GitHub resolves its incident.
+   - WP-01A audit, WP-01B rules and regression tests, and WP-01C production pre-rollout baseline are done. PR #210 is pending merge.
+   - **Next:** after 30 Oct, repeat the read-only default-ACL and posture checks (see Standing rule).
+   - **In parallel:** the final WP-00 check, automatic Production deployment on merge.
 2. Catalogue triage: inspect every current product, read-only.
 3. Owner decides KEEP / IMPROVE / REBUILD / RETIRE for each product.
 4. Rebuild and fix the final catalogue.

@@ -155,11 +155,36 @@ explicit insert/select), `schema_migrations`, `stock_movements`,
 sequences `analytics_events_id_seq`, `credit_note_number_seq`,
 `invoice_number_seq`.
 
-**Not yet verified on production:** its live `pg_default_acl`, and how
-Supabase's rollout treats this project's non-standard defaults. After 30
-October, read-only: `npx tsx scripts/security-posture.ts --production` must
-say MATCHES, and `postgres`'s default privileges in `public` should no longer
-grant `service_role` table DML.
+**Production before the rollout (measured 21 October 2026, about 18:47
+UTC, read-only, PostgreSQL 17.6, ledger at `0073`).** `pg_default_acl` for
+`postgres` in `public`:
+
+| | `service_role` | `anon` / `authenticated` |
+|---|---|---|
+| tables | SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN (the legacy automatic grant) | no SELECT/INSERT/UPDATE/DELETE; legacy TRUNCATE, REFERENCES, TRIGGER, MAINTAIN |
+| sequences | SELECT, UPDATE, USAGE | nothing |
+
+The 13 historic exceptions above hold their intended `service_role`
+privileges. `security-posture.ts --production` said MATCHES: 40
+tables/views, 105 functions, 75 RLS policies and 4 sequences. That check
+covers existing objects only. It never compares default ACLs, or the
+TRUNCATE/REFERENCES/TRIGGER grants held by `anon`/`authenticated`, so the
+default ACL was read separately with:
+
+```sql
+begin transaction read only;
+select defaclrole::regrole, defaclnamespace::regnamespace, defaclobjtype, defaclacl
+  from pg_default_acl
+ where defaclrole = 'postgres'::regrole and defaclnamespace in (0, 'public'::regnamespace);
+rollback;
+```
+
+**Not yet verified:** that Supabase's rollout has reached this project, and
+how it treats these non-standard defaults. After 30 October, repeat both
+checks read-only. `security-posture.ts --production` must still say
+MATCHES. The query above should show `service_role` without
+SELECT/INSERT/UPDATE/DELETE on tables and without USAGE/SELECT on
+sequences. If it still shows them, the rollout has not reached the project.
 
 ## The files
 
