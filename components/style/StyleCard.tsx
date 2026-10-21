@@ -18,6 +18,13 @@ import { aspectRatio, type StyleItem } from "@/lib/style";
  * landscape, and the column takes whatever height follows. Forcing a square
  * would cut people's heads off, which is a strange way to thank them.
  *
+ * THE PHOTOGRAPH IS NOT OPTIMISED, ON PURPOSE. Product photographs go through
+ * next/image's optimizer, which Vercel caches for 31 days (next.config). A
+ * customer can take theirs down at any time, and a resized copy must not
+ * outlive that by a month. So this one is fetched straight from the public
+ * style-gallery bucket — already a 1200 px JPEG made at approval — which
+ * Supabase's CDN and browsers keep for one minute (lib/stylePhotoStorage).
+ *
  * A VIDEO IS NEVER EMBEDDED. A customer's own Reel carries their account's
  * branding, their suggested-video rail, and whatever advertising the platform
  * feels like — beside our own product. It shows as a card that opens the post in
@@ -42,7 +49,7 @@ export default function StyleCard({ item }: { item: StyleItem }) {
             }
             width={item.width ?? 1200}
             height={item.height ?? 1500}
-            sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+            unoptimized
             className="h-auto w-full transition-transform duration-700 ease-out group-hover:scale-[1.02]"
           />
         ) : (

@@ -20,6 +20,12 @@ import { sweepStylePhotos } from "@/lib/stylePhotoStorage";
  * gone") — limited to THAT customer's folder and submissions
  * (selectForRemoval). If Storage is down the account is still deleted; the
  * queue's backstop sweep finds the same files and finishes.
+ *
+ * WHY HERE THE DATABASE GOES FIRST. Elsewhere a public copy is removed before
+ * the record changes (removeGalleryCopies). Not here: delete_my_account
+ * refuses in ordinary cases — an order still on its way — and removing first
+ * would leave a still-existing customer's published photographs broken. The
+ * copies go in the same request, straight after; the window is that request.
  */
 export const runtime = "nodejs";
 

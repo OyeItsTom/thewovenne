@@ -2,7 +2,7 @@ import { adminApiGate } from "@/lib/adminApiGate";
 import { NextRequest, NextResponse } from "next/server";
 import { createRSCClient } from "@/lib/supabaseRSC";
 import { createServiceClient } from "@/lib/supabase";
-import { sweepStylePhotos } from "@/lib/stylePhotoStorage";
+import { removeGalleryCopies, sweepStylePhotos } from "@/lib/stylePhotoStorage";
 import { sendEmail } from "@/lib/email";
 import {
   styleRejectedHtml,
@@ -52,6 +52,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // If it was on the site, its public copy comes down BEFORE the decision is
+  // recorded (see removeGalleryCopies); 0073's trigger then clears its address.
+  const service = createServiceClient();
+  const down = await removeGalleryCopies(service, [id]);
+  if (down.failed) console.error(`style reject ${id}: ${down.failed}`);
+
   const { error: rpcError } = await supabase.rpc("moderate_style", {
     p_id: id,
     p_status: "rejected",
@@ -61,9 +67,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: rpcError.message }, { status: 400 });
   }
 
-  // If it was on the site, 0073's trigger has cleared its public address; take
-  // the public copy down now rather than at the next queue visit.
-  const sweep = await sweepStylePhotos(createServiceClient());
+  // Anything a race left comes down now rather than at the next queue visit.
+  const sweep = await sweepStylePhotos(service);
   if (sweep.failed) console.error(`style reject ${id}: ${sweep.failed}`);
 
   // ── Tell them ──────────────────────────────────

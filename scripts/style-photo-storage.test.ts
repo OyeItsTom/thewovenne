@@ -29,14 +29,16 @@ import crypto from "node:crypto";
 import sharp from "sharp";
 import {
   STYLE_GALLERY_BUCKET,
+  STYLE_GALLERY_CACHE_CONTROL,
   STYLE_PHOTO_BUCKET,
   STYLE_PHOTO_MAX_BYTES,
   isUuid,
+  removeGalleryCopies,
   selectForRemoval,
   styleGalleryName,
   stylePhotoPath,
 } from "../lib/stylePhotoStorage";
-import { normalizeStylePhoto, StylePhotoRejected } from "../lib/stylePhotoValidate";
+import { normalizeStylePhoto, STYLE_GALLERY_WIDTH, styleGalleryCopy, StylePhotoRejected } from "../lib/stylePhotoValidate";
 import { asAdmin, asRoot, asService, asUser, failure, makeAdmin, startEngine } from "./pg-world";
 
 let pass = 0;
@@ -85,6 +87,15 @@ const uuid = () => crypto.randomUUID();
   const shrunk = await normalizeStylePhoto(new Uint8Array(big));
   t("an over-wide photograph is brought within 2000px wide", shrunk.width === 2000 && shrunk.height === 3000);
 
+  const pub = await styleGalleryCopy(shrunk.jpeg);
+  const pubMeta = await sharp(pub).metadata();
+  t("the public copy is a fresh JPEG at most 1200px wide, same shape",
+    pubMeta.format === "jpeg" && pubMeta.width === STYLE_GALLERY_WIDTH && pubMeta.height === 1800 && pub.length < shrunk.jpeg.length);
+  const pubFromPolyglot = await styleGalleryCopy(polyglot.jpeg);
+  t("…carrying no EXIF and nothing appended", !(await sharp(pubFromPolyglot).metadata()).exif && !pubFromPolyglot.includes("<script>"));
+  t("…and a small photograph is not enlarged", (await sharp(await styleGalleryCopy(ok.jpeg)).metadata()).width === 1200
+    && (await sharp(await styleGalleryCopy(await sharp(photo).resize(600).jpeg().toBuffer())).metadata()).width === 600);
+
   const png = await sharp(photo).png().toBuffer();
   const gif = await sharp(photo).gif().toBuffer();
   const webp = await sharp(photo).webp().toBuffer();
@@ -127,6 +138,28 @@ const uuid = () => crypto.randomUUID();
   const all = selectForRemoval(rows);
   t("the admin sweep takes every well-formed name in the two style buckets, nothing else",
     all.originals.length === 2 && all.copies.length === 2 && !JSON.stringify(all).includes(".."));
+  {
+    const calls: string[] = [];
+    const fake = {
+      storage: {
+        from: (bucket: string) => ({
+          list: async (prefix: string) => {
+            calls.push(`list ${bucket} ${prefix}`);
+            return { data: [{ name: `${F}.jpg` }, { name: "evil.html" }, { name: `${F}.jpg.html` }], error: null };
+          },
+          remove: async (names: string[]) => {
+            calls.push(`remove ${bucket} ${names.join(",")}`);
+            return { data: names.map((name) => ({ name })), error: null };
+          },
+        }),
+      },
+    } as never;
+    const r = await removeGalleryCopies(fake, [S1, "../x", "not-a-uuid"]);
+    t("removeGalleryCopies: lists only the submission's own folder in the PUBLIC bucket, skips anything not a uuid",
+      calls[0] === `list ${STYLE_GALLERY_BUCKET} ${S1}` && calls.filter((c) => c.startsWith("list")).length === 1);
+    t("…and removes only copy-shaped names from it", calls[1] === `remove ${STYLE_GALLERY_BUCKET} ${S1}/${F}.jpg` && r.removed === 1 && r.failed === null);
+  }
+  t("public copies are cached for one minute, not an hour", STYLE_GALLERY_CACHE_CONTROL === "60");
   t("stylePhotoPath is <owner>/<product>/<id>.jpg", stylePhotoPath(A, Pp, F) === `${A}/${Pp}/${F}.jpg`);
   t("styleGalleryName is <submission>/<id>.jpg", styleGalleryName(S1, F) === `${S1}/${F}.jpg`);
   const L = "abcdef01-2345-4789-8abc-def012345678";
@@ -178,9 +211,12 @@ const uuid = () => crypto.randomUUID();
   t("submit: a resubmission removes the previous original, only inside the customer's folder",
     /previousPath\.startsWith\(`\$\{user\.id\}\/`\)[\s\S]*remove\(\[previousPath\]\)/.test(submit));
 
+  const before = (src: string, ...marks: string[]) => marks.every((m) => src.includes(m)) && marks.every((m, k) => k === 0 || src.indexOf(m) > src.indexOf(marks[k - 1]));
   t("withdraw: same-origin, session, the customer's own row, then their files before replying",
     sameOrigin.test(withdraw) && /auth\.getUser\(\)/.test(withdraw) && /\.update\(\{ withdrawn_at:[\s\S]*\.eq\("user_id", user\.id\)/.test(withdraw)
-    && /sweepStylePhotos\(createServiceClient\(\), \{ ownerId: user\.id, submissionIds: \[id\] \}\)/.test(withdraw));
+    && /sweepStylePhotos\(service, \{ ownerId: user\.id, submissionIds: \[id\] \}\)/.test(withdraw));
+  t("withdraw: ownership confirmed → public copy removed → withdrawal recorded → original swept, in that order",
+    before(withdraw, '.select("id")', "if (!own)", "removeGalleryCopies(service, [id])", ".update({ withdrawn_at", "sweepStylePhotos(service"));
   t("taking it down from the site goes through that route", /fetch\("\/api\/style\/withdraw"/.test(share) && !/\.update\(/.test(share));
 
   t("Delete Account posts to /api/account/delete", /fetch\("\/api\/account\/delete", \{ method: "POST" \}\)/.test(danger) && !/rpc\(/.test(danger));
@@ -197,12 +233,15 @@ const uuid = () => crypto.randomUUID();
     && /supabase\.rpc\("approve_style", \{ p_id: id, p_public_name: copy\.name \}\)/.test(moderate));
   t("approve: if recording fails the copy is removed; if a sweep raced it, it is made again",
     /if \(rpcError\) \{\s*await service\.storage\.from\(STYLE_GALLERY_BUCKET\)\.remove\(\[copy\.name\]\)/.test(moderate) && /exists\(copy\.name\)[\s\S]*if \(!there\) await put\(\)/.test(moderate));
-  t("take off / silent reject: moderate_style with the admin's session, then the sweep",
-    /supabase\.rpc\("moderate_style"/.test(moderate) && /sweepStylePhotos\(service\)/.test(moderate));
-  t("reject with a reason also takes the public copy down", adminGate.test(reject) && reject.indexOf('rpc("moderate_style"') < reject.indexOf("sweepStylePhotos(createServiceClient())"));
-  t("admin delete: admin-gated, row deleted with the admin's session, original removed by name, then the sweep",
+  t("approve: the public copy is the 1200px re-encoding (styleGalleryCopy), never the original's bytes",
+    /styleGalleryCopy\(new Uint8Array\(await bytes\.arrayBuffer\(\)\)\)/.test(moderate) && /bytes: made \}/.test(moderate));
+  t("take off / silent reject: public copy removed FIRST, then moderate_style with the admin's session, then the sweep",
+    before(moderate, "removeGalleryCopies(service, [id])", 'supabase.rpc("moderate_style"', "sweepStylePhotos(service)"));
+  t("reject with a reason: public copy removed FIRST, then recorded, then the sweep",
+    adminGate.test(reject) && before(reject, "removeGalleryCopies(service, [id])", 'rpc("moderate_style"', "sweepStylePhotos(service)"));
+  t("admin delete: admin-gated; public copy FIRST, then the row with the admin's session, original by name, then the sweep",
     adminGate.test(adminDelete) && /await supabase\s*\.from\("style_submissions"\)\s*\.delete\(\)/.test(adminDelete)
-    && /storage\.from\(STYLE_PHOTO_BUCKET\)\.remove\(\[original\]\)/.test(adminDelete) && /sweepStylePhotos\(service\)/.test(adminDelete));
+    && before(adminDelete, "removeGalleryCopies(service, [id])", '.from("style_submissions")', "storage.from(STYLE_PHOTO_BUCKET).remove([original])", "sweepStylePhotos(service)"));
   t("the sweep route is admin-gated", adminGate.test(sweepRoute) && /sweepStylePhotos\(createServiceClient\(\)\)/.test(sweepRoute));
   t("the admin queue: actions through the routes, never the RPC or table from the browser",
     /fetch\("\/api\/admin\/style\/moderate"/.test(manager) && /fetch\("\/api\/admin\/style\/delete"/.test(manager)
@@ -212,8 +251,15 @@ const uuid = () => crypto.randomUUID();
   t("opening the admin queue runs the backstop sweep", /fetch\("\/api\/admin\/style\/sweep", \{ method: "POST" \}\)/.test(manager));
   t("the old browser cleanup route is gone", !fs.existsSync("app/api/style/cleanup"));
   t("still no Vercel cron (the project keeps none)", !fs.existsSync("vercel.json") && !fs.existsSync("app/api/cron"));
-  t("the gallery still renders the public photo_url through next/image",
-    /<Image\s+src=\{item\.photoUrl\}/.test(read("components/style/StyleCard.tsx")) && /hostname: "\*\.supabase\.co"/.test(read("next.config.mjs")));
+  const card = read("components/style/StyleCard.tsx");
+  const config = read("next.config.mjs");
+  t("the gallery serves the public copy UNOPTIMISED (never in the optimizer's 31-day cache)",
+    /<Image\s+src=\{item\.photoUrl\}[^>]*?\bunoptimized\b/.test(card));
+  t("the optimizer accepts Supabase images from product-images ONLY, so /_next/image refuses style-gallery",
+    /hostname: "\*\.supabase\.co",\s*pathname: "\/storage\/v1\/object\/public\/product-images\/\*\*"/.test(config)
+    && (config.match(/supabase\.co"/g) ?? []).length === 1);
+  t("product photographs are still optimised and still cached 31 days (unchanged)",
+    /minimumCacheTTL: 2678400/.test(config) && !/unoptimized/.test(read("components/product/ImageGallery.tsx")));
   t("delete_my_account itself is untouched by 0073", !/delete_my_account/.test(read("supabase/migrations/0073_style_photo_storage_security.sql").replace(/^--.*$/gm, "")));
 
   // ══ C. The database ════════════════════════════
@@ -386,6 +432,12 @@ const uuid = () => crypto.randomUUID();
     t("approve_style with ANOTHER submission's copy refused", /not made/.test(await failure(() => c.query("select approve_style($1, $2)", [sid, elsewhere]))));
     const copy1 = styleGalleryName(sid, uuid());
     await store("style-gallery", copy1);
+    for (const [who, enter] of [["anonymous", () => asAnon()], ["a customer", () => as("buyer")], ["an admin", () => asAdmin(c, admin)]] as const) {
+      await enter();
+      t(`${who} cannot LIST the public gallery bucket (copies exist: fetched only by exact URL)`, (await list("style-gallery")).length === 0);
+    }
+    await asService(c);
+    t("…while the copies really are there (the service role sees them)", (await list("style-gallery")).length >= 2);
     await as("buyer");
     t("a customer cannot approve their own", /Only admins/.test(await failure(() => c.query("select approve_style($1, $2)", [sid, copy1]))));
     await asAdmin(c, admin);

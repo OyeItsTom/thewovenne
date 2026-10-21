@@ -8,23 +8,26 @@ import {
   STYLE_GALLERY_CACHE_CONTROL,
   STYLE_PHOTO_BUCKET,
   isUuid,
+  removeGalleryCopies,
   styleGalleryName,
   sweepStylePhotos,
 } from "@/lib/stylePhotoStorage";
+import { styleGalleryCopy } from "@/lib/stylePhotoValidate";
 
 /**
  * Put a submission on the site, take it off, or turn it down silently (0073).
  *
  * APPROVING PUBLISHES A COPY. The original stays in the private bucket; the
- * service key copies its bytes into the public style-gallery bucket under a
- * fresh name, and approve_style — with the ADMIN'S session, so is_admin() and
+ * service key writes a 1200 px re-encoding of it (styleGalleryCopy) into the
+ * public style-gallery bucket under a fresh name, and approve_style — with the ADMIN'S session, so is_admin() and
  * reviewed_by are real — records that address. If recording fails, the copy is
  * removed before replying. After recording, the copy is confirmed to exist and
  * made again if a concurrent sweep took it in between.
  *
- * TAKING IT OFF (back to pending) OR A SILENT REJECTION goes through
- * moderate_style as before; 0073's trigger clears the public address, and the
- * sweep that follows removes the copy before this replies.
+ * TAKING IT OFF (back to pending) OR A SILENT REJECTION removes the public copy
+ * FIRST (removeGalleryCopies), then records the decision through moderate_style
+ * as before; 0073's trigger clears the public address, and the sweep that
+ * follows catches anything a race left.
  *
  * Turning down WITH a reason is /api/admin/style/reject, which also emails.
  */
@@ -55,13 +58,19 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
     if (readError || !row) return NextResponse.json({ error: "That submission is gone." }, { status: 404 });
 
-    let copy: { name: string; bytes: Blob } | null = null;
+    let copy: { name: string; bytes: Buffer } | null = null;
     if (row.photo_path) {
       const { data: bytes, error: getError } = await service.storage.from(STYLE_PHOTO_BUCKET).download(row.photo_path);
       if (getError || !bytes) {
         return NextResponse.json({ error: "Its photograph could not be found, so it cannot be published." }, { status: 409 });
       }
-      copy = { name: styleGalleryName(id, randomUUID()), bytes };
+      let made: Buffer;
+      try {
+        made = await styleGalleryCopy(new Uint8Array(await bytes.arrayBuffer()));
+      } catch {
+        return NextResponse.json({ error: "Its photograph could not be read, so it cannot be published." }, { status: 409 });
+      }
+      copy = { name: styleGalleryName(id, randomUUID()), bytes: made };
       const put = () =>
         service.storage.from(STYLE_GALLERY_BUCKET).upload(copy!.name, copy!.bytes, {
           contentType: "image/jpeg",
@@ -83,6 +92,9 @@ export async function POST(request: NextRequest) {
       if (rpcError) return NextResponse.json({ error: rpcError.message }, { status: 400 });
     }
   } else {
+    // The file before the record: see removeGalleryCopies.
+    const down = await removeGalleryCopies(service, [id]);
+    if (down.failed) console.error(`style moderate ${id}: ${down.failed}`);
     const { error: rpcError } = await supabase.rpc("moderate_style", { p_id: id, p_status: action, p_reason: null });
     if (rpcError) return NextResponse.json({ error: rpcError.message }, { status: 400 });
   }

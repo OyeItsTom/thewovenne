@@ -25,11 +25,16 @@ export const STYLE_GALLERY_BUCKET = "style-gallery";
 export const STYLE_PHOTO_MAX_BYTES = 4 * 1024 * 1024;
 
 /**
- * How long Supabase's CDN and browsers may keep a public copy. Short, so a
- * photograph taken off the site stops being served soon after its file is
- * deleted; the gallery's own images go through next/image, which caches them.
+ * How long Supabase's CDN and a browser may keep a public copy: one minute.
+ *
+ * A customer can take their photograph down at any time, so how long a copy
+ * outlives its file is a privacy number, not a performance one. Deleting the
+ * object clears Supabase's CDN edge (measured 26 Sep 2026: 33–75 s); this caps
+ * what an edge or a visitor's browser may still hold. The gallery serves these
+ * copies unoptimised (StyleCard) and next.config refuses this bucket to the
+ * optimizer, so Vercel's 31-day image cache never holds one.
  */
-export const STYLE_GALLERY_CACHE_CONTROL = "3600";
+export const STYLE_GALLERY_CACHE_CONTROL = "60";
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 /** A private original: <owner>/<product>/<uuid>.jpg */
@@ -133,4 +138,33 @@ export async function sweepStylePhotos(
     removed: a.removed + b.removed,
     failed: a.failed ?? b.failed,
   };
+}
+
+/**
+ * Take down every public copy of these submissions, found by listing their
+ * folders — not by trusting a stored URL, so a copy left by a raced or failed
+ * approval goes too.
+ *
+ * Called BEFORE the database change that unpublishes them. Removing first is
+ * the failure-safe order: if the database step then fails, the worst case is a
+ * published row whose picture is missing, which the admin or customer sees and
+ * retries — never a row that says "taken down" over a file still being served.
+ * Never throws; a failure is reported, and the sweep after the database change
+ * names the same copies again.
+ */
+export async function removeGalleryCopies(
+  service: SupabaseClient,
+  submissionIds: string[]
+): Promise<{ removed: number; failed: string | null }> {
+  const names: string[] = [];
+  for (const id of submissionIds) {
+    if (!isUuid(id)) continue;
+    const { data, error } = await service.storage.from(STYLE_GALLERY_BUCKET).list(id, { limit: 100 });
+    if (error) return { removed: 0, failed: `list ${STYLE_GALLERY_BUCKET}/${id}: ${error.message}` };
+    for (const entry of data ?? []) {
+      const name = `${id}/${entry.name}`;
+      if (COPY.test(name)) names.push(name);
+    }
+  }
+  return removeStyleObjects(service, STYLE_GALLERY_BUCKET, names);
 }

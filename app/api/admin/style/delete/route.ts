@@ -2,15 +2,16 @@ import { adminApiGate } from "@/lib/adminApiGate";
 import { NextRequest, NextResponse } from "next/server";
 import { createRSCClient } from "@/lib/supabaseRSC";
 import { createServiceClient } from "@/lib/supabase";
-import { STYLE_PHOTO_BUCKET, isUuid, sweepStylePhotos } from "@/lib/stylePhotoStorage";
+import { STYLE_PHOTO_BUCKET, isUuid, removeGalleryCopies, sweepStylePhotos } from "@/lib/stylePhotoStorage";
 
 /**
  * Delete a submission entirely, with its files (0073).
  *
- * The row is deleted with the ADMIN'S session ("Admins moderate style", 0047).
- * Then the private original is removed by name — it would otherwise wait an
- * hour as "unused" — and the sweep removes the public copy, which is now
- * "submission gone". No customer can reach this: adminApiGate and is_admin().
+ * The public copy is removed FIRST (removeGalleryCopies — see there for why
+ * that order), then the row is deleted with the ADMIN'S session ("Admins
+ * moderate style", 0047), then the private original is removed by name — it
+ * would otherwise wait an hour as "unused" — and the sweep catches anything a
+ * race left. No customer can reach this: adminApiGate and is_admin().
  */
 export const runtime = "nodejs";
 
@@ -25,6 +26,9 @@ export async function POST(request: NextRequest) {
   const { id } = (await request.json().catch(() => ({}))) as { id?: unknown };
   if (!isUuid(id)) return NextResponse.json({ error: "Unknown request." }, { status: 400 });
 
+  const service = createServiceClient();
+  const down = await removeGalleryCopies(service, [id]);
+
   const { data: rows, error } = await supabase
     .from("style_submissions")
     .delete()
@@ -33,9 +37,8 @@ export async function POST(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   if (!rows?.length) return NextResponse.json({ error: "That submission is gone." }, { status: 404 });
 
-  const service = createServiceClient();
   const original = rows[0].photo_path as string | null;
-  let problem: string | null = null;
+  let problem: string | null = down.failed;
   if (original) {
     const { error: removeError } = await service.storage.from(STYLE_PHOTO_BUCKET).remove([original]);
     if (removeError) problem = removeError.message;

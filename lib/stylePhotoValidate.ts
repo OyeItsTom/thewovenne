@@ -71,3 +71,21 @@ export async function normalizeStylePhoto(bytes: Uint8Array): Promise<Normalized
   }
   return { jpeg: out.data, width: out.info.width, height: out.info.height };
 }
+
+/**
+ * The gallery's copy of an approved photograph: at most 1200 px wide.
+ *
+ * The gallery serves its copies unoptimised (so no long-lived optimizer cache
+ * holds a photograph a customer may take down), which means every visitor gets
+ * this one file. 1200 px covers the widest card at 2x and a phone at 3x, at
+ * roughly a third of the bytes of the 2000 px original. Made from the original,
+ * which normalizeStylePhoto already re-encoded, and re-encoded again here.
+ */
+export const STYLE_GALLERY_WIDTH = 1200;
+
+export async function styleGalleryCopy(original: Uint8Array): Promise<Buffer> {
+  return sharp(original, { limitInputPixels: STYLE_PHOTO_MAX_INPUT_PIXELS, failOn: "warning" })
+    .resize({ width: STYLE_GALLERY_WIDTH, withoutEnlargement: true })
+    .jpeg({ quality: 82, mozjpeg: true })
+    .toBuffer();
+}
