@@ -15,6 +15,14 @@
  * clean replay; `scripts/security-posture.ts --production` checks production
  * against the same file, read-only. Without embedded-postgres the database
  * half is skipped and the run exits non-zero rather than passing.
+ *
+ * Section 9 models Supabase's 30 October 2026 Data API change (changelog
+ * 45329): new tables and sequences in public stop receiving automatic grants,
+ * for service_role too. The plain replay cannot show it — 0004 and the
+ * baseline give service_role default privileges on every rebuild — so 9
+ * applies Supabase's own statements after the last legacy migration, and
+ * requires every later migration to produce the same posture with or without
+ * them.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -44,6 +52,88 @@ t("0064 creates no policy", !/create\s+policy/i.test(M0064));
 t("0064 touches only site_pages", [...M0064.matchAll(/^\s*(alter table|revoke|grant)\s[^;]*;/gim)].every((m) => /public\.site_pages\b/.test(m[0])));
 t("the harness applies the baseline file itself", /privilege_baseline\.sql/.test(fs.readFileSync("scripts/pg-world.ts", "utf8")));
 
+// ── Supabase's Data API change (30 Oct 2026) ──
+// The statements Supabase publishes (changelog 45329) and applies to existing
+// projects: new tables and sequences in public get no automatic Data API grants.
+const SUPABASE_30_OCT = `
+  alter default privileges for role postgres in schema public revoke select, insert, update, delete on tables from anon, authenticated, service_role;
+  alter default privileges for role postgres in schema public revoke usage, select on sequences from anon, authenticated, service_role;`;
+
+// Every migration after this one must not depend on default privileges, whenever
+// it is applied: its objects must come out the same with or without the change.
+const LAST_LEGACY_MIGRATION = "0073";
+
+// Objects created after 0004 whose service_role access comes ONLY from default
+// privileges (0004's `alter default privileges`, re-created by the baseline).
+// Production holds these grants and keeps them; a rebuild gets them from 0004.
+// Nothing may be added to this list — a new object grants explicitly instead.
+const LEGACY_IMPLICIT_SERVICE_ROLE = [
+  "sequences.analytics_events_id_seq.service_role",
+  "sequences.credit_note_number_seq.service_role",
+  "sequences.invoice_number_seq.service_role",
+  "tables.coupon_redemptions.privileges.service_role",
+  "tables.coupons.privileges.service_role",
+  "tables.credit_notes.privileges.service_role",
+  "tables.expenses.privileges.service_role",
+  "tables.public_style_submissions.privileges.service_role",
+  "tables.razorpay_webhook_events.privileges.service_role",
+  "tables.schema_migrations.privileges.service_role",
+  "tables.stock_movements.privileges.service_role",
+  "tables.stock_requests.privileges.service_role",
+  "tables.style_submissions.privileges.service_role",
+];
+
+const MIGRATIONS_DIR = path.join("supabase", "migrations");
+const MIGRATION_FILES = fs.readdirSync(MIGRATIONS_DIR).filter((f) => /^\d{4}_.*\.sql$/.test(f)).sort();
+
+/**
+ * The rule for migrations after LAST_LEGACY_MIGRATION, read from the SQL text:
+ * every table, view or sequence created in public has, in the same file, an
+ * explicit grant or revoke naming each of anon, authenticated and service_role
+ * (`revoke all … from anon, authenticated, service_role`, then only the grants
+ * a real caller needs, is the simplest), and every table enables RLS. Objects
+ * in other schemas, indexes and functions are not its concern.
+ *
+ * Text cannot tell whether those statements leave anything to default
+ * privileges (a lone `grant select … to service_role`, a sequence made by an
+ * identity or serial column) — the database half of 9 catches that.
+ */
+function grantDecisionProblems(sql: string): string[] {
+  const text = sql.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, "");
+  const problems: string[] = [];
+  // object → roles named by some grant or revoke on it (object lists allowed, as in 0068)
+  const addressed = new Map<string, Set<string>>();
+  const statements = text.matchAll(/\b(?:grant|revoke)\s+[^;]*?\s+on\s+(?:table\s+|sequence\s+)?([^;]*?)\s+(?:to|from)\s+([^;]+);/gi);
+  for (const s of statements) {
+    const roles = s[2].split(",").map((r) => r.trim().split(/\s+/)[0].toLowerCase());
+    for (const object of s[1].split(",")) {
+      const name = object.trim().toLowerCase().replace(/^public\./, "");
+      const set = addressed.get(name) ?? new Set<string>();
+      roles.forEach((r) => set.add(r));
+      addressed.set(name, set);
+    }
+  }
+  const created = text.matchAll(
+    /\bcreate\s+(?:or\s+replace\s+)?(?:unlogged\s+)?(table|sequence|view|materialized\s+view)\s+(?:if\s+not\s+exists\s+)?(?:([a-z_][a-z0-9_]*)\.)?([a-z_][a-z0-9_]*)/gi);
+  for (const m of created) {
+    if (m[2] && m[2].toLowerCase() !== "public") continue;
+    const kind = m[1].toLowerCase().replace(/\s+/, " ");
+    const name = m[3].toLowerCase();
+    const missing = ["anon", "authenticated", "service_role"].filter((r) => !addressed.get(name)?.has(r));
+    if (missing.length) problems.push(`${kind} ${name}: no explicit grant or revoke for ${missing.join(", ")}`);
+    if (kind === "table" && !new RegExp(
+      `alter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?(?:public\\.)?${name}\\s+enable\\s+row\\s+level\\s+security`, "i").test(text)) {
+      problems.push(`table ${name}: RLS not enabled`);
+    }
+  }
+  return problems;
+}
+
+/** The posture paths on which two databases differ ("tables.x.privileges.role", …). */
+function differingPaths(a: unknown, b: unknown): string[] {
+  return comparePostures(a, b).map((d) => d.slice(0, d.indexOf(":")));
+}
+
 async function rowsOrCode(c: Client, sql: string): Promise<string> {
   try {
     const r = await c.query(sql);
@@ -51,6 +141,36 @@ async function rowsOrCode(c: Client, sql: string): Promise<string> {
   } catch (e) {
     return String((e as { code?: string }).code ?? "error");
   }
+}
+
+console.log("\nthe grant-decision text rule (used in 9) — what it accepts and rejects");
+const accepts: [string, string][] = [
+  ["an index-only migration", "create index if not exists zz_idx on public.products (slug);"],
+  ["a function-only migration (returns table)", `create or replace function public.zz_f() returns table (id int) language sql as $$ select 1 $$;
+    revoke execute on function public.zz_f() from public;`],
+  ["a sequence-only migration", `create sequence public.zz_s; revoke all on sequence public.zz_s from anon, authenticated, service_role;
+    grant usage on sequence public.zz_s to service_role;`],
+  ["a view (no RLS asked of it)", `create or replace view public.zz_v with (security_invoker = true) as select 1 x;
+    revoke all on public.zz_v from anon, authenticated, service_role; grant select on public.zz_v to anon;`],
+  ["one statement covering several tables, and an explicit service_role grant instead of a revoke (0068's style)",
+    `create table public.zz_a (id int); create table public.zz_b (id int);
+    alter table public.zz_a enable row level security; alter table public.zz_b enable row level security;
+    revoke all on public.zz_a, public.zz_b from public, anon, authenticated;
+    grant select, insert, update, delete on public.zz_a, public.zz_b to service_role;`],
+  ["a table in another schema, and one only inside a block comment", "create table private.zz_p (id int); /* create table public.zz_ghost (id int); */"],
+];
+for (const [what, sql] of accepts) t(`accepts ${what}`, grantDecisionProblems(sql).length === 0, grantDecisionProblems(sql).join("; "));
+const explicitEra = MIGRATION_FILES.filter((x) => x >= "0058");
+const eraProblems = explicitEra.flatMap((x) => grantDecisionProblems(fs.readFileSync(path.join(MIGRATIONS_DIR, x), "utf8")).map((p) => `${x}: ${p}`));
+t(`accepts every real migration since explicit grants became the rule (0058–, ${explicitEra.length} files)`, eraProblems.length === 0, eraProblems.join("; "));
+const rejects: [string, string, string][] = [
+  ["a table without RLS", "create table public.zz_t (id int); revoke all on public.zz_t from anon, authenticated, service_role;", "table zz_t: RLS not enabled"],
+  ["a view with no decision", "create view public.zz_v as select 1 x;", "view zz_v: no explicit grant or revoke for anon, authenticated, service_role"],
+  ["a table that forgets service_role", `create table public.zz_t (id int); alter table public.zz_t enable row level security;
+    revoke all on public.zz_t from anon, authenticated;`, "table zz_t: no explicit grant or revoke for service_role"],
+];
+for (const [what, sql, expected] of rejects) {
+  t(`rejects ${what}`, grantDecisionProblems(sql).includes(expected), grantDecisionProblems(sql).join("; "));
 }
 
 (async () => {
@@ -222,7 +342,9 @@ async function rowsOrCode(c: Client, sql: string): Promise<string> {
     t("a new table gets NO anon/authenticated access unless a migration grants it",
       (await f.query(`select bool_or(has_table_privilege(r, 'public.zz_future_feature', p)) v from unnest(array['anon','authenticated']) r,
         unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p`)).rows[0].v === false);
-    t("…while service_role gets it by default", (await f.query("select has_table_privilege('service_role', 'public.zz_future_feature', 'SELECT, INSERT, UPDATE, DELETE') v")).rows[0].v === true);
+    // True of the historic environment (0004 + baseline) only. Production after
+    // Supabase's 30 Oct change gives service_role nothing on new tables — see 9.
+    t("…while service_role gets it by default (legacy rebuild only)", (await f.query("select has_table_privilege('service_role', 'public.zz_future_feature', 'SELECT, INSERT, UPDATE, DELETE') v")).rows[0].v === true);
     t("a new sequence is server-only", (await f.query("select has_sequence_privilege('authenticated', 'public.zz_future_seq', 'USAGE') v")).rows[0].v === false);
     const caught = comparePostures(readManifest(), (await readPosture(f)).posture);
     t("the posture check flags the new objects until the manifest is regenerated", caught.some((d) => d.startsWith("tables.zz_future_feature")), caught.join("; "));
@@ -233,6 +355,164 @@ async function rowsOrCode(c: Client, sql: string): Promise<string> {
     console.log("\n   the baseline refuses an existing database");
     t("re-running it on a built database is refused", /BASELINE_REFUSED/.test(await failure(() => f.query(BASELINE))));
     await f.end();
+
+    // ── 9. Supabase's 30 Oct 2026 Data API change ──
+    console.log(`\n9. after Supabase's 30 Oct change: no automatic grants on new objects, for service_role too`);
+    const applyAfter = async (db: Client, prefix: string) => {
+      for (const file of MIGRATION_FILES.filter((x) => x.slice(0, 4) > prefix)) {
+        await db.query(fs.readFileSync(path.join(MIGRATIONS_DIR, file), "utf8"));
+      }
+    };
+    // legacy:  the rebuild every other section uses (0004 + baseline defaults throughout).
+    // rollout: production's path — legacy migrations, then Supabase's change, then any later ones.
+    // early:   as if the change had come straight after 0004, to show what leans on 0004's defaults.
+    await engine.database("legacy");
+    const legacy = await engine.connect("legacy");
+    await engine.database("rollout", LAST_LEGACY_MIGRATION);
+    const rollout = await engine.connect("rollout");
+    await rollout.query(SUPABASE_30_OCT);
+    await applyAfter(rollout, LAST_LEGACY_MIGRATION);
+    await engine.database("early", "0004");
+    const early = await engine.connect("early");
+    await early.query(SUPABASE_30_OCT);
+    await applyAfter(early, "0004");
+    const postureOf = async (db: Client) => (await readPosture(db)).posture;
+
+    const leftToApiRoles = (await rollout.query(`
+      select string_agg(d.defaclobjtype::text || ':' || g.rolname || ':' || a.privilege_type, ', ') v
+        from pg_default_acl d, aclexplode(d.defaclacl) a join pg_roles g on g.oid = a.grantee
+       where d.defaclrole = 'postgres'::regrole and d.defaclnamespace = 'public'::regnamespace
+         and g.rolname in ('anon', 'authenticated', 'service_role')
+         and ((d.defaclobjtype = 'r' and a.privilege_type in ('SELECT', 'INSERT', 'UPDATE', 'DELETE'))
+           or (d.defaclobjtype = 'S' and a.privilege_type in ('USAGE', 'SELECT')))`)).rows[0].v;
+    t("the modelled change leaves no API role a default SELECT/INSERT/UPDATE/DELETE on tables or USAGE/SELECT on sequences",
+      leftToApiRoles === null, leftToApiRoles ?? "");
+    const rolloutDiffs = comparePostures(readManifest(), await postureOf(rollout));
+    t("existing objects keep exactly their privileges (rollout ≡ supabase/security-posture.json)", rolloutDiffs.length === 0,
+      rolloutDiffs.slice(0, 5).join("; "));
+    const laterDiffs = comparePostures(await postureOf(legacy), await postureOf(rollout));
+    t(`migrations after ${LAST_LEGACY_MIGRATION} come out the same with or without the change`, laterDiffs.length === 0,
+      laterDiffs.slice(0, 5).join("; "));
+    const later = MIGRATION_FILES.filter((x) => x.slice(0, 4) > LAST_LEGACY_MIGRATION);
+    const textProblems = later.flatMap((x) => grantDecisionProblems(fs.readFileSync(path.join(MIGRATIONS_DIR, x), "utf8")).map((p) => `${x}: ${p}`));
+    t(`migrations after ${LAST_LEGACY_MIGRATION} state an explicit grant decision for every new object (${later.length} checked)`,
+      textProblems.length === 0, textProblems.join("; "));
+
+    console.log("\n   historic exceptions: service_role access that only 0004's default privileges create");
+    const leaning = differingPaths(await postureOf(legacy), await postureOf(early));
+    const unlisted = leaning.filter((p) => !LEGACY_IMPLICIT_SERVICE_ROLE.includes(p));
+    const stale = LEGACY_IMPLICIT_SERVICE_ROLE.filter((p) => !leaning.includes(p));
+    t(`exactly the ${LEGACY_IMPLICIT_SERVICE_ROLE.length} recorded legacy objects lean on default privileges`,
+      unlisted.length === 0 && stale.length === 0,
+      [unlisted.length ? `NEW: ${unlisted.join(", ")}` : "", stale.length ? `no longer leaning (shorten the list): ${stale.join(", ")}` : ""].filter(Boolean).join("; "));
+    t("they are all service_role access — anon/authenticated never relied on defaults", leaning.every((p) => p.endsWith(".service_role")));
+    t("the legacy rebuild still hands service_role every new table by default (why a plain replay proves nothing about 30 Oct)",
+      (await legacy.query(`select bool_or(a.privilege_type = 'INSERT') v from pg_default_acl d, aclexplode(d.defaclacl) a
+        where d.defaclrole = 'postgres'::regrole and d.defaclnamespace = 'public'::regnamespace and d.defaclobjtype = 'r'
+          and a.grantee = 'service_role'::regrole`)).rows[0].v === true);
+
+    // A representative compliant migration: one server-only table with its own
+    // sequence, one customer table (identity column), one table no API role reaches.
+    const COMPLIANT = `
+      create sequence public.zz_job_seq;
+      revoke all on sequence public.zz_job_seq from anon, authenticated, service_role;
+      grant usage on sequence public.zz_job_seq to service_role;
+      create table public.zz_server_job (id bigint primary key default nextval('public.zz_job_seq'), note text);
+      alter table public.zz_server_job enable row level security;
+      revoke all on table public.zz_server_job from anon, authenticated, service_role;
+      grant select, insert on table public.zz_server_job to service_role;
+
+      create table public.zz_customer_note (id bigint generated always as identity primary key,
+        user_id uuid not null default auth.uid(), note text);
+      alter table public.zz_customer_note enable row level security;
+      revoke all on table public.zz_customer_note from anon, authenticated, service_role;
+      revoke all on sequence public.zz_customer_note_id_seq from anon, authenticated, service_role;
+      grant select, insert (note) on table public.zz_customer_note to authenticated;
+      grant select on table public.zz_customer_note to service_role;
+      create policy "own notes" on public.zz_customer_note for select to authenticated using (user_id = auth.uid());
+      create policy "add own notes" on public.zz_customer_note for insert to authenticated with check (user_id = auth.uid());
+
+      create table public.zz_internal (id int primary key);
+      alter table public.zz_internal enable row level security;
+      revoke all on table public.zz_internal from anon, authenticated, service_role;`;
+    const CARELESS = `
+      create table public.zz_careless (id bigint generated by default as identity primary key, note text);
+      alter table public.zz_careless enable row level security;
+      create sequence public.zz_careless_seq;`;
+
+    console.log("\n   a compliant new migration: explicit, minimal grants");
+    t("the text rule accepts it", grantDecisionProblems(COMPLIANT).length === 0, grantDecisionProblems(COMPLIANT).join("; "));
+    for (const db of [legacy, rollout]) await db.query(COMPLIANT);
+    const compliantDiffs = comparePostures(await postureOf(legacy), await postureOf(rollout));
+    t("it produces the same privileges under the old and the new defaults", compliantDiffs.length === 0, compliantDiffs.slice(0, 5).join("; "));
+
+    const r = rollout;
+    await asRoot(r);
+    const noteOwner = (await r.query("insert into auth.users (email) values ('notes@example.test') returning id")).rows[0].id as string;
+    const otherUser = (await r.query("insert into auth.users (email) values ('other@example.test') returning id")).rows[0].id as string;
+    await r.query("insert into public.zz_customer_note (user_id, note) values ($1, 'not yours')", [otherUser]);
+    const as = async (who: "anon" | "customer" | "service", sql: string, args: unknown[] = []) => {
+      if (who === "anon") await r.query("set role anon");
+      else if (who === "customer") await asUser(r, noteOwner, "aal1");
+      else await asService(r);
+      try {
+        return await failureCode(() => r.query(sql, args));
+      } finally {
+        await asRoot(r);
+      }
+    };
+    t("service_role inserts a server job — the sequence default works through its USAGE grant",
+      await as("service", "insert into public.zz_server_job (note) values ('ok')") === "");
+    t("service_role reads it back", await as("service", "select * from public.zz_server_job") === "");
+    t("…but cannot update or delete it (granted select, insert only)",
+      await as("service", "update public.zz_server_job set note = 'x'") === "42501" &&
+      await as("service", "delete from public.zz_server_job") === "42501");
+    t("anon and a customer cannot read the server-only table",
+      await as("anon", "select * from public.zz_server_job") === "42501" && await as("customer", "select * from public.zz_server_job") === "42501");
+    t("anon and a customer cannot draw from the server-only sequence",
+      await as("anon", "select nextval('public.zz_job_seq')") === "42501" && await as("customer", "select nextval('public.zz_job_seq')") === "42501");
+    t("a customer adds a note (identity column needs no sequence grant)",
+      await as("customer", "insert into public.zz_customer_note (note) values ('mine')") === "");
+    await asUser(r, noteOwner, "aal1");
+    const visible = (await r.query("select note from public.zz_customer_note")).rows.map((x) => x.note).join(",");
+    await asRoot(r);
+    t("…and sees only their own (RLS decides the rows the grant opens)", visible === "mine", visible);
+    t("a customer cannot write someone else's user_id (column grant: note only)",
+      await as("customer", "insert into public.zz_customer_note (user_id, note) values ($1, 'forged')", [otherUser]) === "42501");
+    t("a customer cannot update or delete notes (not granted)",
+      await as("customer", "update public.zz_customer_note set note = 'x'") === "42501" &&
+      await as("customer", "delete from public.zz_customer_note") === "42501");
+    t("anon cannot read customer notes", await as("anon", "select * from public.zz_customer_note") === "42501");
+    t("service_role reads every note (RLS bypassed) but cannot insert one (granted select only)",
+      await as("service", "select * from public.zz_customer_note") === "" &&
+      await as("service", "insert into public.zz_customer_note (user_id, note) values ($1, 'x')", [otherUser]) === "42501");
+    const internal: string[] = [];
+    for (const w of ["anon", "customer", "service"] as const) internal.push(await as(w, "select * from public.zz_internal"));
+    t("no API role reaches the deliberately internal table", internal.every((x) => x === "42501"), internal.join(","));
+
+    console.log("\n   a careless new migration that relies on automatic grants is caught");
+    for (const db of [legacy, rollout]) await db.query(CARELESS);
+    const carelessText = grantDecisionProblems(CARELESS);
+    t("the text rule rejects it (table and sequence)",
+      carelessText.includes("table zz_careless: no explicit grant or revoke for anon, authenticated, service_role") &&
+      carelessText.includes("sequence zz_careless_seq: no explicit grant or revoke for anon, authenticated, service_role"), carelessText.join("; "));
+    const carelessDiffs = differingPaths(await postureOf(legacy), await postureOf(rollout));
+    t("the legacy rebuild and the post-change database disagree on it", carelessDiffs.includes("tables.zz_careless.privileges.service_role") &&
+      carelessDiffs.includes("sequences.zz_careless_seq.service_role"), carelessDiffs.join(", "));
+    t("the legacy rebuild alone would have let it through: there service_role gets the table by default",
+      (await legacy.query("select has_table_privilege('service_role', 'public.zz_careless', 'SELECT, INSERT, UPDATE, DELETE') v")).rows[0].v === true);
+    t("after the change no API role holds SELECT/INSERT/UPDATE/DELETE on it",
+      (await rollout.query(`select bool_or(has_table_privilege(x, 'public.zz_careless', p)) v from unnest(array['anon','authenticated','service_role']) x,
+        unnest(array['SELECT','INSERT','UPDATE','DELETE']) p`)).rows[0].v === false);
+    t("…so the server key's insert fails with 42501 — the production failure this rule prevents",
+      await as("service", "insert into public.zz_careless (note) values ('x')") === "42501");
+    t("…and a customer's read fails too", await as("customer", "select * from public.zz_careless") === "42501");
+    t("no API role holds USAGE or SELECT on the new sequence",
+      (await rollout.query(`select bool_or(has_sequence_privilege(x, 'public.zz_careless_seq', p)) v from unnest(array['anon','authenticated','service_role']) x,
+        unnest(array['USAGE','SELECT']) p`)).rows[0].v === false);
+    t("anon cannot draw from it", await as("anon", "select nextval('public.zz_careless_seq')") === "42501");
+
+    for (const db of [legacy, rollout, early]) await db.end();
   } finally {
     await engine.stop();
   }
