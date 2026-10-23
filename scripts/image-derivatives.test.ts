@@ -80,6 +80,14 @@ function selection() {
   check("only 1920 → card gets 1920", imageFor(master, "card", only1920) === d1920);
   check("only 1920 → detail gets 1920", imageFor(master, "detail", only1920) === d1920);
   check("empty-string entry ignored", imageFor(master, "card", { [master]: { w1080: "" } }) === master);
+  // share = Product JSON-LD and og:image (WP-SEO-02A): the largest copy there is,
+  // the 1080 rather than the master, the master only when nothing is registered.
+  check("no map → master (share)", imageFor(master, "share", undefined) === master);
+  check("both → share gets 1920", imageFor(master, "share", both) === d1920);
+  check("only 1080 → share gets 1080 (not the master)", imageFor(master, "share", only1080) === d1080);
+  check("only 1920 → share gets 1920", imageFor(master, "share", only1920) === d1920);
+  check("other photo's entry ignored (share)", imageFor(master, "share", { [`${BASE}products/zzz.jpg`]: { w1080: d1080 } }) === master);
+  check("empty-string entry ignored (share)", imageFor(master, "share", { [master]: { w1080: "", w1920: "" } }) === master);
 }
 
 /* ───────────── keys and URLs ───────────── */
@@ -483,10 +491,10 @@ function wiring() {
   check("gallery passes the map to the viewer", /baseSizes=\{PDP_FRAME_SIZES\}\s*variants=\{variants\}/.test(gallery));
   check("viewer: no bare next/image; both layers use=detail", noBareImage(viewer) && (viewer.match(/use="detail"/g) ?? []).length === 2);
   check("viewer: zoom layer keeps viewerSizes and onLoad", viewer.includes("sizes={viewerSizes()}") && viewer.includes("naturalWidth"));
-  check("JSON-LD names the detail file", detail.includes('productImageUrl(imageFor(src, "detail", product.imageVariants), "jsonLd")'));
+  check("JSON-LD names the share file", detail.includes('productImageUrl(imageFor(src, "share", product.imageVariants), "jsonLd")'));
   check("gallery gets the product's map", detail.includes("variants={product.imageVariants}"));
   for (const p of ["app/(storefront)/in/product/[slug]/page.tsx", "app/(storefront)/in/[slug]/[child]/[product]/page.tsx"]) {
-    check(`og:image uses the detail file (${p.split("/").slice(-2).join("/")})`, src(p).includes('productImageUrl(imageFor(product.image_url, "detail", product.imageVariants), "openGraph")'));
+    check(`og:image uses the share file (${p.split("/").slice(-2).join("/")})`, src(p).includes('productImageUrl(imageFor(product.image_url, "share", product.imageVariants), "openGraph")'));
   }
   check("cart keeps the stored master (orders/emails unaffected)", !cartItem.includes("imageFor") && !cartItem.includes("DeliveryImage"));
   check("DeliveryImage falls back to the master on error", deliver.includes("failedFor === src ? src : preferred") && deliver.includes("onError"));

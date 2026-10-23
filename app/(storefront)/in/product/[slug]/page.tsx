@@ -77,7 +77,7 @@ export async function generateMetadata({
       path: productHref(product),
       images: [
         product.image_url
-          ? productImageUrl(imageFor(product.image_url, "detail", product.imageVariants), "openGraph")
+          ? productImageUrl(imageFor(product.image_url, "share", product.imageVariants), "openGraph")
           : null,
       ],
       imageAlt: (cover?.url === product.image_url ? cover?.alt : null) ?? product.name,

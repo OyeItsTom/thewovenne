@@ -147,6 +147,58 @@ const { props: frame } = getImgProps(
 check("JSON-LD image === the PDP frame's src", convert(MASTER, "jsonLd"), `${seo.PRODUCTION_ORIGIN}${frame.src}`);
 ok("the og width is one the PDP frame already offers", (frame.srcSet ?? "").includes("&w=1200&"));
 
+console.log("\n=== A REGISTERED DELIVERY COPY (WP-SEO-02A) ===");
+
+/*
+ * Product JSON-LD and og:image name imageFor(…, "share"): the w1920 copy, else
+ * the w1080, else the master. A w1080 is asked for at its own width, never
+ * enlarged in the URL; a w1920 keeps the approved widths. The master case above
+ * is the fallback and is unchanged — it still names the PDP frame's own src.
+ */
+const D1080 = `${PUBLIC}/derived/products-f9de3ab1b911639e890186d75222557e-v1-w1080-r1.jpg`;
+const D1920 = `${PUBLIC}/derived/products-f9de3ab1b911639e890186d75222557e-v1-w1920-r1.jpg`;
+const D1080_WEBP = `${PUBLIC}/derived/products-1b56f257-152a-47ba-bfda-0452c48f5188-w1080-r1.webp`;
+ok("1080 is a width the optimizer will serve", allowed.includes(1080));
+check("w1080 → JSON-LD asks for 1080, not 1920", convert(D1080, "jsonLd"), nextUrl(D1080, 1080));
+check("w1080 → og asks for 1080, not 1200", convert(D1080, "openGraph"), nextUrl(D1080, 1080));
+check("w1080 webp (alpha) copy is recognised too", convert(D1080_WEBP, "openGraph"), nextUrl(D1080_WEBP, 1080));
+check("w1920 → JSON-LD keeps 1920", convert(D1920, "jsonLd"), nextUrl(D1920, 1920));
+check("w1920 → og keeps 1200", convert(D1920, "openGraph"), nextUrl(D1920, 1200));
+check(
+  "the literal w1080 URL, spelled out",
+  convert(D1080, "jsonLd"),
+  "https://www.thewovenne.com/_next/image?url=https%3A%2F%2Fwxumlixnmwgeqswknhpw.supabase.co%2Fstorage%2Fv1%2Fobject%2Fpublic%2Fproduct-images%2Fderived%2Fproducts-f9de3ab1b911639e890186d75222557e-v1-w1080-r1.jpg&w=1080&q=75"
+);
+check("a master is still asked for at 1920", convert(MASTER, "jsonLd"), nextUrl(MASTER, 1920));
+const d1080Parsed = attempt(() => new URL(convert(D1080, "jsonLd") as string));
+if (d1080Parsed !== "THREW") {
+  check("w1080: the derived source survives encoding exactly", d1080Parsed.searchParams.get("url"), D1080);
+  check("w1080: first-party origin, not the storage host", d1080Parsed.origin, "https://www.thewovenne.com");
+}
+
+// Look-alikes of a delivery copy are not one: the width cap and the
+// recognition both refuse them, so they pass through untouched.
+const derivedUntouched: [string, string][] = [
+  ["a derived name with a png extension", `${PUBLIC}/derived/products-abc-w1080-r1.png`],
+  ["a derived name with no recipe", `${PUBLIC}/derived/products-abc-w1080.jpg`],
+  ["an unknown derived width", `${PUBLIC}/derived/products-abc-w640-r1.jpg`],
+  ["a nested derived path", `${PUBLIC}/derived/x/products-abc-w1080-r1.jpg`],
+  ["a derived name in another bucket", `${PROJECT}/storage/v1/object/public/style-photos/derived/products-abc-w1080-r1.jpg`],
+  ["a private derived object", `${PROJECT}/storage/v1/object/authenticated/product-images/derived/products-abc-w1080-r1.jpg`],
+  ["a signed derived object", `${PROJECT}/storage/v1/object/sign/product-images/derived/products-abc-w1080-r1.jpg?token=x`],
+  ["a derived copy on another project", D1080.replace("wxumlixnmwgeqswknhpw", "someoneelse123456789")],
+  ["a derived copy with a query", `${D1080}?download=1`],
+];
+for (const [label, src] of derivedUntouched) {
+  check(`${label} → unchanged`, convert(src, "jsonLd"), src);
+}
+const journalApi = seo as unknown as { journalImageUrl?: (src: string, supabaseUrl?: string) => string };
+check(
+  "journal covers never take a product delivery copy",
+  attempt(() => journalApi.journalImageUrl!(D1080, PROJECT)),
+  D1080
+);
+
 console.log("\n=== EVERYTHING ELSE IS LEFT ALONE ===");
 
 const untouched: [string, string][] = [
@@ -230,15 +282,22 @@ const detail = read("components/product/ProductDetail.tsx");
 const childRoute = read("app/(storefront)/in/[slug]/[child]/[product]/page.tsx");
 const flatRoute = read("app/(storefront)/in/product/[slug]/page.tsx");
 ok("ProductDetail maps JSON-LD images through the helper",
-  // Through the helper, naming the file the gallery frame shows: its registered
-  // 1920 copy (lib/imageVariants), else the stored master.
-  /images:\s*urls\.map\(\(src\)\s*=>\s*productImageUrl\(imageFor\(src,\s*"detail",\s*product\.imageVariants\),\s*"jsonLd"\)\)/.test(detail) &&
+  // Through the helper, naming the registered delivery copy (lib/imageVariants
+  // "share": 1920, else 1080), else the stored master.
+  /images:\s*urls\.map\(\(src\)\s*=>\s*productImageUrl\(imageFor\(src,\s*"share",\s*product\.imageVariants\),\s*"jsonLd"\)\)/.test(detail) &&
     /const urls = images\.map\(\(i\) => i\.url\);/.test(detail));
 ok("the gallery still renders the stored URLs", /<ImageGallery\s+images=\{urls\}/.test(detail));
 for (const [label, route] of [["canonical route", childRoute], ["flat route", flatRoute]] as const) {
   ok(`${label}: og:image goes through the helper`,
-    /images:\s*\[\s*product\.image_url\s*\?\s*productImageUrl\(imageFor\(product\.image_url, "detail", product\.imageVariants\), "openGraph"\)\s*:\s*null,?\s*\]/.test(route));
+    /images:\s*\[\s*product\.image_url\s*\?\s*productImageUrl\(imageFor\(product\.image_url, "share", product\.imageVariants\), "openGraph"\)\s*:\s*null,?\s*\]/.test(route));
   ok(`${label}: og:image is still the cover (image_url)`, route.includes("product.image_url"));
+}
+for (const [label, route] of [["canonical route", childRoute], ["flat route", flatRoute]] as const) {
+  // A hidden or missing product returns before any image is chosen, so its
+  // photographs (or their copies) are never named in metadata.
+  const meta = route.slice(route.indexOf("export async function generateMetadata"));
+  const bail = meta.indexOf("if (!product) return");
+  ok(`${label}: missing/hidden product returns before the og image`, bail > 0 && bail < meta.indexOf("productImageUrl("));
 }
 ok("no route hand-builds an optimizer URL", ![detail, childRoute, flatRoute].some((s) => s.includes("/_next/image")));
 ok("next.config.mjs is not the fix", !read("next.config.mjs").includes("X-Robots-Tag"));

@@ -68,6 +68,9 @@ export function customerUrl(path: string): string {
  *                     already fetches, not a new variant.
  *   openGraph  1200 — already offered in the PDP's srcset, and a fraction of
  *                     the 2–4 MB originals share cards were given before.
+ *
+ * Both are CEILINGS. When the source is a w1080 delivery copy (WP-SEO-02A) the
+ * URL asks for 1080, the copy's own width — see optimizedStorageImageUrl.
  */
 export const PRODUCT_IMAGE_VARIANTS = {
   jsonLd: { width: 1920, quality: 75 },
@@ -84,9 +87,9 @@ export type ProductImageVariant = keyof typeof PRODUCT_IMAGE_VARIANTS;
  * rewrite here.
  *
  * ALSO a product photograph's delivery copy under derived/ (lib/imageVariants):
- * the JSON-LD and og:image name the same file the page renders, and once a
- * 1920 copy is registered that file is the copy. Only the exact derived name
- * shape is accepted — the same one lib/imageVariants builds and 0071 checks.
+ * the JSON-LD and og:image name imageFor(…, "share") — the registered 1920
+ * copy, else the 1080, else the master. Only the exact derived name shape is
+ * accepted — the same one lib/imageVariants builds and 0071 checks.
  */
 const PRODUCT_IMAGE_PATH =
   /^\/storage\/v1\/object\/public\/product-images\/(?:products\/[A-Za-z0-9][A-Za-z0-9_-]*\.(?:jpe?g|png|webp)|derived\/[A-Za-z0-9][A-Za-z0-9_-]*-w(?:1080|1920)-r\d+\.(?:jpg|webp))$/;
@@ -98,6 +101,9 @@ const PRODUCT_IMAGE_PATH =
  */
 const JOURNAL_IMAGE_PATH =
   /^\/storage\/v1\/object\/public\/product-images\/journal\/[A-Za-z0-9][A-Za-z0-9_-]*\.(?:jpe?g|png|webp)$/;
+
+/** A w1080 delivery copy under derived/ — lib/imageVariants' name shape. */
+const DERIVED_1080 = /\/derived\/[A-Za-z0-9][A-Za-z0-9_-]*-w1080-r\d+\.(?:jpg|webp)$/;
 
 function configuredStorageHost(supabaseUrl: string | undefined): string | null {
   try {
@@ -187,7 +193,7 @@ function optimizedStorageImageUrl(
   if (!Object.prototype.hasOwnProperty.call(PRODUCT_IMAGE_VARIANTS, variant)) {
     throw new Error(`Unapproved product image variant: ${String(variant)}`);
   }
-  const { width, quality } = PRODUCT_IMAGE_VARIANTS[variant];
+  const { width: approvedWidth, quality } = PRODUCT_IMAGE_VARIANTS[variant];
 
   const host = configuredStorageHost(supabaseUrl);
   if (!host) return src;
@@ -208,6 +214,11 @@ function optimizedStorageImageUrl(
     parsed.hash === "" &&
     path.test(parsed.pathname);
   if (!recognised) return src;
+
+  // A w1080 delivery copy is never asked for wider than it is. Next's optimizer
+  // does not enlarge, so &w=1920 would only be a second cache entry for the same
+  // 1080 pixels — and a URL that overstates them. 1080 is a deviceSizes width.
+  const width = DERIVED_1080.test(parsed.pathname) ? Math.min(approvedWidth, 1080) : approvedWidth;
 
   return `${PRODUCTION_ORIGIN}/_next/image?url=${encodeURIComponent(src)}&w=${width}&q=${quality}`;
 }

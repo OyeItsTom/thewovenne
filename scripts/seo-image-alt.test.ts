@@ -199,7 +199,7 @@ for (const route of [
     `${route}: og:image selection is untouched`,
     // Still the cover through the helper; the only addition is the registered
     // delivery copy (lib/imageVariants), which is the master when none exists.
-    /images:\s*\[\s*product\.image_url\s*\?\s*productImageUrl\(imageFor\(product\.image_url, "detail", product\.imageVariants\), "openGraph"\)\s*:\s*null,?\s*\]/.test(src)
+    /images:\s*\[\s*product\.image_url\s*\?\s*productImageUrl\(imageFor\(product\.image_url, "share", product\.imageVariants\), "openGraph"\)\s*:\s*null,?\s*\]/.test(src)
   );
 }
 ok("the gallery is still given the product name, plus each photo's written alt",

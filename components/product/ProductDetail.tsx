@@ -147,9 +147,9 @@ export default async function ProductDetail({
           // First-party optimizer URLs, not the raw storage ones Supabase marks
           // noindex. Order and count unchanged; the gallery below keeps the
           // stored URLs. See productImageUrl in lib/seo.
-          // The same file the gallery frame shows (its registered 1920 copy,
-          // else the master), so the markup still names what the page renders.
-          images: urls.map((src) => productImageUrl(imageFor(src, "detail", product.imageVariants), "jsonLd")),
+          // The registered delivery copy (1920, else 1080, else the master) —
+          // a copy the gallery renders, never a ~3 MB master when a copy exists.
+          images: urls.map((src) => productImageUrl(imageFor(src, "share", product.imageVariants), "jsonLd")),
           description: product.description,
           // The same column the Product details fabric row renders, so
           // the markup and the page cannot name two different materials.

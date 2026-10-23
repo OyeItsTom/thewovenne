@@ -40,8 +40,12 @@
 /** The two delivery sizes, by the width of the derivative. */
 export type DerivedTier = "w1080" | "w1920";
 
-/** What a surface needs: a narrow card/thumbnail, or a large detail view. */
-export type ImageUse = "card" | "detail";
+/**
+ * What a surface needs: a narrow card/thumbnail, a large detail view, or the
+ * photograph named to search engines and share cards (Product JSON-LD,
+ * og:image) — see lib/seo productImageUrl.
+ */
+export type ImageUse = "card" | "detail" | "share";
 
 export const DERIVED_TIERS: readonly DerivedTier[] = ["w1080", "w1920"] as const;
 
@@ -97,10 +101,18 @@ export type ImageVariantMap = Record<string, Partial<Record<DerivedTier, string>
  * The order each use prefers. A card would rather have the small copy, but the
  * large one is still a fraction of the master. A detail view never takes the
  * small copy — the zoom viewer's whole point is the pixels a 1080 lacks.
+ *
+ * A share image takes the largest copy there is, but WILL take the 1080 (WP-SEO-02A,
+ * 23 Oct 2026). Nothing zooms into it: Google's product-image and Open Graph
+ * minimums are far below 1080 wide (the smallest ready w1080 is 1080x810), and
+ * the alternative was every crawler or share-card cache miss pulling a ~3 MB
+ * master for a 1200px answer. Behind the optimizer the 1080 is cached for a
+ * year (and so is the optimizer's answer for it); the master for an hour.
  */
 const PREFERENCE: Record<ImageUse, readonly DerivedTier[]> = {
   card: ["w1080", "w1920"],
   detail: ["w1920"],
+  share: ["w1920", "w1080"],
 };
 
 /**
