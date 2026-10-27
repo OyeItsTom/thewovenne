@@ -20,7 +20,9 @@
  *      emails Supabase's recovery link; account_has_password picks only the
  *      words ("Change password" / "Set a password").
  *   5. /in/reset-password opens its form only for a session made by that link
- *      (amr `recovery`, within the hour); any other session is sent for a link.
+ *      (an old link's amr `recovery`, or the page's own verifyOtp proof — see
+ *      scripts/password-recovery.test.ts), within the window; any other session
+ *      is sent for a link.
  *
  * Exits non-zero on failure.
  */
@@ -325,16 +327,23 @@ const qs = (o: Record<string, string>) => new URLSearchParams(o);
   t("base64url payloads with - and _ decode", recoverySessionOpen(jwt({ pad: "??>>~~", amr: [{ method: "recovery", timestamp: s }] }), now));
 
   const rp = code(read("components/account/ResetPasswordForm.tsx"));
-  t("reset page opens its form only for a recovery session, never for any session", (rp.match(/recoverySessionOpen\(/g) ?? []).length === 2 && !/if \(data\.session\) setReady|\|\| session\) setReady/.test(rp));
+  // The page's logic is lib/passwordRecoveryFlow.ts (WP-OPS-01C4); its runtime
+  // behaviour is executed in scripts/password-recovery.test.ts. These are
+  // source checks.
+  const fl = code(read("lib/passwordRecoveryFlow.ts"));
+  t("reset page opens its form only for a recovery session, never for any session", (fl.match(/recoverySessionOpen\(/g) ?? []).length === 1 && (fl.match(/recoveryFormOpen\(/g) ?? []).length >= 4 && (fl.match(/phase: "form"/g) ?? []).length === 1 && /function openForm\(p: RecoveryProof\)/.test(fl) && !/recoverySessionOpen|recoveryFormOpen|phase: "form"/.test(rp));
   t("reset page asks for New + Confirm only", ["New password", "Confirm new password"].every((l) => rp.includes(`label="${l}"`)) && !/Current password|current-password/.test(rp));
-  t("reset page saves through updateUser on that session (setNewPassword), nothing custom", /await setNewPassword\(password\)/.test(rp) && !/service_role|SERVICE_ROLE|admin\.|fetch\(/.test(rp));
-  const afterSave = rp.slice(rp.indexOf("await setNewPassword(password)"), rp.indexOf("if (saved)"));
-  t("ONE USE: a saved password ends the recovery session before the confirmation shows", /if \(!result\.ok\)[\s\S]*return;[\s\S]*await logOut\(\);[\s\S]*setSaved\(true\)/.test(afterSave));
-  t("ONE USE: a failed save keeps the session (they can fix the password and retry)", /if \(!result\.ok\) \{[^}]*return;\s*\}/.test(afterSave) && !/if \(!result\.ok\) \{[^}]*logOut/.test(afterSave));
+  t("reset page saves through updateUser on that session (setNewPassword), nothing custom", /savePassword: setNewPassword/.test(rp) && /await deps\.savePassword\(password\)/.test(fl) && ![rp, fl].some((src) => /service_role|SERVICE_ROLE|admin\.|fetch\(/.test(src)));
+  const afterSave = fl.slice(fl.indexOf("await deps.savePassword(password)"), fl.indexOf("return { mount"));
+  t("ONE USE: a saved password ends the recovery session before the confirmation shows", /signOutLocal: logOut/.test(rp) && /if \(!result\.ok\)[\s\S]*return;\s*\}[\s\S]*await deps\.signOutLocal\(\);[\s\S]*phase: "saved"/.test(afterSave));
+  t("ONE USE: a failed save keeps the session (they can fix the password and retry)", /if \(!result\.ok\) \{\s*set\(\{ saving: false, saveError: result\.error \}\);/.test(afterSave));
   t("after saving: 'Your password is saved', signed out, links to sign in and the shop", /Your password is saved/.test(rp) && /signed you out/.test(rp) && /href="\/in\/login\?from=%2Fin%2Faccount%2Fsettings"/.test(rp) && /href="\/in"/.test(rp));
   t("logOut ends only this device's session (scope local) and clears the cart", /resetForSignOut\(\)[\s\S]*signOut\(\{ scope: "local" \}\)/.test(code(read("lib/customerAuth.ts"))));
-  t("expired / used / other-browser link → explains and offers a fresh link", /That link has expired/.test(rp) && /href="\/in\/forgot-password"/.test(rp) && /browser you asked for them in/.test(rp));
-  t("reset page sends nothing to analytics and never prints the URL", !/analytics|track\(|location\.(href|search|hash)|console\./.test(rp));
+  t("expired / used / other-browser link → explains and offers a fresh link", /may have expired, already been used/.test(rp) && /href="\/in\/forgot-password"/.test(rp) && /only works once, in the browser it was requested from/.test(rp));
+  // The page reads its own address only to hand it to the flow, which parses
+  // and then cleans it.
+  const hrefUses = rp.match(/window\.location\.href/g) ?? [];
+  t("reset page sends nothing to analytics and never prints the URL", ![rp, fl].some((src) => /analytics|track\(|location\.(search|hash)|console\./.test(src)) && hrefUses.length === 1 && /href: \(\) => window\.location\.href/.test(rp) && /parseRecoveryUrl\(deps\.location\.href\(\)\)/.test(fl) && /urlWithoutAuthParams\(deps\.location\.href\(\)\)/.test(fl));
 
   // Deleting an account frees the email (delete_my_account removes auth.users),
   // so the same address can sign up again — as a NEW, empty account.

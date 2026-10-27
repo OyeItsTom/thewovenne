@@ -66,7 +66,8 @@ export function recoverySessionOpen(
   });
 }
 
-function tokenClaims(token: string | null | undefined): Record<string, unknown> | null {
+/** A JWT's claims, unverified. For deciding what to show, never for trust. */
+export function tokenClaims(token: string | null | undefined): Record<string, unknown> | null {
   const part = token?.split(".")[1];
   if (!part) return null;
   try {

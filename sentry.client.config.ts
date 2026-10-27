@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
+import { redactBreadcrumb, redactEvent } from "./lib/redactAuthSecrets";
 
 // Browser-side error monitoring. Only initialises when a real DSN (a URL) is set
 // — a placeholder like "your-sentry-dsn" is treated as not configured.
@@ -11,4 +12,10 @@ const enabled = typeof dsn === "string" && dsn.startsWith("http");
 Sentry.init({
   dsn: enabled ? dsn : undefined,
   enabled,
+  // Recovery tokens and auth codes travel in reset-page URLs. Navigation
+  // breadcrumbs keep the full URL (fragment included), and an event carries the
+  // page URL, so both are masked before anything leaves the browser (see
+  // lib/redactAuthSecrets.ts for exactly which fields).
+  beforeBreadcrumb: (breadcrumb) => redactBreadcrumb(breadcrumb),
+  beforeSend: (event) => redactEvent(event),
 });

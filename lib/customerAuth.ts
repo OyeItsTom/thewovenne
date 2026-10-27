@@ -225,11 +225,12 @@ export async function startGoogleSignIn(from?: string | null): Promise<AuthResul
 /**
  * Send a reset link.
  *
- * A link rather than a code, unlike signup: the link carries a recovery token
- * that establishes a session when clicked, and doing that with a code would
- * mean exchanging tokens by hand alongside Supabase's own flow. The user is
- * also usually on a different device from the one they were locked out of, so
- * leaving the page costs nothing here.
+ * A link rather than a code, unlike signup. What the link looks like is set by
+ * Supabase's Reset Password email template, not here: Supabase's default link
+ * comes back with a PKCE `?code=` that only this browser can exchange, while
+ * the token-hash link (`#token_hash=…&type=recovery`, WP-OPS-01C) works on any
+ * device. /in/reset-password accepts both — see lib/passwordRecovery.ts.
+ * `redirectTo` is used only by the default link.
  */
 export async function requestPasswordReset(email: string): Promise<AuthResult> {
   const { error } = await getBrowserSupabase().auth.resetPasswordForEmail(

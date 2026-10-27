@@ -83,16 +83,19 @@ const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*
   console.log("\n=== 3. where the rule applies ===");
   const signup = code(read("components/account/SignupForm.tsx"));
   const reset = code(read("components/account/ResetPasswordForm.tsx"));
+  const resetFlow = code(read("lib/passwordRecoveryFlow.ts"));
   const admin = code(read("app/(admin)/admin/account/page.tsx"));
   const ca = code(read("lib/customerAuth.ts"));
   const login = code(read("components/account/LoginForm.tsx"));
   const settings = code(read("components/account/ChangePassword.tsx"));
   const addAdmin = read("scripts/add-admin.mjs");
   t("signup checks passwordProblem before signUp, shows the 12 hint", /passwordProblem\(form\.password, form\.confirm\)[\s\S]*await signUp\(/.test(signup) && /hint=\{PASSWORD_HINT\}/.test(signup));
-  t("reset/set-a-password checks passwordProblem before saving, shows the 12 hint", /passwordProblem\(password, confirm\)[\s\S]*await setNewPassword\(password\)/.test(reset) && /hint=\{PASSWORD_HINT\}/.test(reset));
+  t("reset/set-a-password checks passwordProblem before saving, shows the 12 hint", /passwordProblem\(password, confirm\)[\s\S]*\.save\(password\)/.test(reset) && /savePassword: setNewPassword/.test(reset) && /hint=\{PASSWORD_HINT\}/.test(reset));
   t("the hint is the owner's exact wording", PASSWORD_HINT === "Use at least 12 characters. Spaces are allowed, so a short phrase works well.");
   t("Google-only 'Set a password' has no field of its own — it emails the same reset link", !/type="password"|setNewPassword|updateUser/.test(settings) && /requestPasswordReset\(/.test(settings));
-  t("the reset form still opens only for a recovery session", (reset.match(/recoverySessionOpen\(/g) ?? []).length === 2);
+  // An old link's amr `recovery`, or the page's own verifyOtp proof (WP-OPS-01C);
+  // the page's logic is lib/passwordRecoveryFlow.ts (WP-OPS-01C4).
+  t("the reset form still opens only for a recovery session", (resetFlow.match(/recoverySessionOpen\(/g) ?? []).length === 1 && (resetFlow.match(/recoveryFormOpen\(/g) ?? []).length >= 4 && (resetFlow.match(/phase: "form"/g) ?? []).length === 1 && !/recoveryFormOpen|phase: "form"/.test(reset));
   t("admin page uses passwordPolicyProblem before updateUser; no 12 left", /passwordPolicyProblem\(next\)[\s\S]*updateUser\(\{/.test(admin) && !/MIN_LENGTH = 12|12\+ characters|length < 12/.test(admin) && /at least \$\{PASSWORD_MIN_LENGTH\} characters/.test(admin));
   t("admin page still verifies the current password first", /signInWithPassword\(\{[\s\S]*password: current/.test(admin));
   t("add-admin.mjs refuses a --password under 12 characters or over 72 bytes", /Array\.from\(chosenPassword\)\.length < 12/.test(addAdmin) && /Buffer\.byteLength\(chosenPassword, "utf8"\) > 72/.test(addAdmin));
