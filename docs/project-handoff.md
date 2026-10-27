@@ -1,16 +1,16 @@
 # The Wovenne — project handoff
 
-Last updated: 21 October 2026. This is a starting point for a fresh working
+Last updated: 27 October 2026. This is a starting point for a fresh working
 context, not a transcript. Git history, `supabase/migrations/`, `scripts/*.test.ts`
 and the code are the source of truth. `wovenne_project_status_log.md` is the
 older, longer history and is not current beyond early October.
 
-## Current production state (verified 21 Oct 2026)
+## Current production state (main + deploy verified 27 Oct 2026; ledger and posture last checked 21 Oct)
 
 | | |
 |---|---|
-| `main` | `3e83d93` (PR #210: docs, tests and README only). App code is unchanged since `0569e30` (PR #207) |
-| Production deployment | Vercel `7235810837`, Git-triggered from `main` at `3e83d93`; succeeded 19:52 UTC. Same app code as `0569e30` |
+| `main` | `7e2e798` (PR #213 merge: cross-device password recovery code). Before it: `0d56fdc` (#212, product JSON-LD/og:image w1080) |
+| Production deployment | GitHub deployment `7368470676` (vercel[bot], Production, ref `7e2e798`), Git-triggered from `main`; succeeded 27 Oct 19:35:34 UTC |
 | Migration ledger | 73 rows, latest `0073_style_photo_storage_security.sql` (`public.schema_migrations`) |
 | Security posture | `scripts/security-posture.ts --production` → MATCHES `supabase/security-posture.json` |
 | Background processes | None |
@@ -32,6 +32,23 @@ older, longer history and is not current beyond early October.
 - **Image derivatives and egress reduction** (#200): w1080 derivatives, so the optimizer no longer pulls 3 MB masters. Supabase egress is being watched against the 5 GB quota.
 - **Delete Account wording** corrected (#204).
 - **Style-photo storage security** (#207 and 0073), below.
+- **Cross-device password recovery code** (#213, WP-OPS-01C), below. Deployed but **not yet active in customer emails**.
+
+## Password recovery across devices — WP-OPS-01C (code live, template not changed)
+
+- **Problem:** the reset link only worked in the browser that asked for it (`@supabase/ssr` forces PKCE; the verifier cookie lives in that browser). Other devices, in-app browsers and link prefetchers saw "That link has expired".
+- **Fix (Option B), PR #213:** commits `4a812bb` + `ab071cd`, merged as `7e2e798` on 27 Oct 2026 19:32 UTC. The reset page also accepts `#token_hash=…&type=recovery` behind a **Continue** button (client `verifyOtp`). Old `?code=` PKCE links still work. Secrets in the URL are redacted from Sentry. Lookup or save failures fail closed.
+- **Verified:** Production deploy above succeeded; `/in/reset-password` returns 200 (noindex) on `www`, apex 308s to `www`, and the live page chunk contains the 01C7 strings.
+- **Tests:** `scripts/password-recovery.test.ts` 200/0, `password-policy` 40/0, `customer-google-auth` 127/0; `tsc` exit 0. The flow is tested with a stand-in auth client. **No real end-to-end reset has been run**; that is an owner device test after the template change.
+- **Not changed:** Supabase Reset Password template, Resend click tracking, SMTP, DNS, link expiry (1 h) and the 15-minute form window. Merging alone sends no new-format emails.
+- **Remaining, each needs separate owner approval, in order:**
+  1. Turn Resend click tracking off for auth emails.
+  2. Back up the current Supabase Reset Password template.
+  3. Owner approves the exact new template: `https://www.thewovenne.com/in/reset-password#token_hash={{ .TokenHash }}&amp;type=recovery` (hard-coded host, no `{{ .ConfirmationURL }}`).
+  4. Owner changes the template in the dashboard.
+  5. Owner device tests: same browser, a second device, an in-app browser.
+- **Rollback:** revert the template first. Keep this code live for at least 1 h after any new-format link is sent; never revert the code while such links can still be opened.
+- Reports: `reports/email-auth/wp-ops-01c*-2026-10-27/` (gitignored) with LaCie backups.
 
 ## Style-photo security — final state
 
@@ -151,19 +168,20 @@ This is one programme. Do not create separate GEO, AEO or LLMO projects.
 
 1. Supabase Data API grant compatibility and security audit. **WP-01A–E complete** (merged `3e83d93`, live). WP-00 verified.
    - **Remaining:** after 30 Oct, the read-only post-rollout check (see Standing rule).
-2. **NEXT ACTIVE — WP-02:** catalogue triage: inspect every current product, read-only.
-3. Owner decides KEEP / IMPROVE / REBUILD / RETIRE for each product.
-4. Rebuild and fix the final catalogue.
-5. Preserve URLs, with redirects where needed.
-6. Screaming Frog crawl and technical QA.
-7. Final technical and on-page SEO.
-8. Google Search Console.
-9. Bing Webmaster Tools and IndexNow.
-10. GA4, Consent Mode and Google Ads.
-11. Google Merchant Center and free product listings.
-12. Search & AI Discovery audit.
-13. Content, reviews, authority, PR and backlinks.
-14. Ongoing measurement of rankings, AI visibility and conversion.
+2. **Parallel, owner-gated — WP-OPS-01C rollout:** template stage (see Password recovery across devices).
+3. **NEXT ACTIVE — WP-02:** catalogue triage: inspect every current product, read-only.
+4. Owner decides KEEP / IMPROVE / REBUILD / RETIRE for each product.
+5. Rebuild and fix the final catalogue.
+6. Preserve URLs, with redirects where needed.
+7. Screaming Frog crawl and technical QA.
+8. Final technical and on-page SEO.
+9. Google Search Console.
+10. Bing Webmaster Tools and IndexNow.
+11. GA4, Consent Mode and Google Ads.
+12. Google Merchant Center and free product listings.
+13. Search & AI Discovery audit.
+14. Content, reviews, authority, PR and backlinks.
+15. Ongoing measurement of rankings, AI visibility and conversion.
 
 ## Do not reopen without new evidence
 
