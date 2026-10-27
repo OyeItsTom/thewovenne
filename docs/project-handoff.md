@@ -164,28 +164,44 @@ From 30 October, new tables and sequences in `public` get **no** automatic Data 
 
 This is one programme. Do not create separate GEO, AEO or LLMO projects.
 
-## Roadmap — in this order
+## Roadmap
 
-1. Supabase Data API grant compatibility and security audit. **WP-01A–E complete** (merged `3e83d93`, live). WP-00 verified.
-   - **Remaining:** after 30 Oct, the read-only post-rollout check (see Standing rule).
-2. **Parallel, owner-gated — WP-OPS-01C rollout:** template stage (see Password recovery across devices).
-3. **NEXT ACTIVE — WP-02:** catalogue triage: inspect every current product, read-only.
-4. Owner decides KEEP / IMPROVE / REBUILD / RETIRE for each product.
-5. Rebuild and fix the final catalogue.
-6. Preserve URLs, with redirects where needed.
-7. Screaming Frog crawl and technical QA.
-8. Final technical and on-page SEO.
-9. Google Search Console.
-10. Bing Webmaster Tools and IndexNow.
-11. GA4, Consent Mode and Google Ads.
-12. Google Merchant Center and free product listings.
-13. Search & AI Discovery audit.
-14. Content, reviews, authority, PR and backlinks.
-15. Ongoing measurement of rankings, AI visibility and conversion.
+**Completed.** Reports are gitignored under `reports/`, with private backups.
+
+- **WP-00, WP-01A–E:** Vercel auto-deploy verified; Data API grant audit and rules merged (`3e83d93`).
+- **WP-02A (21 Oct):** read-only catalogue audit of all 34 products. The owner questions it raised are still open.
+- **Owner strategy (23 Oct):** India first. Move gradually towards linen and other natural fabrics, while selling or clearing suitable existing saree stock.
+- **WP-SEO-01A (23 Oct):** initial technical SEO and AI-readiness audit.
+- **WP-SEO-02A–C (23 Oct):** product JSON-LD and og:image use the w1080 derivative. Merged as PR #212 (`0d56fdc`).
+- **WP-SEO-02D (24 Oct):** investigated 404 pages. Next 14.2.5 renders a page-level `notFound()` as an empty HTML shell; the 404 status and noindex are correct. This is a framework limit, deferred to a future Next.js 15 upgrade.
+- **WP-OPS-01A (23 Oct):** email authentication audit. **WP-OPS-01B (24 Oct):** owner testing; Supabase sends through Resend SMTP. It found the cross-device reset failure.
+- **WP-OPS-01C (27 Oct):** code merged as PR #213 (`7e2e798`). The new recovery email template is **not active** (see Password recovery across devices).
+
+**Pending, independent of the catalogue:**
+
+- After 30 Oct: the read-only Supabase Data API permissions check (see Standing rule).
+- WP-OPS-01C template activation, owner-gated, in the order listed above.
+- WP-OPS-01A DNS findings (root SPF, DMARC reporting), owner-gated.
+
+**Catalogue and SEO, in this order:**
+
+1. Owner decides KEEP / IMPROVE / REBUILD / RETIRE for each product. **Not complete.** The strategy above does not decide any single product.
+2. Product editing and description improvements: **deferred by the owner.** Do not start without approval.
+3. Rebuild and fix the final catalogue.
+4. Preserve URLs, with redirects where needed. Follows the product decisions.
+5. Final Screaming Frog crawl and technical QA. Follows the catalogue decisions.
+6. Final technical and on-page SEO. Follows the catalogue decisions.
+7. Google Search Console.
+8. Bing Webmaster Tools and IndexNow.
+9. GA4, Consent Mode and Google Ads.
+10. Google Merchant Center and free product listings. Blocked while Razorpay is on Test keys.
+11. Search & AI Discovery audit.
+12. Content, reviews, authority, PR and backlinks.
+13. Ongoing measurement of rankings, AI visibility and conversion.
 
 ## Do not reopen without new evidence
 
-Completed, production-verified phases (all of the above) are not re-audited for their own sake. Reopen one only for:
+Completed phases (the Completed list and the production sections above) are not re-audited for their own sake. Reopen one only for:
 - a regression;
 - a platform change that affects it;
 - new evidence of a real gap.
