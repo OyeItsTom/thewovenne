@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import Button from "@/components/ui/Button";
@@ -10,23 +10,43 @@ import AuthField from "./AuthField";
 import AuthMessage from "./AuthMessage";
 import { setNewPassword, passwordProblem, logOut } from "@/lib/customerAuth";
 import { PASSWORD_HINT } from "@/lib/passwordPolicy";
-import { recoverySessionOpen } from "@/lib/signInMethods";
+import {
+  INITIAL_RECOVERY_VIEW,
+  createRecoveryFlow,
+  type RecoveryFlow,
+  type RecoveryView,
+} from "@/lib/passwordRecoveryFlow";
+
+/** After this long, a check still running gets a note — never a verdict. */
+const SLOW_MS = 10_000;
 
 /**
  * Where the emailed reset link lands.
  *
- * The link carries a recovery token which Supabase exchanges for a session as
- * the page loads. Until that has happened there is nothing to update, so the
- * form waits rather than letting someone type a password into a page that
- * cannot save it.
+ * Two kinds of link arrive here (see lib/passwordRecovery.ts):
  *
- * Only a session made BY that link opens the form (recoverySessionOpen). Any
- * other session, however it was signed in, gets "ask for a link" instead: this
- * page is the only place a password is set, and a signed-in browser on its own
- * is not proof of who is holding it. Settings, "Set a password" and "Forgot
- * password?" all send the same link here.
+ *   NEW: `#token_hash=…&type=recovery`. Works on any device. Nothing is checked
+ *   until the customer presses Continue — opening the page, a link preview or a
+ *   mail scanner spends nothing — and the fragment leaves the address bar at
+ *   once. Continue calls verifyOtp; the proof it yields is held in memory,
+ *   bound to that user and session.
  *
- * ONE USE. The emailed code is single-use already, but the session it creates
+ *   OLD: Supabase's own link, which returns with `?code=` and is exchanged by
+ *   the browser client as the page loads. That only works in the browser that
+ *   asked for it, and its session is stamped amr `recovery`. Still accepted, so
+ *   links already in inboxes keep working where they always did.
+ *
+ * Only one of those opens the form. Any other session, however it was signed
+ * in, gets "ask for a link" instead: this page is the only place a password is
+ * set, and a signed-in browser on its own is not proof of who is holding it.
+ * Settings, "Set a password" and "Forgot password?" all send the same link
+ * here.
+ *
+ * What happens when — Continue, the checks, saving, and signing out a link's
+ * session when the reset is abandoned — is lib/passwordRecoveryFlow.ts. This
+ * component renders it.
+ *
+ * ONE USE. The emailed token is single-use already, but the session it creates
  * is an ordinary, long-lived Supabase session, and Supabase keeps it when the
  * password changes (it signs out every OTHER session). Left alone, that browser
  * could come back here and change the password again. So once the new password
@@ -34,65 +54,69 @@ import { recoverySessionOpen } from "@/lib/signInMethods";
  * email.
  */
 export default function ResetPasswordForm() {
-  const [ready, setReady] = useState<boolean | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [view, setView] = useState<RecoveryView>(INITIAL_RECOVERY_VIEW);
+  const [slow, setSlow] = useState(false);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const flowRef = useRef<RecoveryFlow | null>(null);
+  const { phase } = view;
 
   useEffect(() => {
-    const supabase = getBrowserSupabase();
-
-    // Either the session is already established, or it arrives moments later
-    // as the token in the URL is exchanged — so both are handled. The session
-    // itself is checked rather than the PASSWORD_RECOVERY event, which the
-    // shared client may have fired before this component subscribed.
-    supabase.auth.getSession().then(({ data }) => {
-      if (recoverySessionOpen(data.session?.access_token)) setReady(true);
-    });
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (recoverySessionOpen(session?.access_token)) setReady(true);
-    });
-
-    // If nothing has arrived by now the link was stale or already used.
-    const timer = setTimeout(() => setReady((r) => (r === null ? false : r)), 2500);
-
-    return () => {
-      sub.subscription.unsubscribe();
-      clearTimeout(timer);
-    };
+    // Made once and kept across Strict Mode's second mount.
+    flowRef.current ??= createRecoveryFlow(
+      {
+        auth: getBrowserSupabase().auth,
+        savePassword: setNewPassword,
+        signOutLocal: logOut,
+        location: {
+          href: () => window.location.href,
+          replace: (path) => window.history.replaceState(window.history.state, "", path),
+        },
+      },
+      setView
+    );
+    return flowRef.current.mount();
   }, []);
+
+  useEffect(() => {
+    setSlow(false);
+    if (phase !== "checking" && phase !== "verifying") return;
+    const timer = setTimeout(() => setSlow(true), SLOW_MS);
+    return () => clearTimeout(timer);
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "saved") return;
+    setPassword("");
+    setConfirm("");
+  }, [phase]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
-    const problem = passwordProblem(password, confirm);
-    if (problem) return setError(problem);
-
-    setBusy(true);
-    const result = await setNewPassword(password);
-    if (!result.ok) {
-      setError(result.error);
-      setBusy(false);
-      return;
-    }
-    // End the recovery session (this device only; Supabase has already ended
-    // the others). logOut also clears the persisted cart, as on any sign-out.
-    await logOut();
-    setBusy(false);
-    setPassword("");
-    setConfirm("");
-    setSaved(true);
+    const found = passwordProblem(password, confirm);
+    setProblem(found);
+    if (found) return;
+    await flowRef.current?.save(password);
   }
 
-  if (saved) {
+  const newLink = (
+    <Link href="/in/forgot-password" className="text-terracotta hover:underline">
+      Send a new link
+    </Link>
+  );
+  const slowNote = slow && (
+    <p className="mt-3 text-center text-sm text-ink/50">
+      This is taking longer than usual. Check your connection; the page will carry on when it can.
+    </p>
+  );
+
+  if (phase === "saved") {
     return (
       <AuthShell
         eyebrow="All set"
         title="Your password is saved"
-        intro="For your security we've signed you out everywhere. Sign in again with your email and new password, or with Google if you use it."
+        intro="We've signed you out on this device. Sign in again with your email and new password, or with Google if you use it."
         footer={
           <Link href="/in" className="text-terracotta hover:underline">
             Continue shopping
@@ -112,24 +136,104 @@ export default function ResetPasswordForm() {
     );
   }
 
-  if (ready === null) {
+  if (phase === "checking") {
     return (
       <AuthShell title="Set a new password" intro="One moment…">
         <p className="text-center text-sm text-ink/50">Checking your link…</p>
+        {slowNote}
       </AuthShell>
     );
   }
 
-  if (!ready) {
+  if (phase === "confirm" || phase === "verifying") {
+    const verifying = phase === "verifying";
     return (
       <AuthShell
-        title="That link has expired"
-        intro="Password links last an hour, work once, and must be opened in the browser you asked for them in."
-        footer={
-          <Link href="/in/forgot-password" className="text-terracotta hover:underline">
-            Send a new link
-          </Link>
+        eyebrow="Password reset"
+        title="Set a new password"
+        intro="Continue to confirm your link, then choose a new password. Each link works once."
+        footer={newLink}
+      >
+        <div className="space-y-5">
+          {view.notice && <AuthMessage tone="error">{view.notice}</AuthMessage>}
+          {view.signedIn && (
+            <p className="text-sm text-ink/70">
+              Someone is already signed in on this browser. If you continue, this browser will switch to the account this link was sent to.
+            </p>
+          )}
+          <Button
+            type="button"
+            size="lg"
+            className="w-full"
+            disabled={verifying}
+            onClick={() => void flowRef.current?.continueWithLink()}
+          >
+            {verifying ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" /> Checking…
+              </span>
+            ) : (
+              "Continue"
+            )}
+          </Button>
+        </div>
+        {slowNote}
+      </AuthShell>
+    );
+  }
+
+  if (phase === "invalid") {
+    return (
+      <AuthShell
+        title="This link can't be used"
+        intro="It may have expired, already been used, or been cut short when it was copied. Password links last an hour and work once."
+        footer={newLink}
+      >
+        <AuthMessage tone="error">
+          Ask for a fresh link and open it from the newest email.
+        </AuthMessage>
+      </AuthShell>
+    );
+  }
+
+  if (phase === "otherBrowser") {
+    return (
+      <AuthShell
+        title="Open this link where you asked for it"
+        intro="This reset link only works once, in the browser it was requested from. To reset your password on this device, ask for a new link here."
+        footer={newLink}
+      >
+        <AuthMessage tone="error">
+          If you did open it in the same browser, it has already been used or has expired.
+        </AuthMessage>
+      </AuthShell>
+    );
+  }
+
+  if (phase === "unavailable") {
+    return (
+      <AuthShell
+        title="We couldn't check your reset"
+        intro="We couldn't reach our sign-in service, so we've stopped here to keep your account safe. Check your connection, then ask for a new link."
+        footer={newLink}
+      >
+        <AuthMessage tone="error">
+          If you&apos;ve just saved a new password, try signing in with it first.
+        </AuthMessage>
+      </AuthShell>
+    );
+  }
+
+  if (phase === "noLink" || phase === "closed") {
+    return (
+      <AuthShell
+        title={phase === "closed" ? "This reset has ended" : "Open the link from your email"}
+        intro={
+          phase === "closed"
+            ? "15 minutes have passed, or the account on this browser has changed, so we've closed this reset. For your security, ask for a new link."
+            : "To set a new password, use the link in our password email. Being signed in isn't enough on its own. If you've just refreshed this page, that link has been used."
         }
+        footer={newLink}
       >
         <AuthMessage tone="error">
           Ask for a fresh link and use it as soon as it arrives.
@@ -142,10 +246,10 @@ export default function ResetPasswordForm() {
     <AuthShell
       eyebrow="Almost done"
       title="Set a new password"
-      intro="Choose something you'll remember. You'll be logged in straight away."
+      intro="Choose a password you'll remember. Once it's saved, we'll sign you out so you can sign in again with your new password."
     >
       <form onSubmit={submit} className="space-y-5">
-        {error && <AuthMessage tone="error">{error}</AuthMessage>}
+        {(problem ?? view.saveError) && <AuthMessage tone="error">{problem ?? view.saveError}</AuthMessage>}
 
         <AuthField
           label="New password"
@@ -165,13 +269,13 @@ export default function ResetPasswordForm() {
           onChange={(e) => setConfirm(e.target.value)}
         />
 
-        <Button type="submit" size="lg" className="w-full" disabled={busy}>
-          {busy ? (
+        <Button type="submit" size="lg" className="w-full" disabled={view.saving}>
+          {view.saving ? (
             <span className="inline-flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin" /> Saving…
             </span>
           ) : (
-            "Save and continue"
+            "Save new password"
           )}
         </Button>
       </form>
