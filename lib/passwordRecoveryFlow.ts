@@ -1,6 +1,7 @@
 import { RECOVERY_WINDOW_SECONDS, recoverySessionOpen } from "./signInMethods";
 import {
   VERIFY_FAILURE_COPY,
+  classifyVerifyFailure,
   initialRecoveryPhase,
   parseRecoveryUrl,
   proofFromRecoverySession,
@@ -33,6 +34,9 @@ import {
  *     session check failing on save — ends the session the link created, on
  *     this browser only, and only if this browser still holds that session. A
  *     different account, or a sign-in made since, is never signed out.
+ *   - A session lookup that fails (throws, or Supabase can't be reached) is
+ *     never proof: the form doesn't open or stay open on it, and the page says
+ *     it couldn't check (WP-OPS-01C7) rather than that the link expired.
  *
  * What it cannot do: run when the tab is closed, the browser is killed or the
  * page is reloaded. A session created by Continue then stays signed in, as an
@@ -43,7 +47,7 @@ type MaybeSession = { access_token: string } | null;
 
 /** The part of the Supabase auth client the page uses. */
 export interface RecoveryFlowAuth extends RecoveryAuth {
-  getSession(): Promise<{ data: { session: MaybeSession } }>;
+  getSession(): Promise<{ data: { session: MaybeSession }; error?: unknown }>;
   onAuthStateChange(callback: (event: string, session: MaybeSession) => void): {
     data: { subscription: { unsubscribe(): void } };
   };
@@ -69,6 +73,10 @@ export interface RecoveryView {
   /** Supabase refused the new password (too short, the same as before…). */
   saveError: string | null;
 }
+
+/** A save that threw: Supabase may or may not have the new password. */
+export const SAVE_UNCONFIRMED_COPY =
+  "We couldn't confirm that your new password was saved. Check your connection and try again.";
 
 export const INITIAL_RECOVERY_VIEW: RecoveryView = {
   phase: "checking",
@@ -115,23 +123,39 @@ export function createRecoveryFlow(deps: RecoveryFlowDeps, onChange: (view: Reco
     expiry = null;
   };
 
+  /**
+   * The access token this browser holds, null for none, or undefined when that
+   * couldn't be found out: the lookup threw, or Supabase couldn't be reached to
+   * refresh the session. A refresh Supabase refused (signed out elsewhere)
+   * leaves no session, so that one is null.
+   */
+  async function currentToken(): Promise<string | null | undefined> {
+    try {
+      const { data, error } = await deps.auth.getSession();
+      if (error && classifyVerifyFailure(error) !== "invalid") return undefined;
+      return data.session?.access_token ?? null;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Sign out here only if this browser still holds the session `p` was made for. */
   async function endSession(p: RecoveryProof) {
     try {
-      const { data } = await deps.auth.getSession();
-      if (sessionMatchesProof(data.session?.access_token, p)) await deps.signOutLocal();
+      // An unknown session matches nothing, so nobody is signed out on a guess.
+      if (sessionMatchesProof(await currentToken(), p)) await deps.signOutLocal();
     } catch {
       // Best effort: the session is then an ordinary one, as after any sign-in.
     }
   }
 
   /** The reset is over without a save: close the form, end the link's session. */
-  async function close() {
+  async function close(phase: "closed" | "unavailable" = "closed") {
     const p = proof;
     proof = null;
     token = null;
     stopExpiry();
-    set({ phase: "closed", saving: false });
+    set({ phase, saving: false });
     if (p) await endSession(p);
   }
 
@@ -174,13 +198,18 @@ export function createRecoveryFlow(deps: RecoveryFlowDeps, onChange: (view: Reco
 
     // getSession waits for the client's start-up, including an old link's code
     // exchange, so there is no timer guessing at it.
-    deps.auth.getSession().then(({ data }) => {
+    void currentToken().then((accessToken) => {
       if (!live) return;
       clean();
       if (view.saving || view.phase === "saved") return;
-      set({ signedIn: !!data.session });
+      if (accessToken === undefined) {
+        // Couldn't tell. A new link keeps Continue (nothing is spent by
+        // waiting); anything else is told so, not that a link has expired.
+        if (view.phase === "checking") set({ phase: "unavailable" });
+        return;
+      }
+      set({ signedIn: !!accessToken });
       if (view.phase !== "checking") return;
-      const accessToken = data.session?.access_token;
       const phase = initialRecoveryPhase(link, recoverySessionOpen(accessToken, now()));
       const legacy = phase === "form" ? proofFromRecoverySession(accessToken) : null;
       if (legacy) openForm(legacy);
@@ -237,9 +266,15 @@ export function createRecoveryFlow(deps: RecoveryFlowDeps, onChange: (view: Reco
     const p = result.proof;
     // Left the page while the check ran: nobody is here to use the form.
     if (!mounted) return void (await endSession(p));
-    const { data } = await deps.auth.getSession();
+    const accessToken = await currentToken();
     if (!mounted) return void (await endSession(p));
-    if (recoveryFormOpen(data.session?.access_token, p, now())) openForm(p);
+    if (accessToken === undefined) {
+      // The verification alone doesn't open the form: this browser must be
+      // seen holding that session. The token is spent, so no retry here.
+      set({ phase: "unavailable" });
+      return void (await endSession(p));
+    }
+    if (recoveryFormOpen(accessToken, p, now())) openForm(p);
     else {
       // Another tab changed the account mid-check. Close; endSession leaves
       // that other session alone.
@@ -254,10 +289,17 @@ export function createRecoveryFlow(deps: RecoveryFlowDeps, onChange: (view: Reco
 
     // Again, right before saving: updateUser changes whichever account the
     // browser now holds, so it must still be the one the link proved.
-    const before = await deps.auth.getSession();
-    if (!recoveryFormOpen(before.data.session?.access_token, proof, now())) return void (await close());
+    const before = await currentToken();
+    if (before === undefined) return void (await close("unavailable"));
+    if (!recoveryFormOpen(before, proof, now())) return void (await close());
 
-    const result = await deps.savePassword(password);
+    let result: { ok: boolean; error: string | null };
+    try {
+      result = await deps.savePassword(password);
+    } catch {
+      // It may have reached Supabase; never say it saved.
+      result = { ok: false, error: SAVE_UNCONFIRMED_COPY };
+    }
     if (!result.ok) {
       set({ saving: false, saveError: result.error });
       const p = proof;
@@ -266,8 +308,9 @@ export function createRecoveryFlow(deps: RecoveryFlowDeps, onChange: (view: Reco
         if (p) await endSession(p);
         return;
       }
-      const after = await deps.auth.getSession();
-      if (!recoveryFormOpen(after.data.session?.access_token, proof, now())) await close();
+      const after = await currentToken();
+      if (after === undefined) await close("unavailable");
+      else if (!recoveryFormOpen(after, proof, now())) await close();
       return;
     }
 

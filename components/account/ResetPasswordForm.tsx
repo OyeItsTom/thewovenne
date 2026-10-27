@@ -116,7 +116,7 @@ export default function ResetPasswordForm() {
       <AuthShell
         eyebrow="All set"
         title="Your password is saved"
-        intro="For your security we've signed you out everywhere. Sign in again with your email and new password, or with Google if you use it."
+        intro="We've signed you out on this device. Sign in again with your email and new password, or with Google if you use it."
         footer={
           <Link href="/in" className="text-terracotta hover:underline">
             Continue shopping
@@ -205,6 +205,20 @@ export default function ResetPasswordForm() {
       >
         <AuthMessage tone="error">
           If you did open it in the same browser, it has already been used or has expired.
+        </AuthMessage>
+      </AuthShell>
+    );
+  }
+
+  if (phase === "unavailable") {
+    return (
+      <AuthShell
+        title="We couldn't check your reset"
+        intro="We couldn't reach our sign-in service, so we've stopped here to keep your account safe. Check your connection, then ask for a new link."
+        footer={newLink}
+      >
+        <AuthMessage tone="error">
+          If you&apos;ve just saved a new password, try signing in with it first.
         </AuthMessage>
       </AuthShell>
     );

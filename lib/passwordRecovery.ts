@@ -278,6 +278,8 @@ export type RecoveryPhase =
   | "otherBrowser"
   | "noLink"
   | "closed"
+  /** A session lookup failed, so the page couldn't check (WP-OPS-01C7). */
+  | "unavailable"
   | "saved";
 
 /** The first screen once the URL and any existing session have been read. */

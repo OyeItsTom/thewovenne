@@ -20,7 +20,8 @@
  *      client that emits events in auth-js 2.111's order): Continue, retries,
  *      double taps, Strict Mode, auth events mid-check and mid-save, another
  *      account, token refresh, the 15 minutes running out, leaving the page —
- *      and which session, if any, is signed out each time.
+ *      and which session, if any, is signed out each time. Also session
+ *      lookups and saves that throw or can't reach Supabase (WP-OPS-01C7).
  *   6. The page's wiring and copy — SOURCE checks only (no DOM here): the
  *      component hands everything to the flow; one static first render.
  *   7. Sentry masking, executed: breadcrumbs (incl. console arguments), event
@@ -50,7 +51,7 @@ import {
   VERIFY_FAILURE_COPY,
   type RecoveryAuth,
 } from "../lib/passwordRecovery";
-import { createRecoveryFlow, type RecoveryFlowAuth, type RecoveryView } from "../lib/passwordRecoveryFlow";
+import { SAVE_UNCONFIRMED_COPY, createRecoveryFlow, type RecoveryFlowAuth, type RecoveryView } from "../lib/passwordRecoveryFlow";
 import { RECOVERY_WINDOW_SECONDS } from "../lib/signInMethods";
 import { redactAuthSecrets, redactAuthSecretsDeep, redactBreadcrumb, redactEvent } from "../lib/redactAuthSecrets";
 
@@ -302,6 +303,9 @@ const otpSession = (sub = "user-a", sid = "sess-1") => jwt({ sub, session_id: si
     const views: RecoveryView[] = [];
     const timers: { fn: () => void; ms: number; live: boolean }[] = [];
     const getSessionGates: Promise<void>[] = [];
+    // Session lookups that fail, in call order: throw, or auth-js's answer
+    // when a refresh can't reach Supabase / is refused by it.
+    const getSessionFailures: ("throw" | "network" | "refused")[] = [];
     let verifyGate: Promise<void> | null = null;
     let saveGate: Promise<void> | null = null;
     const emit = (event: string) => [...listeners].forEach((l) => l(event, session));
@@ -319,6 +323,11 @@ const otpSession = (sub = "user-a", sid = "sess-1") => jwt({ sub, session_id: si
       getSession: async () => {
         const gate = getSessionGates.shift();
         if (gate) await gate;
+        log.push("getSession");
+        const failure = getSessionFailures.shift();
+        if (failure === "throw") throw new Error("storage unavailable");
+        if (failure === "network") return { data: { session: null }, error: apiErr(0, undefined, "AuthRetryableFetchError") };
+        if (failure === "refused") return { data: { session: null }, error: apiErr(400, "refresh_token_not_found") };
         return { data: { session } };
       },
       onAuthStateChange: (cb) => {
@@ -376,6 +385,8 @@ const otpSession = (sub = "user-a", sid = "sess-1") => jwt({ sub, session_id: si
       },
       advance: (ms: number) => void (clock += ms),
       fireTimers: () => timers.filter((x) => x.live).forEach((x) => { x.live = false; x.fn(); }),
+      failGetSession(...kinds: ("throw" | "network" | "refused")[]) { getSessionFailures.push(...kinds); },
+      getSessions: () => log.filter((l) => l === "getSession").length,
       holdNextGetSession() { const h = hold(); getSessionGates.push(h.gate); return h.release; },
       holdVerify() { const h = hold(); verifyGate = h.gate; return () => { verifyGate = null; h.release(); }; },
       holdSave() { const h = hold(); saveGate = h.gate; return () => { saveGate = null; h.release(); }; },
@@ -385,6 +396,14 @@ const otpSession = (sub = "user-a", sid = "sess-1") => jwt({ sub, session_id: si
     };
   }
   type H = ReturnType<typeof harness>;
+  const rejections: unknown[] = [];
+  // Recorded for the check below AND fatal: this listener must never turn a
+  // crashed run into a quiet exit 0.
+  process.on("unhandledRejection", (e) => {
+    rejections.push(e);
+    t("unhandled promise rejection", false, String(e));
+    process.exitCode = 1;
+  });
   const PW = "a quiet morning walk";
   const toForm = async (h: H) => {
     const off = h.flow.mount();
@@ -708,6 +727,122 @@ const otpSession = (sub = "user-a", sid = "sess-1") => jwt({ sub, session_id: si
     t("old link on another device: 'open it where you asked', code cleaned, nothing signed out", h.flow.view().phase === "otherBrowser" && h.log.includes("replace:/in/reset-password") && h.signOuts().length === 0);
   }
 
+  // ── Session lookups and saves that fail (WP-OPS-01C7) ──
+  for (const kind of ["throw", "network"] as const) {
+    const h = harness({ href: SITE });
+    h.failGetSession(kind);
+    h.flow.mount();
+    await tick();
+    t(`no link, start-up lookup ${kind === "throw" ? "throws" : "can't reach Supabase"}: 'couldn't check', not 'checking' forever and not an expiry`, h.flow.view().phase === "unavailable" && !h.phases.includes("invalid") && !h.phases.includes("noLink") && h.verifies() === 0 && h.signOuts().length === 0);
+  }
+  {
+    const old = { access_token: jwt({ sub: "user-a", session_id: "old-sess", amr: [{ method: "recovery", timestamp: s - 60 }] }) };
+    const h = harness({ href: `${SITE}?code=abc`, session: old });
+    h.failGetSession("throw");
+    h.flow.mount();
+    await tick();
+    t("old link, start-up lookup throws: 'couldn't check' (not 'other browser'), no form, ?code= cleaned, nobody signed out", h.flow.view().phase === "unavailable" && !h.phases.includes("form") && !h.phases.includes("otherBrowser") && h.log.includes("replace:/in/reset-password") && h.signOuts().length === 0);
+  }
+  {
+    const h = harness({ href: SITE, session: { access_token: otpSession("user-a", "stale") } });
+    h.failGetSession("refused");
+    h.flow.mount();
+    await tick();
+    t("start-up refresh REFUSED by Supabase (signed out elsewhere): treated as signed out → 'open the link from your email'", h.flow.view().phase === "noLink" && !h.flow.view().signedIn);
+  }
+  for (const kind of ["throw", "network"] as const) {
+    const h = harness();
+    h.failGetSession(kind);
+    h.flow.mount();
+    await tick();
+    t(`new link, start-up lookup ${kind === "throw" ? "throws" : "can't reach Supabase"}: Continue stays, nothing verified automatically`, h.flow.view().phase === "confirm" && h.verifies() === 0);
+    await h.flow.continueWithLink();
+    t("…pressing Continue then verifies once and opens the form", h.verifies() === 1 && h.flow.view().phase === "form");
+  }
+  for (const kind of ["throw", "network"] as const) {
+    const h = harness();
+    h.flow.mount();
+    await tick();
+    h.failGetSession(kind);
+    await h.flow.continueWithLink();
+    await tick();
+    t(`verified, then the lookup before the form ${kind === "throw" ? "throws" : "can't reach Supabase"}: 'couldn't check', form never opened`, h.flow.view().phase === "unavailable" && !h.phases.includes("form"));
+    t("…the link's session (identity known, still held here) is signed out locally", h.signOuts().join() === "signOut:rec-sess");
+    await h.flow.continueWithLink();
+    await h.flow.save(PW);
+    t("…the spent token is not verified again, and nothing is saved", h.verifies() === 1 && h.saves() === 0 && h.flow.view().phase === "unavailable");
+  }
+  {
+    const h = harness();
+    h.flow.mount();
+    await tick();
+    h.failGetSession("throw", "throw");
+    await h.flow.continueWithLink();
+    await tick();
+    t("verified, then every lookup throws: 'couldn't check', and nobody is signed out on a guess", h.flow.view().phase === "unavailable" && h.signOuts().length === 0 && sidOf(h.session()) === "rec-sess");
+  }
+  {
+    const h = harness();
+    h.flow.mount();
+    await tick();
+    const releaseLookup = h.holdNextGetSession();
+    h.failGetSession("throw", "throw");
+    const pending = h.flow.continueWithLink();
+    await tick();
+    h.setSession(otherUser(), "SIGNED_IN");
+    releaseLookup();
+    await pending;
+    await tick();
+    t("another account signed in mid-check AND the lookups fail: that account is NOT signed out", h.flow.view().phase === "unavailable" && h.signOuts().length === 0 && sidOf(h.session()) === "b-sess");
+  }
+  for (const kind of ["throw", "network"] as const) {
+    const h = harness();
+    await toForm(h);
+    h.failGetSession(kind);
+    await h.flow.save(PW);
+    await tick();
+    t(`lookup right before saving ${kind === "throw" ? "throws" : "can't reach Supabase"}: nothing saved, form closed ('couldn't check'), not left on 'Saving'`, h.saves() === 0 && h.flow.view().phase === "unavailable" && !h.flow.view().saving);
+    t("…the link's session signed out locally; no timer left", h.signOuts().join() === "signOut:rec-sess" && h.liveTimers().length === 0);
+    await h.flow.continueWithLink();
+    t("…and the spent token is not verified again", h.verifies() === 1);
+  }
+  {
+    const h = harness();
+    await toForm(h);
+    h.setSession(otherUser());
+    h.failGetSession("throw", "throw");
+    await h.flow.save(PW);
+    await tick();
+    t("lookup before saving throws while another account holds the browser: nothing saved, that account kept", h.saves() === 0 && h.flow.view().phase === "unavailable" && h.signOuts().length === 0 && sidOf(h.session()) === "b-sess");
+  }
+  {
+    let n = 0;
+    const h = harness({ save: () => { if (++n === 1) throw new TypeError("Failed to fetch"); return { ok: true, error: null }; } });
+    await toForm(h);
+    await h.flow.save(PW);
+    t("save THROWS: never 'saved'; form stays with an honest 'couldn't confirm' note; not left on 'Saving'; nobody signed out", h.flow.view().phase === "form" && !h.phases.includes("saved") && h.flow.view().saveError === SAVE_UNCONFIRMED_COPY && !h.flow.view().saving && h.signOuts().length === 0);
+    await h.flow.save(PW);
+    t("…a retry that succeeds saves and signs out the link's session", h.flow.view().phase === "saved" && h.signOuts().join() === "signOut:rec-sess" && h.saves() === 2);
+  }
+  {
+    const h = harness({ save: () => { throw new TypeError("Failed to fetch"); } });
+    await toForm(h);
+    // The before-save lookup succeeds; the one after the failed save throws.
+    const before = h.getSessions();
+    h.failGetSession("throw");
+    await h.flow.save(PW);
+    await tick();
+    t("save throws AND the re-check throws: form closed ('couldn't check'), never 'saved', not stuck", h.getSessions() > before && h.flow.view().phase === "unavailable" && !h.phases.includes("saved") && !h.flow.view().saving);
+  }
+  {
+    const h = harness({ save: () => ({ ok: false, error: "Something went wrong." }) });
+    await toForm(h);
+    await h.flow.save(PW);
+    t("refused save with a healthy re-check: form stays (unchanged behaviour)", h.flow.view().phase === "form");
+  }
+  await tick();
+  t("no unhandled promise rejections anywhere in the flow tests", rejections.length === 0, String(rejections[0]));
+
   console.log("\nproof helpers");
   t("proofFromRecoverySession: only an amr `recovery` session, dated from its use", proofFromRecoverySession(jwt({ sub: "u", session_id: "x", amr: [{ method: "recovery", timestamp: s - 30 }] }))?.verifiedAtMs === (s - 30) * 1000 && proofFromRecoverySession(otpSession()) === null && proofFromRecoverySession(null) === null);
   const pr = proofFromVerifiedSession(otpSession(), "user-a", now);
@@ -728,6 +863,9 @@ const otpSession = (sub = "user-a", sid = "sess-1") => jwt({ sub, session_id: si
   t("no analytics, console, storage or direct hash/search reads in the page or the flow", ![rp, fl].some((src) => /analytics|track\(|console\.|localStorage|sessionStorage|document\.cookie|location\.(search|hash)/.test(src)));
   t("no service role, admin API, custom endpoint or staff path", ![rp, fl].some((src) => /service_role|SERVICE_ROLE|createServiceClient|auth\.admin|fetch\(|is_staff|is_admin/.test(src)));
   t("copy: no 'logged in straight away'; the form says it signs out after saving", !/logged in straight away/i.test(rp) && /Once it's saved, we'll sign you out/.test(rp));
+  t("copy: the saved screen promises only this device's sign-out, never 'everywhere'", !/signed you out everywhere/i.test(rp) && /We've signed you out on this device\./.test(rp));
+  t("copy: 'couldn't check' screen blames the connection, not the link, and offers a fresh link", /We couldn't check your reset/.test(rp) && /phase === "unavailable"[\s\S]*?We couldn't reach our sign-in service[\s\S]*?footer=\{newLink\}/.test(rp));
+  t("copy: an unconfirmed save never says it saved", /couldn't confirm that your new password was saved/.test(SAVE_UNCONFIRMED_COPY));
   t("copy: the save button says what it does", /"Save new password"/.test(rp) && !/Save and continue/.test(rp));
   t("copy: switching account is described as a switch, not a sign-out of the other account", /this browser will switch to the account this link was sent to/.test(rp) && !/signs that account out/.test(rp));
   t("the 2.5-second 'expired' timer is gone; a slow check only gets a note", !/2500|setTimeout\(\(\) => setReady/.test(rp) && /SLOW_MS = 10_000/.test(rp) && /taking longer than usual/.test(rp));
