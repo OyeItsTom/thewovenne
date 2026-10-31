@@ -114,8 +114,18 @@ console.log("\n=== the strapline is \"Chosen piece by piece.\" ===");
 const layout = read("app/layout.tsx");
 check("site title carries the new strapline", layout.includes('const SITE_TITLE = "THE WOVENNE | Chosen piece by piece.";'), true);
 check("footer description leads with it", DEFAULT_CONTENT.footer.brand_description.startsWith("Chosen piece by piece."), true);
+// WP-EMAIL-E2: the order confirmation takes its header (and so the tagline)
+// from the shared layout, so the strapline is checked where it now lives.
+{
+  const f = "lib/emails/orderConfirmation.ts";
+  const src = read(f);
+  check(`${f}: old strapline gone`, /Woven in India|Worn for life/.test(src), false);
+  check(`${f}: renders through the shared layout`, /from "\.\/layout"/.test(src) && /renderEmail\(/.test(src), true);
+  const shared = read("lib/emails/layout.ts");
+  check("lib/emails/layout.ts: new strapline present, with its full stop", shared.includes(`tagline: "${STRAPLINE}"`), true);
+  check("lib/emails/layout.ts: old strapline gone", /Woven in India|Worn for life/.test(shared), false);
+}
 for (const f of [
-  "lib/emails/orderConfirmation.ts",
   "lib/emails/orderCancelled.ts",
   "lib/emails/marketing.ts",
   "lib/emails/styleRejected.ts",
