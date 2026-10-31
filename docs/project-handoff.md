@@ -1,16 +1,16 @@
 # The Wovenne — project handoff
 
-Last updated: 27 October 2026. This is a starting point for a fresh working
+Last updated: 31 October 2026. This is a starting point for a fresh working
 context, not a transcript. Git history, `supabase/migrations/`, `scripts/*.test.ts`
 and the code are the source of truth. `wovenne_project_status_log.md` is the
 older, longer history and is not current beyond early October.
 
-## Current production state (main + deploy verified 27 Oct 2026; ledger and posture last checked 21 Oct)
+## Current production state (main + deploy verified 31 Oct 2026; ledger and posture last checked 21 Oct)
 
 | | |
 |---|---|
-| `main` | `7e2e798` (PR #213 merge: cross-device password recovery code). Before it: `0d56fdc` (#212, product JSON-LD/og:image w1080) |
-| Production deployment | GitHub deployment `7368470676` (vercel[bot], Production, ref `7e2e798`), Git-triggered from `main`; succeeded 27 Oct 19:35:34 UTC |
+| `main` | `5860f22` (PR #215 merge: email emblem asset only). Before it: `7693cc6` (#214, handoff docs) and `7e2e798` (#213, cross-device password recovery code) |
+| Production deployment | GitHub deployment `7459862239` (vercel[bot], Production, ref `5860f22`), Git-triggered from `main`; succeeded 31 Oct |
 | Migration ledger | 73 rows, latest `0073_style_photo_storage_security.sql` (`public.schema_migrations`) |
 | Security posture | `scripts/security-posture.ts --production` → MATCHES `supabase/security-posture.json` |
 | Background processes | None |
@@ -32,23 +32,55 @@ older, longer history and is not current beyond early October.
 - **Image derivatives and egress reduction** (#200): w1080 derivatives, so the optimizer no longer pulls 3 MB masters. Supabase egress is being watched against the 5 GB quota.
 - **Delete Account wording** corrected (#204).
 - **Style-photo storage security** (#207 and 0073), below.
-- **Cross-device password recovery code** (#213, WP-OPS-01C), below. Deployed but **not yet active in customer emails**.
+- **Cross-device password recovery** (#213, WP-OPS-01C), below. Branded r4 reset email active, with the emblem from #215; core device tests passed (owner-reported).
 
-## Password recovery across devices — WP-OPS-01C (code live, template not changed)
+## Password recovery across devices — WP-OPS-01C (live; core device tests passed, owner-reported 31 Oct)
 
 - **Problem:** the reset link only worked in the browser that asked for it (`@supabase/ssr` forces PKCE; the verifier cookie lives in that browser). Other devices, in-app browsers and link prefetchers saw "That link has expired".
 - **Fix (Option B), PR #213:** commits `4a812bb` + `ab071cd`, merged as `7e2e798` on 27 Oct 2026 19:32 UTC. The reset page also accepts `#token_hash=…&type=recovery` behind a **Continue** button (client `verifyOtp`). Old `?code=` PKCE links still work. Secrets in the URL are redacted from Sentry. Lookup or save failures fail closed.
-- **Verified:** Production deploy above succeeded; `/in/reset-password` returns 200 (noindex) on `www`, apex 308s to `www`, and the live page chunk contains the 01C7 strings.
-- **Tests:** `scripts/password-recovery.test.ts` 200/0, `password-policy` 40/0, `customer-google-auth` 127/0; `tsc` exit 0. The flow is tested with a stand-in auth client. On 24 Oct (WP-OPS-01B) the owner's same-browser resets passed on the old code. **No live end-to-end reset has been completed on the PR #213 code.** The new cross-device path is untested live and the email template is unchanged; owner device tests follow the template change.
-- **Not changed:** Supabase Reset Password template, Resend click tracking, SMTP, DNS, link expiry (1 h) and the 15-minute form window. Merging alone sends no new-format emails.
-- **Remaining, each needs separate owner approval, in order:**
-  1. Turn Resend click tracking off for auth emails.
-  2. Back up the current Supabase Reset Password template.
-  3. Owner approves the exact new template: `https://www.thewovenne.com/in/reset-password#token_hash={{ .TokenHash }}&amp;type=recovery` (hard-coded host, no `{{ .ConfirmationURL }}`).
-  4. Owner changes the template in the dashboard.
-  5. Owner device tests: same browser, a second device, an in-app browser.
-- **Rollback:** revert the template first. Keep this code live for at least 1 h after any new-format link is sent; never revert the code while such links can still be opened.
-- Reports: `reports/email-auth/wp-ops-01c*-2026-10-27/` (gitignored) with LaCie backups.
+- **Verified:** Production deploy `7368470676` succeeded; `/in/reset-password` returns 200 (noindex) on `www`, apex 308s to `www`, and the live page chunk contains the 01C7 strings.
+- **Automated tests (run by us, stand-in auth client, before merge):** `scripts/password-recovery.test.ts` 200/0, `password-policy` 40/0, `customer-google-auth` 127/0; `tsc` exit 0. These do not touch real Supabase or real email.
+
+### Email template r4 (WP-OPS-01C9E–G)
+
+- **Template:** the owner reports the branded **r4** Reset Password template is **activated** in Supabase → Templates → Reset Password (31 Oct). Subject `Reset your password for THE WOVENNE`. We did not read the live dashboard; the approved source is `reports/email-auth/wp-email-design-2026-10-29/proposed-reset-password.html` (SHA-256 `f5dc547f…`, gitignored, LaCie r4 backup).
+- **Recovery link** (the only placeholder, `{{ .TokenHash }}` once; no `{{ .ConfirmationURL }}`): `https://www.thewovenne.com/in/reset-password#token_hash={{ .TokenHash }}&amp;type=recovery`. The token sits in the `#` fragment, so browsers do not send it to Vercel or our request logs; the page sends it only to Supabase `verifyOtp` after **Continue**. Link expiry stays 1 h; the form window stays 15 min.
+- **Emblem:** `https://www.thewovenne.com/email/wovenne-emblem-v1.png` from `public/email/`, added by PR #215 (merge `5860f222be6b09f6b2f47ddcc83c49675901c495`, Production deployment `7459862239`). Verified live 31 Oct: 200, `image/png`, 11,964 bytes, SHA-256 `28abe141a55b720ab37386374452d8149d112113c5398d9afdfef7489014f6c3`, byte-identical to the repo file. Never change or delete it in place: sent emails keep loading it. A new logo goes in as `-v2`.
+- **Unchanged:** SMTP (Supabase → Resend), DNS, Resend click tracking (owner confirmed off before activation).
+
+### Owner live tests — owner-reported, not independently executed
+
+The owner ran these on production with their own account and reported the results on 31 Oct 2026. We did not observe them, and no automated test covers real email or real devices.
+
+| Test | Result |
+|---|---|
+| Same-browser reset (request and open in one browser) | PASS |
+| Mac request → open on iPhone | PASS |
+| Sign in on iPhone with the newly changed password | PASS |
+| iPhone request → open on Mac | PASS |
+
+### Still to test (owner, owner-controlled account, one fresh email each)
+
+- **Reused link:** open an already-used link again. Expected: invalid-link screen, no form.
+- **Expired link:** a link older than 1 hour, or one with a damaged hash. Expected: invalid, no form.
+- **Superseded link:** request two resets, open the older one. Expected: invalid (a new request replaces the old token). Wait out the resend limit first: a rate-limited request sends nothing and leaves the older link valid.
+- **Gmail app in-app browser** (iPhone): request → open from Gmail → Continue → save → sign in.
+- **Already signed in** on that browser, as the same account and as a different account: Continue warns that it signs this browser out; the other account is not shown.
+- **Old password fails** after a reset; the new one works on both devices.
+- **No regressions:** Google sign-in, signup email code, ordinary email + password login, Settings "Change password" email, admin login with MFA.
+- **Rendering:** Gmail, Apple Mail and one Outlook client, plus dark mode and images off.
+- **Logs:** Sentry events show `token_hash` only as `[redacted]`; the Resend log shows the link not rewritten.
+
+Full checklist: `reports/email-auth/wp-ops-01c9a-2026-10-27/REPORT.md` §5 (tests 5–13).
+
+### Rollback
+
+1. Restore the original template first: paste `original-template/ORIGINAL-reset-password-subject.txt` and `ORIGINAL-reset-password-body.html` (in `reports/email-auth/wp-email-design-2026-10-29/`, checksums in `SHA256SUMS`) into Supabase → Templates → Reset Password. New emails go back to the old `{{ .ConfirmationURL }}` link at once.
+2. Keep the PR #213 code live for at least 1 hour after the last new-format email was sent; never revert it while such links can still be opened. A code revert is a separate decision.
+3. Keep `public/email/wovenne-emblem-v1.png` deployed; already-sent emails reference it.
+4. Record the time of the restore and of the last new-format email.
+
+Reports: `reports/email-auth/wp-ops-01c*-2026-10-27/` and `wp-email-design-2026-10-29/` (gitignored) with LaCie backups.
 
 ## Style-photo security — final state
 
@@ -175,12 +207,12 @@ This is one programme. Do not create separate GEO, AEO or LLMO projects.
 - **WP-SEO-02A–C (23 Oct):** product JSON-LD and og:image use the w1080 derivative. Merged as PR #212 (`0d56fdc`).
 - **WP-SEO-02D (24 Oct):** investigated 404 pages. Next 14.2.5 renders a page-level `notFound()` as an empty HTML shell; the 404 status and noindex are correct. This is a framework limit, deferred to a future Next.js 15 upgrade.
 - **WP-OPS-01A (23 Oct):** email authentication audit. **WP-OPS-01B (24 Oct):** owner testing; Supabase sends through Resend SMTP. It found the cross-device reset failure.
-- **WP-OPS-01C (27 Oct):** code merged as PR #213 (`7e2e798`). The new recovery email template is **not active** (see Password recovery across devices).
+- **WP-OPS-01C (27–31 Oct):** code merged as PR #213 (`7e2e798`); emblem PR #215 (`5860f22`); r4 template activated and core device tests passed, owner-reported 31 Oct (see Password recovery across devices).
 
 **Pending, independent of the catalogue:**
 
 - After 30 Oct: the read-only Supabase Data API permissions check (see Standing rule).
-- WP-OPS-01C template activation, owner-gated, in the order listed above.
+- WP-OPS-01C remaining live tests (reused, expired and superseded links, Gmail in-app browser, signed-in states, regressions), owner-run; see "Still to test".
 - WP-OPS-01A DNS findings (root SPF, DMARC reporting), owner-gated.
 
 **Catalogue and SEO, in this order:**
