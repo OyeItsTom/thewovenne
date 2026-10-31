@@ -9,8 +9,8 @@ older, longer history and is not current beyond early October.
 
 | | |
 |---|---|
-| `main` | `5860f22` (PR #215 merge: email emblem asset only). Before it: `7693cc6` (#214, handoff docs) and `7e2e798` (#213, cross-device password recovery code) |
-| Production deployment | GitHub deployment `7459862239` (vercel[bot], Production, ref `5860f22`), Git-triggered from `main`; succeeded 31 Oct |
+| `main` | `7908d86` (PR #217 merge: shared email layout, WP-EMAIL-E1; no email converted yet). Before it: `ca6aa16` (#216, handoff docs), `5860f22` (#215, email emblem asset), `7e2e798` (#213, cross-device password recovery code) |
+| Production deployment | GitHub deployment `7463489341` (vercel[bot], Production, ref `7908d86`), Git-triggered from `main`; succeeded 31 Oct |
 | Migration ledger | 73 rows, latest `0073_style_photo_storage_security.sql` (`public.schema_migrations`) |
 | Security posture | `scripts/security-posture.ts --production` → MATCHES `supabase/security-posture.json` |
 | Background processes | None |
@@ -81,6 +81,17 @@ Full checklist: `reports/email-auth/wp-ops-01c9a-2026-10-27/REPORT.md` §5 (test
 4. Record the time of the restore and of the last new-format email.
 
 Reports: `reports/email-auth/wp-ops-01c*-2026-10-27/` and `wp-email-design-2026-10-29/` (gitignored) with LaCie backups.
+
+## Customer emails — WP-EMAIL (E1 merged 31 Oct 2026)
+
+- **Audit (31 Oct, read-only):** `reports/email-auth/wp-email-brand-audit-2026-10-31/REPORT.md` (gitignored). Inventory of every customer email, findings, work packages E1–E10, owner decisions D1–D9.
+- **E1 merged:** PR #217 (`ae447bb` + `f8e8ec6`, merge `7908d86`), Production deployment `7463489341`. Adds `lib/emails/layout.ts` (shared r4-style shell: emblem, wordmark, 560px tables, Ink button, transactional / security / marketing footers), `scripts/email-layout.test.ts` (150 passed) and `scripts/email-layout-preview.ts` (writes samples outside the repo only). **Nothing imports it yet: every email still sends exactly as before.**
+- **Rules for adopters:** plain strings are always escaped; trusted markup only via the module's `html` tag. `safeHref` accepts only `https://www.thewovenne.com` / `https://thewovenne.com`, paths on it, or one `mailto:` at `@thewovenne.com`. Pass **paths**, not `NEXT_PUBLIC_SITE_URL` URLs (localhost is refused), so emails sent from dev link to production. Courier tracking links are refused until an allowlist is approved.
+- **Footer wording:** transactional "Need help? Our contact details are on our website." (no claim that replies are read: monitoring of `hello@` / `orders@` is unverified); marketing "Essential emails about your orders are separate from marketing preferences."
+- **Known gaps (from the audit):** no shipping email exists, yet the order confirmation and checkout both promise one; invoice emails (manual + resend) are unbranded and do not escape the customer name; current confirmation and cancellation copy says replies "reach us directly".
+- **Sender identity (owner-verified 31 Oct):** Supabase → Authentication → SMTP Settings shows custom SMTP on, sender email `orders@thewovenne.com`, sender name `The Wovenne`. A real Gmail reset email showed From `The Wovenne <orders@thewovenne.com>`, mailed by `send.thewovenne.com`, signed by `thewovenne.com`, and still a green "O" avatar. So the display name is set and the audit's sender-name theory is wrong; renaming it to `THE WOVENNE` is not a fix.
+- **Inbox avatar ("O"/"T"):** a separate sender-image branding issue, not a display-name setting. Needs its own assessment: BIMI, DMARC enforcement, the certificate Gmail requires (VMC or CMC), and whether a Google account exists for `orders@` whose name or photo Gmail shows. None of this is configured or verified; BIMI's requirements are not met today (no `default._bimi` record and DMARC `p=none`, per the WP-OPS-01A DNS check of 23 Oct; not re-checked since).
+- **Next:** E9 is reframed as a read-only sender-avatar assessment (BIMI / DMARC / certificate / Google account for `orders@`), owner-gated, no DNS or dashboard change without approval. E2 order confirmation waits on owner decisions D1 (shipping promise), D2 (invoice number / order link), D6 (greeting and closing). E3 shipping email needs a migration and a server route. Real mail-client testing is due with E2.
 
 ## Style-photo security — final state
 
@@ -208,12 +219,14 @@ This is one programme. Do not create separate GEO, AEO or LLMO projects.
 - **WP-SEO-02D (24 Oct):** investigated 404 pages. Next 14.2.5 renders a page-level `notFound()` as an empty HTML shell; the 404 status and noindex are correct. This is a framework limit, deferred to a future Next.js 15 upgrade.
 - **WP-OPS-01A (23 Oct):** email authentication audit. **WP-OPS-01B (24 Oct):** owner testing; Supabase sends through Resend SMTP. It found the cross-device reset failure.
 - **WP-OPS-01C (27–31 Oct):** code merged as PR #213 (`7e2e798`); emblem PR #215 (`5860f22`); r4 template activated and core device tests passed, owner-reported 31 Oct (see Password recovery across devices).
+- **WP-EMAIL audit + E1 (31 Oct):** shared email layout merged as PR #217 (`7908d86`), not yet used by any email (see Customer emails).
 
 **Pending, independent of the catalogue:**
 
 - After 30 Oct: the read-only Supabase Data API permissions check (see Standing rule).
 - WP-OPS-01C remaining live tests (reused, expired and superseded links, Gmail in-app browser, signed-in states, regressions), owner-run; see "Still to test".
 - WP-OPS-01A DNS findings (root SPF, DMARC reporting), owner-gated.
+- WP-EMAIL E2–E10 (see Customer emails): owner decisions D1–D9 first.
 
 **Catalogue and SEO, in this order:**
 
