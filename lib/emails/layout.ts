@@ -274,7 +274,7 @@ export function closing(): SafeHtml {
 /**
  * Three kinds, deliberately not interchangeable:
  *
- * - transactional: about an order the customer placed. Reply line, site link.
+ * - transactional: about an order the customer placed. Help line, site link.
  *   Never any marketing or unsubscribe wording, because these must keep
  *   arriving whatever the marketing preference.
  * - security: the r4 footer, for anything about the account itself.
@@ -294,9 +294,18 @@ export type EmailFooter =
     };
 
 const SITE_LINK_LABEL = "thewovenne.com";
-const REPLY_LINE = "Questions? Just reply to this email — it reaches us directly.";
+/**
+ * Points to the website rather than promising that replies are read: whether
+ * the reply-to mailbox is monitored is not verified, and the contact details
+ * on the site are the ones the owner maintains (Admin → Footer).
+ */
+const SUPPORT_LINE = "Need help? Our contact details are on our website.";
+/**
+ * Says the two are separate without promising which order emails exist: a
+ * shipping email, for one, is not built yet.
+ */
 const MARKETING_SEPARATE =
-  "Order and delivery emails are separate and will keep arriving.";
+  "Essential emails about your orders are separate from marketing preferences.";
 
 function footerRow(inner: SafeHtml): SafeHtml {
   return row(
@@ -332,7 +341,7 @@ export function footer(f: EmailFooter): SafeHtml {
   switch (f.kind) {
     case "transactional":
       return footerRow(
-        html`${f.note ? html`${f.note}<br><br>` : ""}${REPLY_LINE}<br><br>${brandInk()}<br>${site}`
+        html`${f.note ? html`${f.note}<br><br>` : ""}${SUPPORT_LINE}<br><br>${brandInk()}<br>${site}`
       );
     case "security":
       return footerRow(
@@ -353,7 +362,7 @@ export function footerText(f: EmailFooter): string {
   const site = `${EMAIL_ORIGIN}/in`;
   switch (f.kind) {
     case "transactional":
-      return [...(f.note ? [f.note, ""] : []), REPLY_LINE, "", BRAND.name, site].join("\n");
+      return [...(f.note ? [f.note, ""] : []), SUPPORT_LINE, "", BRAND.name, site].join("\n");
     case "security":
       return [`This is an account security email from ${BRAND.name}.`, site].join("\n");
     case "marketing":

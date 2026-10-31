@@ -272,14 +272,16 @@ const sf = String(footer({ kind: "security" }));
 const mf = String(footer(marketing));
 const mfu = String(footer({ ...marketing, unsubscribeHref: "/in/account/settings#marketing" }));
 const noMarketing = (s: string) => !/unsubscrib|preferences|marketing|receiving this because/i.test(s);
-t("transactional: reply line", tf.includes("reply to this email"));
+t("transactional: help line points to the website", tf.includes("Need help? Our contact details are on our website."));
+t("transactional: no claim that replies are read", !/reply to this email|reaches us directly/i.test(tf));
 t("transactional: no marketing/unsubscribe wording", noMarketing(tf));
 t("transactional: optional note escaped", String(footer({ kind: "transactional", note: "<i>n</i>" })).includes("&lt;i&gt;n&lt;/i&gt;"));
 t("security: r4 wording", sf.includes("This is an account security email from"));
 t("security: no marketing wording", noMarketing(sf));
 t("marketing: reason shown", mf.includes("You&#39;re receiving this because you asked for updates"));
 t("marketing: preferences link", mf.includes(`href="${EMAIL_ORIGIN}/in/account/settings"`) && mf.includes(">your preferences</a>"));
-t("marketing: says order emails are separate", mf.includes("Order and delivery emails are separate"));
+t("marketing: says essential order emails are separate", mf.includes("Essential emails about your orders are separate from marketing preferences."));
+t("marketing: no claim that delivery emails are sent", !/delivery emails|keep arriving/i.test(mf));
 t("marketing: no unsubscribe link unless given", !/unsubscribe<\/a>/.test(mf));
 t("marketing: unsubscribe link when given", mfu.includes(`href="${EMAIL_ORIGIN}/in/account/settings#marketing"`) && mfu.includes(">unsubscribe</a>"));
 t("all footers ≥12px, divider", [tf, sf, mf].every((f) => f.includes("font-size:12px") && f.includes("border-top:1px solid #EEEEEE")));
@@ -300,8 +302,8 @@ t("transactional footer ignores marketing-only fields", noMarketing(String(foote
 
 const tt = footerText(transactional);
 const mt = footerText({ ...marketing, unsubscribeHref: "/in/u" });
-t("text footer transactional: no marketing wording", noMarketing(tt) && tt.includes("reply to this email"));
-t("text footer marketing: reason, absolute links, separate line", mt.includes("receiving this because") && mt.includes(`${EMAIL_ORIGIN}/in/account/settings`) && mt.includes(`Unsubscribe: ${EMAIL_ORIGIN}/in/u`) && mt.includes("Order and delivery emails are separate"));
+t("text footer transactional: no marketing wording, help line", noMarketing(tt) && tt.includes("Need help? Our contact details are on our website.") && !/reply to this email|reaches us directly/i.test(tt));
+t("text footer marketing: reason, absolute links, separate line", mt.includes("receiving this because") && mt.includes(`${EMAIL_ORIGIN}/in/account/settings`) && mt.includes(`Unsubscribe: ${EMAIL_ORIGIN}/in/u`) && mt.includes("Essential emails about your orders are separate from marketing preferences.") && !/delivery emails|keep arriving/i.test(mt));
 t("text footer security", footerText({ kind: "security" }).startsWith("This is an account security email from THE WOVENNE."));
 
 // ── 6. No tracking, single host ─────────────────────────────────────────────
