@@ -107,15 +107,27 @@ export default function InvoiceManager() {
 
   async function resend(row: InvoiceRow) {
     if (!row.customer_email) return;
+    // The server decides (lib/invoiceEmail resendDecision); this only tells the
+    // admin beforehand what the email will say, from the credit notes loaded.
+    const credits = (notes.get(row.id) ?? []).map((c) => c.credit_note_number);
+    const cancelled = row.status === "cancelled";
+    const what = cancelled
+      ? credits.length
+        ? ` The order is cancelled: the email will say so and name ${credits.join(", ")}.`
+        : ""
+      : credits.length
+        ? ` The email will name ${credits.join(", ")}.`
+        : "";
     if (
       !window.confirm(
-        `Email invoice ${row.invoice_number} to ${row.customer_email}?`
+        `Email a copy of invoice ${row.invoice_number} to ${row.customer_email}?${what}`
       )
     ) {
       return;
     }
     setSending(row.id);
     setSent(null);
+    setError(null);
     try {
       const res = await fetch("/api/admin/invoice/resend", {
         method: "POST",
@@ -244,6 +256,11 @@ export default function InvoiceManager() {
                         {r.customer_email && (
                           <button
                             onClick={() => resend(r)}
+                            title={
+                              sent === r.id
+                                ? "Accepted by the email provider. That does not confirm it reached the inbox."
+                                : undefined
+                            }
                             disabled={sending === r.id}
                             className="inline-flex items-center gap-1 text-xs uppercase tracking-wider text-ink/55 hover:text-terracotta disabled:opacity-40"
                           >
@@ -252,7 +269,7 @@ export default function InvoiceManager() {
                             ) : (
                               <Send className="h-3.5 w-3.5" />
                             )}
-                            {sent === r.id ? "Sent" : "Resend"}
+                            {sent === r.id ? "Accepted" : "Resend"}
                           </button>
                         )}
                       </div>
