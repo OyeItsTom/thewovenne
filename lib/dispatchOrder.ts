@@ -13,17 +13,22 @@ import type { AttemptOutcome } from "./orderConfirmationDelivery";
  *     confirms THAT EXACT normalised number, so a confirmation cannot carry
  *     over to a number that was edited afterwards. The database checks it a
  *     third time and refuses an unusual number unless told it was confirmed.
- *   - Everything else — admin, two factors, paid, status, address, one
- *     dispatch, one email intent — is dispatch_order() in the database,
+ *   - The handover: the request must carry handedOver === true, the admin's
+ *     acknowledgement that the parcel has been handed to India Post. It is a
+ *     recorded statement, not proof. Checked here and again in the database.
+ *   - Everything else — admin, two factors, paid, not flagged for review,
+ *     status, address, one dispatch, one email intent — is dispatch_order(),
  *     called with the admin's OWN session, never the service key.
  *
  * THE EMAIL. dispatch_order() records the intent in the same transaction as
  * the dispatch. This then makes one bounded attempt through R1 and reports
  * what Resend actually said. If that attempt fails, times out, or this
- * process dies before it starts, the dispatch stands and the row stays due:
- * R1's recovery worker sends it, and so does a repeat of this request (it
- * returns already_dispatched and attempts the same row — the key is fixed, so
- * it cannot arrive twice).
+ * process dies before it starts, the dispatch stands and the row stays due
+ * for R1's recovery worker (when it runs — no schedule is active yet) or a
+ * repeat of this request, which returns already_dispatched and attempts the
+ * same row. Retries reuse the row's fixed idempotency key; Resend honours a
+ * key for 24 hours, and R1 stops retrying a possibly-accepted row inside that
+ * window, so a retry should not produce a second copy.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -44,6 +49,8 @@ export interface DispatchRequestBody {
   consignment?: unknown;
   /** The normalised number the admin was shown the warning for and confirmed. */
   confirmUnusual?: unknown;
+  /** Must be exactly true: the admin says the parcel has been handed to India Post. */
+  handedOver?: unknown;
 }
 
 export type DispatchReply =
@@ -65,6 +72,7 @@ export type DispatchReply =
         ok: false;
         error: string;
         needsConfirmation?: true;
+        handoverRequired?: true;
         consignment?: string;
         note?: string | null;
       };
@@ -85,6 +93,9 @@ export async function performDispatch(req: DispatchRequestBody, deps: DispatchDe
   if (typeof req.orderId !== "string" || !UUID.test(req.orderId)) return fail(400, "No order given.");
   const orderId = req.orderId;
 
+  if (req.handedOver !== true) {
+    return fail(400, "Confirm the parcel has been handed to India Post before dispatching.", { handoverRequired: true });
+  }
   if (typeof req.consignment !== "string") return fail(400, REFUSED_NUMBER.empty);
   const number = checkConsignment(req.consignment);
   if (!number.ok) return fail(400, REFUSED_NUMBER[number.reason]);
@@ -102,10 +113,14 @@ export async function performDispatch(req: DispatchRequestBody, deps: DispatchDe
     p_order_id: orderId,
     p_courier: INDIA_POST_COURIER_CODE,
     p_consignment: number.value,
+    p_handed_over: true,
     p_confirm_unusual: confirmed,
   });
   if (error) {
     // dispatch_order's refusals are written to be read; passed through.
+    if (error.hint === "handover_required") {
+      return fail(400, error.message, { handoverRequired: true });
+    }
     if (error.hint === "needs_confirmation") {
       return fail(409, error.message, { needsConfirmation: true, consignment: number.value, note: number.note });
     }

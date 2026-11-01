@@ -13,7 +13,7 @@ export type ShipmentEmailState =
   | "queued"
   /** Resend accepted it. Not the same as delivered. */
   | "accepted"
-  /** Not accepted yet; it will be tried again automatically. */
+  /** Not accepted yet; another attempt is needed (see the detail for how). */
   | "retry"
   /** Stopped trying. Someone needs to look. */
   | "needs_attention"
@@ -61,6 +61,9 @@ function reason(code: string | null): string | null {
   return REASON[code] ?? code;
 }
 
+const RETRY_HOW =
+  "It is tried again when the recovery worker runs or the dispatch is repeated; no automatic schedule is active yet.";
+
 export function shipmentEmailView(
   row: ShipmentEmailRow | null,
   context: { inPerson?: boolean } = {}
@@ -86,12 +89,16 @@ export function shipmentEmailView(
         detail: "Resend took the message. Whether it reached the inbox is not something we can see.",
       };
     case "retryable":
-      return { state: "retry", label: LABEL.retry, detail: reason(row.last_error_code) ?? "Resend did not accept it; it will be tried again." };
+      return {
+        state: "retry",
+        label: LABEL.retry,
+        detail: `Resend did not accept it${row.last_error_code ? ` (${reason(row.last_error_code)})` : ""}. ${RETRY_HOW}`,
+      };
     case "uncertain":
       return {
         state: "retry",
         label: LABEL.retry,
-        detail: "No clear answer from Resend (it may have been accepted). The retry uses the same key, so it cannot arrive twice.",
+        detail: `No clear answer from Resend — it may already have been accepted. ${RETRY_HOW} A retry reuses the same idempotency key, which Resend honours for 24 hours, so within that window it should not send a second copy.`,
       };
     case "failed":
       if (row.last_error_code === "no_recipient") {

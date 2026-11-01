@@ -15,9 +15,11 @@ import type { ShipmentEmailView } from "@/lib/shipmentEmailState";
  *
  * Nothing here is the authority. The number is checked as it is typed so the
  * admin sees a problem early; the route checks it again, and dispatch_order()
- * in the database decides paid, status, address and the one email. The only
- * thing this screen adds is the admin's confirmation of an unusual number —
- * sent as that exact number, so it cannot carry over to an edited one.
+ * in the database decides paid, flagged, status, address and the one email.
+ * What this screen adds are two statements by the admin, both sent with the
+ * request and both required by the route and the database: that the parcel
+ * has been handed over (an acknowledgement — nothing here can verify it), and,
+ * for an unusual number, that THAT EXACT number was checked.
  */
 
 export interface DispatchDone {
@@ -61,7 +63,8 @@ export default function DispatchPanel({
   const touched = raw.trim().length > 0;
   const unusual = check.ok && check.needsConfirmation;
   const unusualConfirmed = unusual && confirmedFor === check.value;
-  const ready = check.ok && handedOver && (!unusual || unusualConfirmed) && paid && addressOk;
+  const flagged = order.needs_review;
+  const ready = check.ok && handedOver && (!unusual || unusualConfirmed) && paid && addressOk && !flagged;
 
   if (!paid) {
     return (
@@ -84,6 +87,18 @@ export default function DispatchPanel({
     );
   }
 
+  if (flagged) {
+    return (
+      <Shell>
+        <p className="mt-2 flex items-start gap-2 text-sm text-terracotta-dark">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          This order is flagged for review, so it cannot be dispatched. Resolve the
+          problem, then use &ldquo;Clear the review flag&rdquo; below.
+        </p>
+      </Shell>
+    );
+  }
+
   async function submit() {
     if (!check.ok) return;
     setSending(true);
@@ -96,6 +111,7 @@ export default function DispatchPanel({
           orderId: order.id,
           consignment: check.value,
           confirmUnusual: unusualConfirmed ? check.value : null,
+          handedOver: handedOver === true,
         }),
       });
       const data = await res.json().catch(() => null);
@@ -191,12 +207,6 @@ export default function DispatchPanel({
         Do this when the parcel has been handed over at the post office — the customer
         is told it is on its way.
       </p>
-      {order.needs_review && (
-        <p className="mt-2 flex items-start gap-2 text-xs text-terracotta-dark">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          This order is flagged for review. Resolve that before sending it.
-        </p>
-      )}
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <div className="text-sm">
           <span className="text-xs font-medium text-ink/60">Shipping partner</span>

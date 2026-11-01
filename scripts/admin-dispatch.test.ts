@@ -82,8 +82,8 @@ async function main() {
   });
   const ok = { data: { outcome: "dispatched", delivery_id: "d1", email: "queued" } };
   {
-    const r = await performDispatch({ orderId: ID, consignment: sp("12345678") }, deps(ok));
-    check("valid: 200, accepted, courier code + normalised number sent", [r.status, r.body.ok && r.body.email.state, calls.at(-1)], [200, "accepted", { p_order_id: ID, p_courier: "india_post_speed_post", p_consignment: sp("12345678"), p_confirm_unusual: false }]);
+    const r = await performDispatch({ handedOver: true, orderId: ID, consignment: sp("12345678") }, deps(ok));
+    check("valid: 200, accepted, courier code + normalised number + handover sent", [r.status, r.body.ok && r.body.email.state, calls.at(-1)], [200, "accepted", { p_order_id: ID, p_courier: "india_post_speed_post", p_consignment: sp("12345678"), p_handed_over: true, p_confirm_unusual: false }]);
   }
   const n0 = calls.length;
   for (const [body, label] of [
@@ -96,11 +96,15 @@ async function main() {
   ] as const) {
     check(`refused before the database: ${label}`, (await performDispatch(body as never, deps(ok))).status, 400);
   }
+  for (const v of [undefined, false, null, "true", 1, "yes", {}]) {
+    const r = await performDispatch({ handedOver: v, orderId: ID, consignment: sp("12345678") } as never, deps(ok));
+    check(`handover not exactly true (${JSON.stringify(v) ?? "missing"}): 400 handoverRequired`, [r.status, !r.body.ok && r.body.handoverRequired], [400, true]);
+  }
   check("…none reached the database", calls.length, n0);
   {
-    const r = await performDispatch({ orderId: ID, consignment: "ABC123" }, deps(ok));
+    const r = await performDispatch({ handedOver: true, orderId: ID, consignment: "ABC123" }, deps(ok));
     check("unusual without confirmation: 409, needsConfirmation, normalised number, a note — database not called", [r.status, !r.body.ok && r.body.needsConfirmation, !r.body.ok && r.body.consignment, !r.body.ok && !!r.body.note, calls.length], [409, true, "ABC123", true, n0]);
-    const r2 = await performDispatch({ orderId: ID, consignment: "abc-123", confirmUnusual: "ABC123" }, deps(ok));
+    const r2 = await performDispatch({ handedOver: true, orderId: ID, consignment: "abc-123", confirmUnusual: "ABC123" }, deps(ok));
     check("confirmed for the normalised number: dispatched, told to the database", [r2.status, calls.at(-1)?.p_confirm_unusual], [200, true]);
   }
   const mapped: [string, { code?: string; message: string; hint?: string }, number][] = [
@@ -109,31 +113,33 @@ async function main() {
     ["state refusal", { code: "55000", message: "Only a paid order can be dispatched." }, 409],
     ["bad input", { code: "22023", message: "Only India Post Speed Post is supported." }, 409],
     ["database asks for confirmation", { code: "22023", message: "confirm it", hint: "needs_confirmation" }, 409],
+    ["database requires the handover", { code: "22023", message: "Confirm the parcel", hint: "handover_required" }, 400],
+    ["flagged for review", { code: "55000", message: "This order is flagged for review; clear the flag before dispatching it." }, 409],
     ["function missing (0075 not applied yet, PostgREST)", { code: "PGRST202", message: "Could not find the function" }, 503],
     ["function missing (0075 not applied yet, Postgres)", { code: "42883", message: "function does not exist" }, 503],
     ["anything else", { code: "08006", message: "connection lost" }, 500],
   ];
   for (const [label, error, status] of mapped) {
-    const r = await performDispatch({ orderId: ID, consignment: sp("12345678") }, deps({ error }));
+    const r = await performDispatch({ handedOver: true, orderId: ID, consignment: sp("12345678") }, deps({ error }));
     check(`database ${label} → ${status}`, r.status, status);
   }
   {
-    const r = await performDispatch({ orderId: ID, consignment: sp("12345678") }, deps({ error: { code: "08006", message: "secret internals" } }));
+    const r = await performDispatch({ handedOver: true, orderId: ID, consignment: sp("12345678") }, deps({ error: { code: "08006", message: "secret internals" } }));
     check("an unexpected database error is not echoed to the browser", !r.body.ok && /secret internals/.test(r.body.error), false);
-    const odd = await performDispatch({ orderId: ID, consignment: sp("12345678") }, deps({ data: { outcome: "weird" } }));
+    const odd = await performDispatch({ handedOver: true, orderId: ID, consignment: sp("12345678") }, deps({ data: { outcome: "weird" } }));
     check("an unexpected reply shape → 500", odd.status, 500);
   }
   {
     let attempted = 0;
-    const r = await performDispatch({ orderId: ID, consignment: sp("12345678") }, deps(ok, { attempt: async () => { attempted++; throw new Error("boom"); } }));
+    const r = await performDispatch({ handedOver: true, orderId: ID, consignment: sp("12345678") }, deps(ok, { attempt: async () => { attempted++; throw new Error("boom"); } }));
     check("the attempt throwing never fails the dispatch reply", [r.status, r.body.ok && r.body.attempt, attempted], [200, "error", 1]);
-    const r2 = await performDispatch({ orderId: ID, consignment: sp("12345678") }, deps(ok, { readEmail: async () => { throw new Error("db down"); } }));
+    const r2 = await performDispatch({ handedOver: true, orderId: ID, consignment: sp("12345678") }, deps(ok, { readEmail: async () => { throw new Error("db down"); } }));
     check("status unreadable → still 200, shown as recorded (refresh)", [r2.status, r2.body.ok && r2.body.email.state], [200, "queued"]);
     let a3 = 0;
-    const r3 = await performDispatch({ orderId: ID, consignment: sp("12345678") }, deps({ data: { outcome: "dispatched", delivery_id: null, email: "in_person" } }, { attempt: async () => { a3++; return "accepted"; } }));
+    const r3 = await performDispatch({ handedOver: true, orderId: ID, consignment: sp("12345678") }, deps({ data: { outcome: "dispatched", delivery_id: null, email: "in_person" } }, { attempt: async () => { a3++; return "accepted"; } }));
     check("no delivery row (in person): no attempt, state none", [a3, r3.body.ok && r3.body.email.state], [0, "none"]);
     let a4 = 0;
-    const r4 = await performDispatch({ orderId: ID, consignment: sp("12345678") }, deps({ data: { outcome: "already_dispatched", delivery_id: "d1" } }, { attempt: async () => { a4++; return "not_due"; } }));
+    const r4 = await performDispatch({ handedOver: true, orderId: ID, consignment: sp("12345678") }, deps({ data: { outcome: "already_dispatched", delivery_id: "d1" } }, { attempt: async () => { a4++; return "not_due"; } }));
     check("already dispatched: the same row is attempted (sends only if still due)", [r4.body.ok && r4.body.outcome, a4], ["already_dispatched", 1]);
   }
 
@@ -156,8 +162,11 @@ async function main() {
     const v = shipmentEmailView(r);
     check(`${r?.status ?? "no row"} → ${state}`, v.state, state);
     check(`${r?.status ?? "no row"}: never says "delivered"`, /\bdelivered\b/i.test(`${v.label} ${v.detail ?? ""}`), false);
+    check(`${r?.status ?? "no row"}: no promise of automatic retries or absolute no-duplicate claims`, /will be tried again|automatically retried|cannot arrive twice|never (be )?sent twice/i.test(`${v.label} ${v.detail ?? ""}`), false);
   }
   check("accepted says Resend accepted it, and that inbox delivery is unknown", [shipmentEmailView(row("accepted")).label, /not something we can see/.test(shipmentEmailView(row("accepted")).detail ?? "")], ["Shipping email accepted by Resend", true]);
+  check("retry wording says what actually triggers a retry", /recovery worker runs or the dispatch is repeated; no automatic schedule is active yet/.test(shipmentEmailView(row("retryable")).detail ?? ""), true);
+  check("uncertain wording bounds idempotency by Resend's 24-hour window", /honours for 24 hours/.test(shipmentEmailView(row("uncertain", { possibly_accepted: true })).detail ?? "") && /should not send a second copy/.test(shipmentEmailView(row("uncertain")).detail ?? ""), true);
   check("cancelled before sending is named", /cancelled/.test(shipmentEmailView(row("failed", { last_error_code: "order_cancelled" })).detail ?? ""), true);
   check("expired after a possible acceptance says it may have arrived", /may have reached/.test(shipmentEmailView(row("expired", { possibly_accepted: true })).detail ?? ""), true);
   check("in person, no row: says so", /In-person/.test(shipmentEmailView(null, { inPerson: true }).detail ?? ""), true);
@@ -174,7 +183,8 @@ async function main() {
   check("no service key on the screen", /createServiceClient|SERVICE_ROLE/.test(both), false);
   check("dispatch goes through the route, POST, with the exact confirmed number", /fetch\("\/api\/admin\/orders\/dispatch"/.test(panel) && /method: "POST"/.test(panel) && /confirmUnusual: unusualConfirmed \? check\.value : null/.test(panel), true);
   check("the confirmation is bound to the number it was given for", /unusual && confirmedFor === check\.value/.test(panel), true);
-  check("handover is confirmed explicitly every time", /The parcel has been handed to India Post\./.test(panel) && /ready = check\.ok && handedOver/.test(panel), true);
+  check("handover is confirmed explicitly every time, and sent with the request", /The parcel has been handed to India Post\./.test(panel) && /ready = check\.ok && handedOver/.test(panel) && /handedOver: handedOver === true/.test(panel), true);
+  check("flagged orders cannot be made ready", /&& !flagged;/.test(panel), true);
   check("the old Shiprocket wording is gone", /Shiprocket/.test(manager), false);
   check("unrelated controls kept: cancel route, unpaid cancel, review flag, cost & note", [
     /\/api\/admin\/orders\/cancel/.test(manager),
@@ -199,7 +209,8 @@ async function main() {
   const noAddr = { ...base, shipping_address: null };
   check("no address: refused with the reason", [hasCompleteAddress(noAddr), /no complete delivery address/.test(html(noAddr))], [false, true]);
   check("blank city counts as incomplete", hasCompleteAddress({ ...base, shipping_address: { ...base.shipping_address!, city: "  " } }), false);
-  check("flagged for review: warned", /flagged for review/.test(html({ ...base, needs_review: true })), true);
+  const flaggedHtml = html({ ...base, needs_review: true });
+  check("flagged for review: dispatch disabled (no number input), told to clear the flag", [/flagged for review, so it cannot be dispatched/.test(flaggedHtml), /Consignment number/.test(flaggedHtml), /Clear the review flag/.test(flaggedHtml)], [true, false, true]);
   const record = renderToStaticMarkup(createElement(DispatchRecord, {
     order: { ...base, status: "shipped", courier_name: "India Post — Speed Post", awb_number: sp("12345678"), shipped_at: "2026-11-01T11:00:00Z" },
     email: shipmentEmailView(row("accepted")),

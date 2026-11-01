@@ -140,8 +140,8 @@ async function main() {
           o.status ?? "placed",
         ]
       )).id as string;
-    const dispatch = (c: Client, id: string, consignment: string, courier = COURIER, confirm = false) =>
-      c.query("select public.dispatch_order($1, $2, $3, $4) r", [id, courier, consignment, confirm]).then((x) => x.rows[0].r as { outcome: string; delivery_id: string | null; emailed?: boolean; email?: string });
+    const dispatch = (c: Client, id: string, consignment: string, courier = COURIER, confirm = false, handedOver: boolean | null = true) =>
+      c.query("select public.dispatch_order($1, $2, $3, $4, $5) r", [id, courier, consignment, handedOver, confirm]).then((x) => x.rows[0].r as { outcome: string; delivery_id: string | null; emailed?: boolean; email?: string });
     const ord = (id: string) => one("select status, shipped_at, courier_name, awb_number, payment_status from orders where id = $1", [id]);
     const rows = async (id: string) => (await root.query("select * from order_email_deliveries where order_id = $1 and kind = 'shipment_notification'", [id])).rows;
 
@@ -237,6 +237,55 @@ async function main() {
         check(`database and app agree on which numbers are Speed Post (${samples.length} samples)`, disagree, []);
       }
       check("missing order", await failureCode(() => dispatch(admin, "00000000-0000-4000-8000-000000000000", sp("20000009"))), "P0002");
+
+      // Handover acknowledgement: exactly true, or nothing happens.
+      {
+        const h = await order({ status: "confirmed" });
+        for (const [v, label] of [[false, "false"], [null, "null"]] as const) {
+          check(`handed_over ${label}: refused, untouched, no row`, [/handed to India Post/.test(await failure(() => dispatch(admin, h, sp("21000001"), COURIER, false, v))), (await ord(h)).status, (await rows(h)).length], [true, "confirmed", 0]);
+        }
+        check("handed_over omitted (named call, as PostgREST sends): no such function", /does not exist/.test(await failure(() => admin.query("select public.dispatch_order(p_order_id => $1, p_courier => $2, p_consignment => $3)", [h, COURIER, sp("21000001")]))), true);
+        check("…even with confirm_unusual true, a missing handover is still refused", /handed to India Post/.test(await failure(() => dispatch(admin, h, "ABC123", COURIER, true, false))), true);
+        check("handed_over true: dispatched", (await dispatch(admin, h, sp("21000001"))).outcome, "dispatched");
+      }
+
+      // Flagged for review: refused until cleared through the existing control.
+      {
+        const f = await order({ status: "confirmed" });
+        await root.query("update orders set needs_review = true where id = $1", [f]);
+        check("flagged order: refused, untouched, no row", [/flagged for review/.test(await failure(() => dispatch(admin, f, sp("22000002")))), (await ord(f)).status, (await rows(f)).length], [true, "confirmed", 0]);
+        check("…refused even with an unusual number confirmed", /flagged for review/.test(await failure(() => dispatch(admin, f, "ABC123", COURIER, true))), true);
+        check("the admin clears the flag with the existing plain update (allowed by the guard)", (await admin.query("update orders set needs_review = false where id = $1", [f])).rowCount, 1);
+        check("unflagged: dispatched normally", (await dispatch(admin, f, sp("22000002"))).outcome, "dispatched");
+        check("other uses of the flag are untouched: an admin can still set it on a shipped order", (await admin.query("update orders set needs_review = true where id = $1", [f])).rowCount, 1);
+        check("…and a repeat dispatch of the flagged shipped order is still just an answer", (await dispatch(admin, f, sp("22000002"))).outcome, "already_dispatched");
+
+        // Concurrency: 8 tabs dispatching a flagged order.
+        const fr = await order({ status: "confirmed" });
+        await root.query("update orders set needs_review = true where id = $1", [fr]);
+        const ftabs = await Promise.all(Array.from({ length: 8 }, () => connect()));
+        for (const tab of ftabs) await asAdmin(tab, adminId);
+        const fouts = await Promise.allSettled(ftabs.map((tab) => dispatch(tab, fr, sp("23000003"))));
+        check("8 concurrent dispatches of a flagged order: all refused, nothing written", [fouts.every((x) => x.status === "rejected" && /flagged for review/.test(String((x as PromiseRejectedResult).reason?.message))), (await ord(fr)).status, (await rows(fr)).length], [true, "confirmed", 0]);
+
+        // Race: another admin flags the order while a dispatch waits on the row lock.
+        const fl = await order({ status: "confirmed" });
+        const flagger = ftabs[0];
+        await flagger.query("begin");
+        await flagger.query("update orders set needs_review = true where id = $1", [fl]);
+        const waiting = dispatch(ftabs[1], fl, sp("24000004")).then(() => "dispatched", (e) => String((e as Error).message));
+        await new Promise((r) => setTimeout(r, 300));
+        await flagger.query("commit");
+        check("flag committed while a dispatch waited on the lock: the dispatch sees it and is refused", [/flagged for review/.test(await waiting), (await ord(fl)).status, (await rows(fl)).length], [true, "confirmed", 0]);
+        // And the reverse: dispatch first, flag second — the flag is set after, dispatch stands.
+        const fl2 = await order({ status: "confirmed" });
+        await ftabs[2].query("begin");
+        await ftabs[2].query("select public.dispatch_order($1, $2, $3, true, false)", [fl2, COURIER, sp("25000005")]);
+        const flagLater = ftabs[3].query("update orders set needs_review = true where id = $1", [fl2]).then((x) => x.rowCount);
+        await new Promise((r) => setTimeout(r, 300));
+        await ftabs[2].query("commit");
+        check("dispatch committed first, then a flag: both stand (one row)", [await flagLater, (await ord(fl2)).status, (await rows(fl2)).length], [1, "shipped", 1]);
+      }
 
       const noEmail = await order({ email: null });
       const ne = await dispatch(admin, noEmail, sp("20000010"));
@@ -368,6 +417,8 @@ async function main() {
       const r = await dispatch(admin, o, sp("90000009"));
       const rs = fakeResend();
       const deps = attemptDeps(rs);
+      // The worker takes at most 10 due rows a pass, oldest first; park the other suites' fixtures so this row is reached.
+      await root.query("update order_email_deliveries set next_attempt_at = now() + interval '1 day' where id <> $1 and status in ('pending', 'retryable', 'uncertain')", [r.delivery_id]);
       const report = await runConfirmationRecovery({ supabase: client(svc), configured: () => true, attempt: (id) => attemptOrderConfirmation(id, deps) });
       const d = await one("select status from order_email_deliveries where id = $1", [r.delivery_id]);
       check("recovery worker sends the shipment email once", [report.ok, d.status, rs.calls.filter((c) => c.key === `shipment-notification/${o}/1`).length], [true, "accepted", 1]);
@@ -385,7 +436,7 @@ async function main() {
         rpc: async (fn: string, args: Record<string, unknown>) => {
           if (fn !== "dispatch_order") throw new Error(`unexpected rpc ${fn}`);
           try {
-            const r = await c.query("select public.dispatch_order($1, $2, $3, $4) r", [args.p_order_id, args.p_courier, args.p_consignment, args.p_confirm_unusual]);
+            const r = await c.query("select public.dispatch_order($1, $2, $3, $4, $5) r", [args.p_order_id, args.p_courier, args.p_consignment, args.p_handed_over, args.p_confirm_unusual]);
             return { data: r.rows[0].r, error: null };
           } catch (e) {
             const pe = e as { code?: string; message: string; hint?: string };
@@ -428,14 +479,14 @@ async function main() {
       {
         const o = await order({ status: "confirmed" });
         const rs = resend(200);
-        const r = await performDispatch({ orderId: o, consignment: " ee 1234-5678 5in " }, depsFor(admin, rs));
+        const r = await performDispatch({ handedOver: true, orderId: o, consignment: " ee 1234-5678 5in " }, depsFor(admin, rs));
         check("success: 200, dispatched, normalised number stored", [r.status, r.body.ok && r.body.outcome, r.body.ok && r.body.consignment, (await ord(o)).awb_number], [200, "dispatched", "EE123456785IN", "EE123456785IN"]);
         check("…one attempt, accepted, reported as accepted (never 'delivered')", [rs.calls.length, r.body.ok && r.body.attempt, r.body.ok && r.body.email.state, r.body.ok && /deliver(ed)?\b/i.test(r.body.email.label)], [1, "accepted", "accepted", false]);
         check("…the shipment key, the frozen recipient", [rs.calls[0].key, (rs.calls[0].body.to as string[])[0]], [`shipment-notification/${o}/1`, (await one("select customer_email from orders where id = $1", [o])).customer_email]);
         // Double click after success: the same answer, no second email.
-        const again = await performDispatch({ orderId: o, consignment: "EE123456785IN" }, depsFor(admin, rs));
+        const again = await performDispatch({ handedOver: true, orderId: o, consignment: "EE123456785IN" }, depsFor(admin, rs));
         check("double click: already_dispatched, accepted, still one email, one row", [again.body.ok && again.body.outcome, again.body.ok && again.body.email.state, rs.calls.length, (await rows(o)).length], ["already_dispatched", "accepted", 1, 1]);
-        const other = await performDispatch({ orderId: o, consignment: sp("11112222") }, depsFor(admin, rs));
+        const other = await performDispatch({ handedOver: true, orderId: o, consignment: sp("11112222") }, depsFor(admin, rs));
         check("a different number afterwards: 409, refused, nothing sent", [other.status, (await ord(o)).awb_number, rs.calls.length], [409, "EE123456785IN", 1]);
       }
 
@@ -445,7 +496,7 @@ async function main() {
         const rs = resend(200);
         const tabs = await Promise.all(Array.from({ length: 6 }, () => connect()));
         for (const tab of tabs) await asAdmin(tab, adminId);
-        const outs = await Promise.all(tabs.map((tab) => performDispatch({ orderId: o, consignment: sp("13572468") }, depsFor(tab, rs))));
+        const outs = await Promise.all(tabs.map((tab) => performDispatch({ handedOver: true, orderId: o, consignment: sp("13572468") }, depsFor(tab, rs))));
         check("6 concurrent requests: all 200, one dispatched", [outs.every((x) => x.status === 200), outs.filter((x) => x.body.ok && x.body.outcome === "dispatched").length], [true, 1]);
         check("…one row, exactly one email sent", [(await rows(o)).length, rs.calls.length, (await stateOf(o)).status], [1, 1, "accepted"]);
       }
@@ -459,10 +510,10 @@ async function main() {
         const custId = (await one("insert into auth.users (email) values ('f-cust@example.test') returning id")).id;
         const cust = await connect();
         await asUser(cust, custId, "aal2");
-        const r1 = await performDispatch({ orderId: o, consignment: sp("24681357") }, depsFor(staff, rs));
-        const r2 = await performDispatch({ orderId: o, consignment: sp("24681357") }, depsFor(cust, rs));
+        const r1 = await performDispatch({ handedOver: true, orderId: o, consignment: sp("24681357") }, depsFor(staff, rs));
+        const r2 = await performDispatch({ handedOver: true, orderId: o, consignment: sp("24681357") }, depsFor(cust, rs));
         check("password-only staff and customers: 403, nothing changed or sent", [r1.status, r2.status, (await ord(o)).status, (await rows(o)).length, rs.calls.length], [403, 403, "confirmed", 0, 0]);
-        const svcSession = await performDispatch({ orderId: o, consignment: sp("24681357") }, depsFor(svc, rs));
+        const svcSession = await performDispatch({ handedOver: true, orderId: o, consignment: sp("24681357") }, depsFor(svc, rs));
         check("the service key as the session is refused too (no signed-in admin)", svcSession.status, 403);
       }
 
@@ -471,29 +522,45 @@ async function main() {
         const o = await order({ status: "confirmed" });
         const rs = resend(200);
         for (const [bad, label] of [["", "empty"], ["EE<b>1</b>", "markup"], ["X".repeat(31), "too long"], ["EE12345678 5IN/", "slash"]] as const) {
-          const r = await performDispatch({ orderId: o, consignment: bad }, depsFor(admin, rs));
+          const r = await performDispatch({ handedOver: true, orderId: o, consignment: bad }, depsFor(admin, rs));
           check(`invalid number (${label}): 400 before the database`, [r.status, (await ord(o)).status], [400, "confirmed"]);
         }
-        check("not an order id: 400", (await performDispatch({ orderId: "1; drop table orders", consignment: sp("1") }, depsFor(admin, rs))).status, 400);
-        const unconfirmed = await performDispatch({ orderId: o, consignment: "1234567890" }, depsFor(admin, rs));
+        check("not an order id: 400", (await performDispatch({ handedOver: true, orderId: "1; drop table orders", consignment: sp("1") }, depsFor(admin, rs))).status, 400);
+        const unconfirmed = await performDispatch({ handedOver: true, orderId: o, consignment: "1234567890" }, depsFor(admin, rs));
         check("unusual, unconfirmed: 409 needsConfirmation with the note, nothing changed", [unconfirmed.status, !unconfirmed.body.ok && unconfirmed.body.needsConfirmation, !unconfirmed.body.ok && typeof unconfirmed.body.note, (await ord(o)).status], [409, true, "string", "confirmed"]);
-        const wrongConfirm = await performDispatch({ orderId: o, consignment: "1234567890", confirmUnusual: "1234567891" }, depsFor(admin, rs));
+        const wrongConfirm = await performDispatch({ handedOver: true, orderId: o, consignment: "1234567890", confirmUnusual: "1234567891" }, depsFor(admin, rs));
         check("confirmation for a DIFFERENT number does not carry over: 409", [wrongConfirm.status, (await ord(o)).status], [409, "confirmed"]);
-        const boolConfirm = await performDispatch({ orderId: o, consignment: "1234567890", confirmUnusual: true }, depsFor(admin, rs));
+        const boolConfirm = await performDispatch({ handedOver: true, orderId: o, consignment: "1234567890", confirmUnusual: true }, depsFor(admin, rs));
         check("a bare `true` is not a confirmation: 409", boolConfirm.status, 409);
-        const ok = await performDispatch({ orderId: o, consignment: "12345 67890", confirmUnusual: "1234567890" }, depsFor(admin, rs));
+        const ok = await performDispatch({ handedOver: true, orderId: o, consignment: "12345 67890", confirmUnusual: "1234567890" }, depsFor(admin, rs));
         check("confirmed for that exact (normalised) number: dispatched and emailed", [ok.status, ok.body.ok && ok.body.outcome, (await ord(o)).awb_number, rs.calls.length], [200, "dispatched", "1234567890", 1]);
         // The database is the last word even if the app's check were wrong:
-        const tricked = await performDispatch({ orderId: await order(), consignment: "1234567890" }, {
+        const tricked = await performDispatch({ handedOver: true, orderId: await order(), consignment: "1234567890" }, {
           ...depsFor(admin, rs),
           session: { rpc: (fn, args) => sessionOf(admin).rpc(fn, { ...args, p_confirm_unusual: false }) },
         });
         check("an app that skipped confirmation is still refused by the database (409 needsConfirmation)", [tricked.status, !tricked.body.ok && tricked.body.needsConfirmation], [409, true]);
         const seen: unknown[] = [];
         const spy = { rpc: (fn: string, args: Record<string, unknown>) => { seen.push(args.p_confirm_unusual); return sessionOf(admin).rpc(fn, args); } };
-        await performDispatch({ orderId: await order(), consignment: sp("19283746") }, { ...depsFor(admin, rs), session: spy });
-        await performDispatch({ orderId: await order(), consignment: "ABC123", confirmUnusual: "ABC123" }, { ...depsFor(admin, rs), session: spy });
+        await performDispatch({ handedOver: true, orderId: await order(), consignment: sp("19283746") }, { ...depsFor(admin, rs), session: spy });
+        await performDispatch({ handedOver: true, orderId: await order(), consignment: "ABC123", confirmUnusual: "ABC123" }, { ...depsFor(admin, rs), session: spy });
         check("the database is told 'confirmed' only when the admin confirmed (false for a valid Speed Post number)", seen, [false, true]);
+      }
+
+      // Handover and flag, through the route path.
+      {
+        const o = await order({ status: "confirmed" });
+        const rs = resend(200);
+        for (const v of [undefined, false, "true", 1, null] as unknown[]) {
+          const r = await performDispatch({ handedOver: v, orderId: o, consignment: sp("31313131") }, depsFor(admin, rs));
+          check(`route: handedOver ${JSON.stringify(v) ?? "missing"} → 400, nothing changed or sent`, [r.status, !r.body.ok && r.body.handoverRequired, (await ord(o)).status, rs.calls.length], [400, true, "confirmed", 0]);
+        }
+        await root.query("update orders set needs_review = true where id = $1", [o]);
+        const flaggedR = await performDispatch({ handedOver: true, orderId: o, consignment: sp("31313131") }, depsFor(admin, rs));
+        check("route: flagged order → 409 with the reason, nothing sent", [flaggedR.status, !flaggedR.body.ok && /flagged for review/.test(flaggedR.body.error), rs.calls.length], [409, true, 0]);
+        await admin.query("update orders set needs_review = false where id = $1", [o]);
+        const cleared = await performDispatch({ handedOver: true, orderId: o, consignment: sp("31313131") }, depsFor(admin, rs));
+        check("route: after the flag is cleared → dispatched and emailed once", [cleared.status, cleared.body.ok && cleared.body.outcome, rs.calls.length], [200, "dispatched", 1]);
       }
 
       // Payment and state, through the route path.
@@ -503,10 +570,10 @@ async function main() {
         const cancelledO = await order({ status: "cancelled" });
         const noAddr = await order({ address: null });
         for (const [id, label, re] of [[unpaid, "unpaid", /Only a paid order/], [cancelledO, "cancelled", /cancelled order/], [noAddr, "no address", /no complete delivery address/]] as const) {
-          const r = await performDispatch({ orderId: id, consignment: sp("35791357") }, depsFor(admin, rs));
+          const r = await performDispatch({ handedOver: true, orderId: id, consignment: sp("35791357") }, depsFor(admin, rs));
           check(`${label}: 409 with the database's reason, nothing sent`, [r.status, !r.body.ok && re.test(r.body.error), (await rows(id)).length], [409, true, 0]);
         }
-        check("missing order: 404", (await performDispatch({ orderId: "00000000-0000-4000-8000-000000000001", consignment: sp("35791357") }, depsFor(admin, rs))).status, 404);
+        check("missing order: 404", (await performDispatch({ handedOver: true, orderId: "00000000-0000-4000-8000-000000000001", consignment: sp("35791357") }, depsFor(admin, rs))).status, 404);
         check("nothing was emailed for any refusal", rs.calls.length, 0);
       }
 
@@ -514,7 +581,7 @@ async function main() {
       for (const [answer, attempt, state] of [[500, "uncertain", "retry"], [429, "retryable", "retry"], [422, "failed", "needs_attention"], ["hang", "uncertain", "retry"]] as const) {
         const o = await order({ status: "confirmed" });
         const rs = resend(answer);
-        const r = await performDispatch({ orderId: o, consignment: sp("46802468") }, depsFor(admin, rs));
+        const r = await performDispatch({ handedOver: true, orderId: o, consignment: sp("46802468") }, depsFor(admin, rs));
         check(`Resend ${answer}: still dispatched (200), attempt ${attempt}, shown as ${state}`, [r.status, r.body.ok && r.body.outcome, (await ord(o)).status, r.body.ok && r.body.attempt, r.body.ok && r.body.email.state], [200, "dispatched", "shipped", attempt, state]);
       }
 
@@ -522,10 +589,10 @@ async function main() {
       {
         const o = await order({ status: "confirmed" });
         const first = resend(429);
-        await performDispatch({ orderId: o, consignment: sp("57913579") }, depsFor(admin, first));
+        await performDispatch({ handedOver: true, orderId: o, consignment: sp("57913579") }, depsFor(admin, first));
         await root.query("update order_email_deliveries set next_attempt_at = now() where order_id = $1", [o]);
         const later = resend(200);
-        const r = await performDispatch({ orderId: o, consignment: sp("57913579") }, depsFor(admin, later));
+        const r = await performDispatch({ handedOver: true, orderId: o, consignment: sp("57913579") }, depsFor(admin, later));
         check("repeat request after a 429: already_dispatched, the same row is sent, accepted", [r.body.ok && r.body.outcome, later.calls.length, later.calls[0]?.key, (await stateOf(o)).status, (await rows(o)).length], ["already_dispatched", 1, `shipment-notification/${o}/1`, "accepted", 1]);
       }
 
@@ -533,11 +600,12 @@ async function main() {
       {
         const o = await order({ status: "confirmed" });
         const rs = resend(200);
-        const crashed = await performDispatch({ orderId: o, consignment: sp("68024680") }, {
+        const crashed = await performDispatch({ handedOver: true, orderId: o, consignment: sp("68024680") }, {
           ...depsFor(admin, rs),
           attempt: async () => { throw new Error("the function was frozen / killed"); },
         });
         check("interrupted before the email: dispatch stands, reply still 200, email queued", [crashed.status, (await ord(o)).status, crashed.body.ok && crashed.body.email.state, rs.calls.length], [200, "shipped", "queued", 0]);
+        await root.query("update order_email_deliveries set next_attempt_at = now() + interval '1 day' where order_id <> $1 and status in ('pending', 'retryable', 'uncertain')", [o]);
         const report = await runConfirmationRecovery({ supabase: client(svc), configured: () => true, attempt: (id) => depsFor(admin, rs).attempt(id) });
         check("…the R1 worker sends it, once", [report.ok, rs.calls.filter((c) => c.key === `shipment-notification/${o}/1`).length, (await stateOf(o)).status], [true, 1, "accepted"]);
         await runConfirmationRecovery({ supabase: client(svc), configured: () => true, attempt: (id) => depsFor(admin, rs).attempt(id) });
@@ -547,7 +615,7 @@ async function main() {
         // Process dies mid-attempt (lease held, request maybe made): the lease runs out, the worker retries with the same key.
         const o = await order({ status: "confirmed" });
         const rs = resend(200);
-        const r = await performDispatch({ orderId: o, consignment: sp("79135791") }, { ...depsFor(admin, rs), attempt: async () => "error" as const });
+        const r = await performDispatch({ handedOver: true, orderId: o, consignment: sp("79135791") }, { ...depsFor(admin, rs), attempt: async () => "error" as const });
         const id = r.body.ok ? (await stateOf(o)).id : null;
         await svc.query("select * from public.claim_order_email_delivery($1, 90)", [id]);
         await root.query("update order_email_deliveries set lease_expires_at = now() - interval '1 second' where id = $1", [id]);
@@ -560,7 +628,7 @@ async function main() {
         // (a) Cancelled after dispatch, before the first attempt renders.
         const o = await order({ status: "confirmed" });
         const rs = resend(200);
-        const r = await performDispatch({ orderId: o, consignment: sp("80246802") }, {
+        const r = await performDispatch({ handedOver: true, orderId: o, consignment: sp("80246802") }, {
           ...depsFor(admin, rs),
           attempt: async (id) => {
             await admin.query("select public.cancel_order($1, 'race')", [o]).catch(async () => {
@@ -576,7 +644,7 @@ async function main() {
       {
         // (b) First attempt refused (429), payload frozen; order cancelled; the retry must not send.
         const o = await order({ status: "confirmed" });
-        await performDispatch({ orderId: o, consignment: sp("91357913") }, depsFor(admin, resend(429)));
+        await performDispatch({ handedOver: true, orderId: o, consignment: sp("91357913") }, depsFor(admin, resend(429)));
         check("…frozen after a refused attempt", !!(await stateOf(o)).payload_sha256, true);
         await admin.query("select public.cancel_order($1, 'race')", [o]).catch(async () => {
           await root.query("set session_replication_role = replica");
@@ -593,7 +661,7 @@ async function main() {
       {
         const o = await order({ email: null, status: "confirmed" });
         const rs = resend(200);
-        const r = await performDispatch({ orderId: o, consignment: sp("10293847") }, depsFor(admin, rs));
+        const r = await performDispatch({ handedOver: true, orderId: o, consignment: sp("10293847") }, depsFor(admin, rs));
         check("no email address: dispatched, 'no recipient', nothing sent", [r.status, r.body.ok && r.body.email.state, rs.calls.length, (await ord(o)).status], [200, "no_recipient", 0, "shipped"]);
       }
 
@@ -601,14 +669,14 @@ async function main() {
       {
         const o = await order({ provider: "offline", status: "confirmed" });
         const rs = resend(200);
-        const r = await performDispatch({ orderId: o, consignment: sp("29384756") }, depsFor(admin, rs));
+        const r = await performDispatch({ handedOver: true, orderId: o, consignment: sp("29384756") }, depsFor(admin, rs));
         check("in-person order: dispatched, no email (state none, in-person wording)", [r.status, r.body.ok && r.body.email.state, r.body.ok && /In-person/.test(String(r.body.email.detail)), rs.calls.length], [200, "none", true, 0]);
       }
 
       // The admin's status read.
       {
         const o = await order({ status: "confirmed" });
-        await performDispatch({ orderId: o, consignment: sp("38475610") }, depsFor(admin, resend(200)));
+        await performDispatch({ handedOver: true, orderId: o, consignment: sp("38475610") }, depsFor(admin, resend(200)));
         const st = (await admin.query("select * from public.shipment_email_status($1::uuid[])", [[o]])).rows;
         check("shipment_email_status: the admin sees the status, accepted", [st.length, st[0]?.status], [1, "accepted"]);
         check("…and only status columns (no recipient, payload or key)", Object.keys(st[0]).sort(), ["accepted_at", "attempts", "last_error_code", "next_attempt_at", "order_id", "possibly_accepted", "status", "updated_at"]);
@@ -637,14 +705,14 @@ async function main() {
       const refused = await failure(() => root.query(REMOVAL_0075));
       await root.query("rollback").catch(() => {});
       check("removal refuses while shipment rows exist", /0075 removal refused/.test(refused), true);
-      check("…and removed nothing", !!(await one("select to_regprocedure('public.dispatch_order(uuid, text, text, boolean)') is not null ok")).ok, true);
+      check("…and removed nothing", !!(await one("select to_regprocedure('public.dispatch_order(uuid, text, text, boolean, boolean)') is not null ok")).ok, true);
 
       await engine.database("e3_empty");
       const empty = await engine.connect("e3_empty");
       conns.push(empty);
       await asRoot(empty);
       await empty.query(REMOVAL_0075);
-      const gone = (await empty.query(`select to_regprocedure('public.dispatch_order(uuid, text, text, boolean)') is null
+      const gone = (await empty.query(`select to_regprocedure('public.dispatch_order(uuid, text, text, boolean, boolean)') is null
           and to_regprocedure('public.shipment_email_status(uuid[])') is null
           and to_regprocedure('public.is_speed_post_consignment(text)') is null
           and to_regprocedure('public.orders_dispatch_guard()') is null
@@ -676,7 +744,7 @@ begin
 end $$;
 drop trigger if exists orders_dispatch_guard on public.orders;
 drop function if exists public.orders_dispatch_guard();
-drop function if exists public.dispatch_order(uuid, text, text, boolean);
+drop function if exists public.dispatch_order(uuid, text, text, boolean, boolean);
 drop function if exists public.shipment_email_status(uuid[]);
 drop function if exists public.is_speed_post_consignment(text);
 alter table public.order_email_deliveries

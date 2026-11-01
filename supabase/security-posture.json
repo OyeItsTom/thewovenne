@@ -1185,7 +1185,7 @@
         "service_role"
       ]
     },
-    "dispatch_order(uuid,text,text,boolean)": {
+    "dispatch_order(uuid,text,text,boolean,boolean)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
       "execute": [

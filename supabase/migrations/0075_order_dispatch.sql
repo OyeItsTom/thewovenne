@@ -7,10 +7,15 @@
 --
 -- This adds one way to dispatch, and closes the others:
 --
---   dispatch_order(order, courier, consignment, confirm_unusual)
---       For a two-factor admin (is_admin(), 0067) only. In ONE transaction,
---       with the order row locked: checks the order is paid, not cancelled,
---       still placed/confirmed and has a delivery address; sets status
+--   dispatch_order(order, courier, consignment, handed_over, confirm_unusual)
+--       For a two-factor admin (is_admin(), 0067) only, and only with
+--       handed_over = true: the admin's statement that the parcel has been
+--       handed to India Post. (That is a recorded acknowledgement, not proof:
+--       nothing here can see the post office.) In ONE transaction, with the
+--       order row locked: checks the order is paid, not cancelled, not
+--       flagged for review (needs_review — cleared through the existing
+--       Orders screen control), still placed/confirmed and has a delivery
+--       address; sets status
 --       'shipped', shipped_at, courier_name and awb_number (the 0024 columns —
 --       nothing new on orders); and creates exactly one shipping-email intent:
 --       an order_email_deliveries row (0074) of kind shipment_notification,
@@ -64,7 +69,8 @@ begin
   if to_regclass('public.order_email_deliveries') is null then
     raise exception '0075: order_email_deliveries (0074) does not exist';
   end if;
-  if to_regprocedure('public.dispatch_order(uuid, text, text, boolean)') is not null
+  if to_regprocedure('public.dispatch_order(uuid, text, text, boolean, boolean)') is not null
+     or to_regprocedure('public.dispatch_order(uuid, text, text, boolean)') is not null
      or to_regprocedure('public.dispatch_order(uuid, text, text)') is not null then
     raise exception '0075: dispatch_order already exists; refusing to replace it';
   end if;
@@ -154,6 +160,7 @@ $fn$;
 
 -- ── Dispatch ──
 create function public.dispatch_order(p_order_id uuid, p_courier text, p_consignment text,
+                                      p_handed_over boolean,
                                       p_confirm_unusual boolean default false)
 returns jsonb
 language plpgsql
@@ -175,6 +182,11 @@ begin
   end if;
   if p_consignment is null or p_consignment !~ '^[A-Z0-9]{1,30}$' then
     raise exception 'The consignment number must be letters and digits only, at most 30.' using errcode = '22023';
+  end if;
+  -- Exactly true. Null, false or a missing value is not an acknowledgement.
+  if p_handed_over is not true then
+    raise exception 'Confirm the parcel has been handed to India Post before dispatching.'
+      using errcode = '22023', hint = 'handover_required';
   end if;
 
   select * into o from orders where id = p_order_id for update;
@@ -200,6 +212,12 @@ begin
   end if;
   if o.status not in ('placed', 'confirmed') then
     raise exception 'This order cannot be dispatched from its current status.' using errcode = '55000';
+  end if;
+  -- Flagged (e.g. paid but stock could not be reserved): resolve and clear the
+  -- flag first. Checked under the row lock, so a flag set by another admin
+  -- while this waited is seen.
+  if o.needs_review then
+    raise exception 'This order is flagged for review; clear the flag before dispatching it.' using errcode = '55000';
   end if;
   if o.shipping_address is null or jsonb_typeof(o.shipping_address) <> 'object'
      or nullif(btrim(coalesce(o.shipping_address ->> 'line1', '')), '') is null
@@ -249,9 +267,11 @@ begin
 end
 $fn$;
 
-comment on function public.dispatch_order(uuid, text, text, boolean) is
+comment on function public.dispatch_order(uuid, text, text, boolean, boolean) is
   'The only way an order becomes shipped (0075). Two-factor admins only;
-   paid, not cancelled, placed/confirmed, with an address; an unusual
+   only with p_handed_over = true (the admin acknowledging handover);
+   paid, not cancelled, not flagged for review, placed/confirmed, with an
+   address; an unusual
    consignment number only with p_confirm_unusual. Records the courier and
    consignment and, for an online order, exactly one shipping-email intent.';
 
@@ -259,8 +279,8 @@ comment on function public.dispatch_order(uuid, text, text, boolean) is
 -- cancel_order does), so it is granted to authenticated and decided inside by
 -- is_admin(). Never anon. service_role has no auth.uid() and is refused by the
 -- same check.
-revoke execute on function public.dispatch_order(uuid, text, text, boolean) from public, anon;
-grant execute on function public.dispatch_order(uuid, text, text, boolean) to authenticated;
+revoke execute on function public.dispatch_order(uuid, text, text, boolean, boolean) from public, anon;
+grant execute on function public.dispatch_order(uuid, text, text, boolean, boolean) to authenticated;
 revoke execute on function public.is_speed_post_consignment(text) from public, anon;
 grant execute on function public.is_speed_post_consignment(text) to authenticated, service_role;
 
@@ -302,7 +322,7 @@ grant execute on function public.shipment_email_status(uuid[]) to authenticated;
 do $$
 declare
   problems text[] := array[]::text[];
-  f regprocedure := 'public.dispatch_order(uuid, text, text, boolean)'::regprocedure;
+  f regprocedure := 'public.dispatch_order(uuid, text, text, boolean, boolean)'::regprocedure;
   st regprocedure := 'public.shipment_email_status(uuid[])'::regprocedure;
 begin
   if has_function_privilege('anon', f, 'EXECUTE') then
@@ -336,6 +356,6 @@ end $$;
 
 -- ── Verify ────────────────────────────────────
 select
-  has_function_privilege('anon', 'public.dispatch_order(uuid, text, text, boolean)', 'EXECUTE') as anon_execute_must_be_false,
-  has_function_privilege('authenticated', 'public.dispatch_order(uuid, text, text, boolean)', 'EXECUTE') as authenticated_execute,
+  has_function_privilege('anon', 'public.dispatch_order(uuid, text, text, boolean, boolean)', 'EXECUTE') as anon_execute_must_be_false,
+  has_function_privilege('authenticated', 'public.dispatch_order(uuid, text, text, boolean, boolean)', 'EXECUTE') as authenticated_execute,
   (select count(*) from public.orders where status = 'shipped') as orders_already_shipped_untouched;
