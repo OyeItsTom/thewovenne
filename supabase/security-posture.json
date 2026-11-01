@@ -737,6 +737,21 @@
       },
       "columns": {}
     },
+    "style_rejection_notices": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
     "style_submissions": {
       "kind": "r",
       "rls": true,
@@ -758,7 +773,6 @@
       "columns": {
         "authenticated": {
           "UPDATE": [
-            "rejection_emailed_at",
             "withdrawn_at"
           ]
         }
@@ -1073,6 +1087,14 @@
       ]
     },
     "claim_style_notification(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "claim_style_rejection_notice(uuid)": {
       "securityDefiner": true,
       "searchPath": "public",
       "execute": [
@@ -1443,6 +1465,14 @@
         "service_role"
       ]
     },
+    "record_style_rejection_notice(uuid,text,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
     "redeem_coupon(text,uuid,text,numeric)": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -1602,6 +1632,20 @@
       "searchPath": "public",
       "execute": [
         "authenticated",
+        "service_role"
+      ]
+    },
+    "style_rejection_notice_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "style_rejection_supersede()": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
         "service_role"
       ]
     },
@@ -2219,6 +2263,15 @@
       "check": null
     },
     "public.stock_movements.Admins read stock movements": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.style_rejection_notices.Admins read rejection notices": {
       "cmd": "SELECT",
       "permissive": "PERMISSIVE",
       "roles": [

@@ -11,6 +11,7 @@
  * that the subject line does not deliver the verdict in an inbox list.
  */
 import fs from "node:fs";
+import path from "node:path";
 import {
   styleRejectedHtml,
   styleRejectedSubject,
@@ -28,7 +29,6 @@ const data = {
   customerName: "Ananya",
   productName: "Mul Cotton Saree",
   reason: "The photograph is a little blurry — a sharper one would show the weave better.",
-  ordersUrl: "https://www.thewovenne.com/in/account/orders",
 };
 
 const html = styleRejectedHtml(data);
@@ -58,9 +58,17 @@ const nasty = styleRejectedHtml({
 });
 t("an admin's angle brackets are escaped, not rendered",
   !nasty.includes("<script>") && nasty.includes("&lt;script&gt;"));
-t("and so is their name", !nasty.includes("<b>Ananya</b>") && nasty.includes("&lt;b&gt;Ananya"));
+t("and a name carrying markup is never rendered — it greets as \"Hello,\"",
+  !nasty.includes("<b>Ananya</b>") && nasty.includes(">Hello,<"));
 
-const out = process.argv[2] ?? "style-rejected-preview.html";
+// Never into the repository (WP-EMAIL-E5): a preview left in the tree is one
+// `git add .` from being committed.
+const out = path.resolve(process.argv[2] ?? path.join(require("node:os").tmpdir(), "style-rejected-preview.html"));
+const repo = path.resolve(__dirname, "..");
+if (out.startsWith(repo + path.sep)) {
+  console.error(`Refusing to write a preview inside the repository: ${out}`);
+  process.exit(2);
+}
 fs.writeFileSync(out, html);
 console.log(`\nwrote ${out} — open it to read the tone\n`);
 

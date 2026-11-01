@@ -49,6 +49,32 @@ interface Submission {
   customer_email: string | null;
   customer_name: string | null;
   admin_notified_at: string | null;
+  /** The current rejection round's notice (0076), or null when there is none. */
+  rejection_notice_status?: "pending" | "claimed" | "accepted" | "failed" | "uncertain" | null;
+  rejection_notice_claimed_at?: string | null;
+}
+
+/**
+ * What the queue says about the customer email for a rejection with a reason.
+ * "claimed" and "uncertain" both mean nobody knows whether it was sent: they
+ * are shown as needing investigation and are never resent automatically.
+ */
+function rejectionEmailLabel(row: Submission): { text: string; alert: boolean } {
+  if (row.rejection_emailed_at || row.rejection_notice_status === "accepted") {
+    return { text: " · email accepted by the provider", alert: false };
+  }
+  switch (row.rejection_notice_status) {
+    case "claimed":
+      return { text: " · EMAIL OUTCOME UNKNOWN — an attempt did not report back. Check before contacting the customer; it will not be resent automatically.", alert: true };
+    case "uncertain":
+      return { text: " · EMAIL OUTCOME UNKNOWN — the provider gave no clear answer. Check before contacting the customer; it will not be resent automatically.", alert: true };
+    case "failed":
+      return { text: " · EMAIL FAILED — the provider refused it; nothing was sent", alert: true };
+    case "pending":
+      return { text: " · CUSTOMER NOT TOLD yet", alert: true };
+    default:
+      return { text: " · CUSTOMER NOT TOLD (turned down before notification records)", alert: true };
+  }
 }
 
 type Tab = "pending" | "approved" | "rejected";
@@ -149,10 +175,14 @@ export default function StyleManager() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Could not turn that down.");
+      // The route's own message (0076) says which of: accepted by the
+      // provider, refused, unknown, already told, or no address. "Accepted" is
+      // never presented as delivered.
       setNotice(
-        data.emailed
-          ? "Turned down, and the customer has been told why."
-          : `Turned down. THE CUSTOMER WAS NOT EMAILED — ${data.problem ?? "no reason given"}`
+        data.message ??
+          (data.emailed
+            ? "Turned down. The email was accepted by the email provider."
+            : `Turned down. THE CUSTOMER WAS NOT EMAILED — ${data.problem ?? "no reason given"}`)
       );
       setRejecting(null);
       setReason("");
@@ -306,10 +336,8 @@ export default function StyleManager() {
                   <p className="mt-2 text-xs text-ink/60">
                     Reason: {row.reject_reason ?? "none — turned down silently"}
                     {row.reject_reason && (
-                      <span className={row.rejection_emailed_at ? "" : "text-terracotta-dark"}>
-                        {row.rejection_emailed_at
-                          ? " · customer told"
-                          : " · CUSTOMER NOT TOLD"}
+                      <span className={rejectionEmailLabel(row).alert ? "text-terracotta-dark" : ""}>
+                        {rejectionEmailLabel(row).text}
                       </span>
                     )}
                   </p>
