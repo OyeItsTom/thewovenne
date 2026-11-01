@@ -289,17 +289,60 @@ async function main() {
       const legacy = await order({ sent: true });
       check("order claimed before 0074: no row, not created (never retried here)", [await enqueue(legacy), (await one("select count(*)::int n from order_email_deliveries where order_id = $1", [legacy])).n], [{ delivery_id: null, created: false }, 0]);
 
-      // Historical: paid before 0058 added the column, so confirmation_sent_at is
-      // NULL although the customer was emailed. A replay must not email again.
-      const historical = await order();
-      await root.query("update orders set created_at = (select orphan_recovery_since from order_email_recovery_settings) - interval '45 days' where id = $1", [historical]);
-      check("historical order (45 days before 0074): not claimed, no row", [await enqueue(historical), (await one("select confirmation_sent_at from orders where id = $1", [historical])).confirmation_sent_at, (await one("select count(*)::int n from order_email_deliveries where order_id = $1", [historical])).n], [{ delivery_id: null, created: false }, null, 0]);
-      const justBefore = await order();
-      await root.query("update orders set created_at = (select orphan_recovery_since from order_email_recovery_settings) - interval '2 hours' where id = $1", [justBefore]);
-      check("checkout opened 2 h before 0074, paid after: claimed normally", (await enqueue(justBefore)).created, true);
-      const dayBefore = await order();
-      await root.query("update orders set created_at = (select orphan_recovery_since from order_email_recovery_settings) - interval '25 hours' where id = $1", [dayBefore]);
-      check("created 25 h before 0074: refused", (await enqueue(dayBefore)).created, false);
+      // THE CLAIM BOUNDARY: 2026-09-19 21:00 UTC, when the claim code was live in
+      // Production. Before it, an order may have been emailed with NULL left
+      // behind (0058 had no backfill); after it, NULL means never emailed.
+      const createdAt = async (iso: string, sent = false) => {
+        const id = await order();
+        await root.query("update orders set created_at = $2, confirmation_sent_at = $3 where id = $1", [id, iso, sent ? iso : null]);
+        return id;
+      };
+      const tryClaim = async (id: string) => (await enqueue(id)).created === true;
+      const rowsFor = async (id: string) => (await one("select count(*)::int n from order_email_deliveries where order_id = $1", [id])).n;
+      const sentAt = async (id: string) => (await one("select confirmation_sent_at from orders where id = $1", [id])).confirmation_sent_at;
+
+      const preOld = await createdAt("2026-09-01T10:00:00Z");
+      check("old-code order (1 Sep, NULL left by 0058): not claimed, no row, NULL untouched", [await tryClaim(preOld), await rowsFor(preOld), await sentAt(preOld)], [false, 0, null]);
+      const afterMigrationOldCode = await createdAt("2026-09-19T17:00:00Z");
+      check("transition: 0058 applied, old code still serving (19 Sep 17:00Z): refused", await tryClaim(afterMigrationOldCode), false);
+      const overlap = await createdAt("2026-09-19T20:30:00Z");
+      check("transition: between the claim deployments and the boundary (20:30Z): refused", await tryClaim(overlap), false);
+      const justBefore = await createdAt("2026-09-19T20:59:59.999Z");
+      check("one millisecond before the boundary: refused", await tryClaim(justBefore), false);
+      const atBoundary = await createdAt("2026-09-19T21:00:00Z");
+      check("at the boundary: claimed (claim era — NULL means never emailed)", await tryClaim(atBoundary), true);
+      const claimEra = await createdAt("2026-10-01T12:00:00Z");
+      check("claim-era order never claimed (1 Oct), settled now: claimed — a first confirmation", await tryClaim(claimEra), true);
+
+      // Delayed first payments, measured from 0074's own cutoff: none refused.
+      const latePay = async (offset: string) => {
+        const id = await order();
+        await root.query(`update orders set created_at = (select orphan_recovery_since from order_email_recovery_settings) - interval '${offset}' where id = $1`, [id]);
+        return tryClaim(id);
+      };
+      check("late authorisation captured 3 days after the order: claimed", await latePay("3 days"), true);
+      check("…and its webhook 24 h later still (4 days): claimed", await latePay("4 days"), true);
+      check("checkout opened 25 h before 0074, paid after: claimed", await latePay("25 hours"), true);
+      check("checkout opened 2 h before 0074: claimed", await latePay("2 hours"), true);
+
+      // Already populated confirmation_sent_at is never claimed again, on either side.
+      for (const iso of ["2026-09-10T10:00:00Z", "2026-10-05T10:00:00Z"]) {
+        const done = await createdAt(iso, true);
+        const before = await sentAt(done);
+        check(`confirmation_sent_at already set (${iso.slice(0, 10)}): not claimed, no row, value unchanged`, [await tryClaim(done), await rowsFor(done), (await sentAt(done)).getTime() === before.getTime()], [false, 0, true]);
+      }
+
+      // Concurrent browser callback + two webhook events on a late-captured order.
+      const raced = await order();
+      await root.query("update orders set created_at = (select orphan_recovery_since from order_email_recovery_settings) - interval '3 days' where id = $1", [raced]);
+      const racers = await Promise.all(Array.from({ length: 8 }, () => engine.connect("r1a")));
+      conns.push(...racers);
+      await Promise.all(racers.map(asService));
+      const won = await Promise.all(racers.map((c) => c.query("select * from enqueue_order_confirmation($1)", [raced]).then((x) => x.rows[0])));
+      check("late-captured order settled 8 ways at once: one claim, one row, all name it", [won.filter((w) => w.created).length, await rowsFor(raced), new Set(won.map((w) => w.delivery_id)).size], [1, 1, 1]);
+      const racedOld = await createdAt("2026-09-15T10:00:00Z");
+      const wonOld = await Promise.all(racers.map((c) => c.query("select * from enqueue_order_confirmation($1)", [racedOld]).then((x) => x.rows[0])));
+      check("pre-boundary order settled 8 ways at once: no claim, no row", [wonOld.filter((w) => w.created).length, await rowsFor(racedOld), await sentAt(racedOld)], [0, 0, null]);
 
       const noEmail = await order({ email: null });
       const ne = await enqueue(noEmail);

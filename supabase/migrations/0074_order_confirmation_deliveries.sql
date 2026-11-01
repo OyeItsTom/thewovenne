@@ -235,14 +235,27 @@ create trigger order_email_deliveries_guard
 -- Refuses (returns no claim) unless the order is paid. A NULL or blank email
 -- still claims and creates the row, already failed, so the gap is on record.
 --
--- HISTORICAL ORDERS ARE NEVER CLAIMED HERE. 0058 added confirmation_sent_at
--- without a backfill, so every order paid before 19 Sep 2026 has it NULL even
--- though its customer was emailed; a replayed browser callback or a late
--- webhook for one of them must not email that customer again. So an order
--- created more than a day before 0074 was applied (orphan_recovery_since) is
--- refused: no claim, no row. The day of grace covers a checkout opened just
--- before the migration and paid just after; a first payment cannot arrive a
--- day after its checkout was opened.
+-- ORDERS FROM BEFORE THE CLAIM EXISTED ARE NEVER CLAIMED HERE. 0058 added
+-- confirmation_sent_at on 19 Sep 2026 (15:33 UTC) without a backfill, and the
+-- code that sends emails without recording a claim kept serving until the
+-- claim code went live: Production deployment 6545021408 of 459324c, reported
+-- successful at 19:51:09 and 20:01:58 UTC. So an order created before then may
+-- have been emailed with NULL left behind, and a replayed callback or late
+-- webhook for it must not email that customer again.
+--
+-- The boundary is 2026-09-19 21:00:00 UTC: the later success, rounded up by
+-- almost an hour for overlapping deployments and requests still in flight.
+-- From then on every confirmation the application sent was claimed first, so
+-- confirmation_sent_at NULL means no email was sent and a claim now is a first
+-- confirmation, not a repeat. It is a fixed point in the shop's history, NOT a
+-- distance from this migration: a first payment can legitimately settle days
+-- after its order was created (Razorpay orders do not expire, late
+-- authorisation can be captured for up to 3 days, webhooks retry for 24 h).
+--
+-- An order created before the boundary that settles for the FIRST time now
+-- (a six-week-old Razorpay order paid today) gets no automatic email. That is
+-- deliberate — whether its customer was already emailed cannot be known — and
+-- needs a person to look (WP-EMAIL R1b).
 create function public.enqueue_order_confirmation(p_order_id uuid)
 returns table (delivery_id uuid, created boolean)
 language plpgsql
@@ -258,8 +271,7 @@ begin
    where id = p_order_id
      and confirmation_sent_at is null
      and payment_status = 'paid'
-     and created_at >= (select s.orphan_recovery_since - interval '1 day'
-                          from order_email_recovery_settings s where s.singleton)
+     and created_at >= timestamptz '2026-09-19 21:00:00+00'
   returning customer_email into v_email;
 
   if found then
