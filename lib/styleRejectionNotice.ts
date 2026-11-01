@@ -4,14 +4,27 @@
  *
  * The database decides who may send: claim_style_rejection_notice() locks the
  * submission and moves the round's notice to "claimed" for one caller only.
- * This module, given that claim, sends the Stage A email and records what the
- * provider said:
+ * That lock ends with the claim's transaction, so it protects nothing about the
+ * send. This module, given the claim:
+ *
+ *   1. builds the email (a template failure happens before anything is marked);
+ *   2. calls begin_style_rejection_send(), which re-locks and re-checks: still
+ *      rejected, not withdrawn, same round, an address. If not, the notice is
+ *      recorded as "skipped" and nothing is sent;
+ *   3. hands the email to the provider at once, and records what it said:
  *
  *   accepted   Resend returned an id. Not proof of delivery, and never called that.
  *   failed     a definite refusal (4xx, or email not configured here): nothing
  *              was sent; a later rejection request may claim it again.
  *   uncertain  no clear answer (timeout, 5xx, network): it may have been sent,
  *              so it is never resent automatically.
+ *
+ * RESIDUAL RACE, stated plainly: a withdrawal or resubmission that commits
+ * after step 2 and before the provider accepts the request (milliseconds) is
+ * not seen, and that email goes out. The architecture cannot close that gap:
+ * the provider is outside the database transaction. What it guarantees is
+ * that the outcome is still recorded truthfully, and that no NEW send starts
+ * for a submission that is no longer eligible.
  *
  * A failed email never undoes the rejection; the route reports, it does not
  * throw. Collaborators are injected so tests drive every branch.
@@ -28,6 +41,7 @@ export type ClaimOutcome =
   | "not_rejected"
   | "silent"
   | "no_intent"
+  | "skipped"
   | "not_found";
 
 export interface Claim {
@@ -41,7 +55,15 @@ export interface Claim {
   reason?: string;
   accepted_at?: string;
   claimed_at?: string;
+  sending?: boolean;
 }
+
+/** begin_style_rejection_send()'s answer. */
+export type BeginResult =
+  | { send: true; recipient: string }
+  | { send: false; reason: "withdrawn" | "not_rejected" | "round_changed" | "no_recipient" | "not_found" };
+
+export type BeginFn = (noticeId: string) => Promise<{ data: BeginResult | null; error: string | null }>;
 
 export type NoticeOutcome = "accepted" | "failed" | "uncertain";
 
@@ -49,7 +71,7 @@ export type NoticeOutcome = "accepted" | "failed" | "uncertain";
 export interface NoticeReport {
   emailed: boolean;
   /** The claim outcome, or the provider outcome for a claimed send. */
-  status: ClaimOutcome | NoticeOutcome | "claim_failed" | "not_recorded";
+  status: ClaimOutcome | NoticeOutcome | "claim_failed" | "not_recorded" | "not_begun";
   message: string;
 }
 
@@ -96,6 +118,8 @@ export function claimMessage(c: Claim): NoticeReport {
       return { emailed: false, status: c.outcome, message: `${RECORDED} The customer has no email address on file, so nobody was told.` };
     case "withdrawn":
       return { emailed: false, status: c.outcome, message: `${RECORDED} The customer has withdrawn this submission, so no email was sent.` };
+    case "skipped":
+      return { emailed: false, status: c.outcome, message: `${RECORDED} An earlier attempt found it was no longer eligible when it came to send (withdrawn, resubmitted or moved), so nothing was sent.` };
     case "no_intent":
       return { emailed: false, status: c.outcome, message: `${RECORDED} This rejection predates notification records and was never emailed; it is not emailed automatically. Move it back to pending and turn it down again to tell the customer.` };
     case "silent":
@@ -114,21 +138,50 @@ export function claimMessage(c: Claim): NoticeReport {
  */
 export async function sendClaimedRejection(
   claim: Claim,
-  deps: { send: SendFn; record: RecordFn; timeoutMs?: number }
+  deps: { send: SendFn; begin: BeginFn; record: RecordFn; timeoutMs?: number }
 ): Promise<NoticeReport> {
   if (claim.outcome !== "claimed") return claimMessage(claim);
-  if (!claim.notice_id || !claim.recipient || !claim.reason) {
+  if (!claim.notice_id || !claim.reason) {
     return { emailed: false, status: "claim_failed", message: `${RECORDED} The notification claim came back incomplete, so no email was sent.` };
   }
 
+  // 1. Build first: nothing is marked "sending" for an email that cannot be made.
+  let content: { subject: string; html: string; text: string };
+  try {
+    const data = { customerName: claim.customer_name ?? null, productName: claim.product_name ?? null, reason: claim.reason };
+    content = { subject: styleRejectedSubject(data.productName), html: styleRejectedHtml(data), text: styleRejectedText(data) };
+  } catch (e) {
+    console.error(`style reject notice ${claim.notice_id}: email could not be built`, e);
+    return { emailed: false, status: "not_begun", message: `${RECORDED} The email could not be prepared, so nothing was sent. The notice stays in progress and is not resent automatically.` };
+  }
+
+  // 2. The last database check, immediately before the provider.
+  const begun = await deps.begin(claim.notice_id).catch((e: unknown) => ({
+    data: null,
+    error: e instanceof Error ? e.message : String(e),
+  }));
+  if (begun.error || !begun.data) {
+    console.error(`style reject notice ${claim.notice_id}: could not begin — ${begun.error ?? "no answer"}`);
+    return { emailed: false, status: "not_begun", message: `${RECORDED} Eligibility could not be re-checked before sending, so nothing was sent. The notice stays in progress and is not resent automatically.` };
+  }
+  if (!begun.data.send) {
+    const why: Record<string, string> = {
+      withdrawn: "the customer has since withdrawn the submission",
+      not_rejected: "it is no longer turned down (resubmitted, approved or moved back to pending)",
+      round_changed: "it has been moderated again since",
+      no_recipient: "the customer no longer has an email address on file",
+      not_found: "the submission no longer exists",
+    };
+    return { emailed: false, status: "skipped", message: `${RECORDED} No email was sent: ${why[begun.data.reason] ?? begun.data.reason}.` };
+  }
+
+  // 3. Hand it over, and keep the provider's answer whatever happens next.
   let outcome: NoticeOutcome;
   let providerId: string | null = null;
   let error: string | null = null;
   try {
-    const data = { customerName: claim.customer_name ?? null, productName: claim.product_name ?? null, reason: claim.reason };
-    const msg = { to: claim.recipient, subject: styleRejectedSubject(data.productName), html: styleRejectedHtml(data), text: styleRejectedText(data) };
     const ms = deps.timeoutMs ?? REJECTION_EMAIL_TIMEOUT_MS;
-    const sent = await withDeadline(deps.send(msg), ms);
+    const sent = await withDeadline(deps.send({ to: begun.data.recipient, ...content }), ms);
     if (sent.ok) {
       outcome = "accepted";
       providerId = sent.id;
@@ -137,9 +190,7 @@ export async function sendClaimedRejection(
       error = sent.error;
     }
   } catch (e) {
-    // A timeout, a throw, or a template refusal. Only the last is certainly
-    // unsent, but a template refusal cannot happen for a recorded reason, so
-    // all three are treated as "not known" and never resent automatically.
+    // A timeout or a throw: the request may have reached the provider.
     outcome = "uncertain";
     error = e instanceof Timeout ? "timeout" : e instanceof Error ? e.message : String(e);
   }

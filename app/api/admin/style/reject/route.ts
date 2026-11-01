@@ -5,7 +5,7 @@ import { createRSCClient } from "@/lib/supabaseRSC";
 import { createServiceClient } from "@/lib/supabase";
 import { removeGalleryCopies, sweepStylePhotos } from "@/lib/stylePhotoStorage";
 import { sendEmail } from "@/lib/email";
-import { sendClaimedRejection, type Claim, type NoticeReport } from "@/lib/styleRejectionNotice";
+import { sendClaimedRejection, type BeginResult, type Claim, type NoticeReport } from "@/lib/styleRejectionNotice";
 
 /**
  * Turn a submission down, and tell the customer why.
@@ -32,7 +32,10 @@ import { sendClaimedRejection, type Claim, type NoticeReport } from "@/lib/style
  * records the rejection and, in the same transaction, one notification intent
  * for this rejection round; repeating the same rejection changes nothing, and
  * a different reason on an already-rejected submission is refused (409).
- * claim_style_rejection_notice then lets exactly one request send; the result
+ * claim_style_rejection_notice then lets exactly one request proceed;
+ * begin_style_rejection_send re-checks eligibility immediately before the
+ * provider call (withdrawn / resubmitted / moved → recorded as skipped, not
+ * sent); the result
  * is recorded as accepted, failed (may be tried again) or uncertain (never
  * resent automatically). Only "accepted" sets rejection_emailed_at.
  */
@@ -112,6 +115,10 @@ export async function POST(request: NextRequest) {
     } else {
       report = await sendClaimedRejection(claim as Claim, {
         send: sendEmail,
+        begin: async (notice) => {
+          const { data, error } = await supabase.rpc("begin_style_rejection_send", { p_notice: notice });
+          return { data: (data as BeginResult | null) ?? null, error: error?.message ?? null };
+        },
         record: async (notice, outcome, providerId, error) => {
           const { error: recordError } = await supabase.rpc("record_style_rejection_notice", {
             p_notice: notice,

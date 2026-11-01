@@ -1041,6 +1041,14 @@
         "service_role"
       ]
     },
+    "begin_style_rejection_send(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
     "can_read_analytics()": {
       "securityDefiner": true,
       "searchPath": "public",

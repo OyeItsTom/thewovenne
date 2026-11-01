@@ -22,15 +22,22 @@
 --      moves the notice pending|failed → claimed. Exactly one caller wins;
 --      accepted, claimed (in flight or interrupted) and uncertain are never
 --      claimed again.
---   4. record_style_rejection_notice(): claimed → accepted | failed | uncertain.
+--   4. begin_style_rejection_send(): immediately before the provider call,
+--      re-locks the submission and re-checks eligibility for the claimed
+--      round. Still eligible → "sending"; withdrawn, moved out of rejected or
+--      a different round → "skipped" (deliberately unsent, with the reason).
+--      The claim's own lock ends with its transaction; this is the check that
+--      matters for the send.
+--   5. record_style_rejection_notice(): sending → accepted | failed | uncertain,
+--      whatever the submission has done since: the provider's real answer.
 --      Only "accepted" sets rejection_emailed_at, which therefore still means
 --      "the provider accepted it", never "claimed" or "queued".
---   5. moderate_style(): row lock; rejected → rejected with the same reason is
+--   6. moderate_style(): row lock; rejected → rejected with the same reason is
 --      a no-op; with a different reason it is refused (ALREADY_REJECTED).
---   6. Leaving "rejected" (approval, back to pending, resubmission) marks any
+--   7. Leaving "rejected" (approval, back to pending, resubmission) marks any
 --      unsent intent of that round superseded. History is never deleted or
 --      reset by moderation.
---   7. Customers lose UPDATE on rejection_emailed_at; withdrawal is unchanged.
+--   8. Customers lose UPDATE on rejection_emailed_at; withdrawal is unchanged.
 --
 -- BACKFILL. A historical rejection that was emailed (stamp set) becomes round 1
 -- with an "accepted" notice dated from the stamp. One that was never emailed
@@ -62,7 +69,7 @@ create table if not exists style_rejection_notices (
   -- The reason the email carries, as recorded at rejection. Never edited.
   reason_snapshot text not null check (length(btrim(reason_snapshot)) > 0),
   status          text not null default 'pending'
-                  check (status in ('pending', 'claimed', 'accepted', 'failed', 'uncertain', 'superseded')),
+                  check (status in ('pending', 'claimed', 'sending', 'skipped', 'accepted', 'failed', 'uncertain', 'superseded')),
   attempts        integer not null default 0 check (attempts >= 0),
   -- Read at claim time from the customer's profile; null until claimed, and
   -- for notices backfilled from before 0076 (the address used was not kept).
@@ -93,8 +100,9 @@ comment on table style_rejection_notices is
 -- Transitions, enforced for every writer including service_role:
 --   pending  → claimed | superseded
 --   failed   → claimed | superseded
---   claimed  → accepted | failed | uncertain
---   accepted, uncertain, superseded → nothing
+--   claimed  → sending | skipped
+--   sending  → accepted | failed | uncertain
+--   accepted, uncertain, superseded, skipped → nothing
 -- and the identity columns never change.
 create or replace function public.style_rejection_notice_guard()
 returns trigger
@@ -111,11 +119,12 @@ begin
   end if;
   if new.status is distinct from old.status and not (
        (old.status in ('pending', 'failed') and new.status in ('claimed', 'superseded'))
-    or (old.status = 'claimed' and new.status in ('accepted', 'failed', 'uncertain'))
+    or (old.status = 'claimed' and new.status in ('sending', 'skipped'))
+    or (old.status = 'sending' and new.status in ('accepted', 'failed', 'uncertain'))
   ) then
     raise exception 'NOTICE_TRANSITION: % → % is not allowed', old.status, new.status;
   end if;
-  if old.status = new.status and old.status in ('accepted', 'uncertain', 'superseded') then
+  if old.status = new.status and old.status in ('accepted', 'uncertain', 'superseded', 'skipped') then
     raise exception 'NOTICE_FINAL: a % notice is final', old.status;
   end if;
   new.updated_at := now();
@@ -227,8 +236,10 @@ grant execute on function public.moderate_style(uuid, text, text) to authenticat
 -- ══ 5. Leaving rejected supersedes unsent intents ══
 -- approve_style, moderate_style(pending|approved) and resubmit_style all move a
 -- submission out of rejected; this one trigger covers them without editing the
--- two functions it does not need to touch. In-flight (claimed) and finished
--- notices are left exactly as they are.
+-- two functions it does not need to touch. In-flight (claimed, sending) and
+-- finished notices are left as they are: a claimed one is turned into
+-- "skipped" by begin_style_rejection_send() when it re-checks, and a sending
+-- one gets the provider's real answer from record_…().
 create or replace function public.style_rejection_supersede()
 returns trigger
 language plpgsql
@@ -258,8 +269,9 @@ create trigger style_rejection_supersede
 -- Returns jsonb { outcome, ... }. outcome:
 --   claimed           this call won; send the email, then record the result
 --   already_accepted  the provider already accepted it (accepted_at given)
---   in_progress       claimed earlier and not yet recorded: sending now, or
+--   in_progress       claimed or sending and not yet recorded: running now, or
 --                     interrupted. Never resent automatically.
+--   skipped           a previous claim found it no longer eligible at send time
 --   uncertain         an earlier attempt had no clear answer. Never resent.
 --   no_recipient      no email address on the customer's profile
 --   withdrawn         the customer withdrew the submission
@@ -308,8 +320,11 @@ begin
   if notice.status = 'accepted' then
     return jsonb_build_object('outcome', 'already_accepted', 'notice_id', notice.id, 'accepted_at', notice.accepted_at);
   end if;
-  if notice.status = 'claimed' then
-    return jsonb_build_object('outcome', 'in_progress', 'notice_id', notice.id, 'claimed_at', notice.claimed_at);
+  if notice.status in ('claimed', 'sending') then
+    return jsonb_build_object('outcome', 'in_progress', 'notice_id', notice.id, 'claimed_at', notice.claimed_at, 'sending', notice.status = 'sending');
+  end if;
+  if notice.status = 'skipped' then
+    return jsonb_build_object('outcome', 'skipped', 'notice_id', notice.id);
   end if;
   if notice.status = 'uncertain' then
     return jsonb_build_object('outcome', 'uncertain', 'notice_id', notice.id);
@@ -362,6 +377,77 @@ $fn$;
 revoke execute on function public.claim_style_rejection_notice(uuid) from public, anon;
 grant execute on function public.claim_style_rejection_notice(uuid) to authenticated;
 
+-- ══ 6b. The last check before the provider ══════
+-- Called by the route immediately before it hands the email to the provider,
+-- in its own short transaction. Locks the submission, then the notice, and
+-- re-checks what the claim checked: still rejected with a reason, not
+-- withdrawn, still the claimed round, still an address. Eligible → 'sending'
+-- and the address to use; otherwise → 'skipped' with the reason, and nothing
+-- is sent. A notice not in 'claimed' (already sending or finished) is
+-- refused, so one claim can begin at most one send.
+--
+-- WHAT THIS CANNOT DO: once it commits, a withdrawal or resubmission in the
+-- milliseconds before the provider accepts the request is not seen. The
+-- provider's answer is still recorded truthfully by record_…() below.
+create or replace function public.begin_style_rejection_send(p_notice uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  notice  style_rejection_notices%rowtype;
+  target  style_submissions%rowtype;
+  addr    text;
+  why     text;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can notify customers about moderation';
+  end if;
+
+  -- The submission first (the same order as moderation and the claim), then
+  -- the notice; both locked until this transaction ends.
+  select s.* into target
+    from style_submissions s
+    join style_rejection_notices n on n.submission_id = s.id
+   where n.id = p_notice
+   for update of s;
+  if not found then
+    return jsonb_build_object('send', false, 'reason', 'not_found');
+  end if;
+  select * into notice from style_rejection_notices where id = p_notice for update;
+  if notice.status <> 'claimed' then
+    raise exception 'NOTICE_NOT_CLAIMED: this notice is %', notice.status;
+  end if;
+
+  select nullif(btrim(p.email), '') into addr from profiles p where p.id = target.user_id;
+
+  why := case
+    when target.withdrawn_at is not null then 'withdrawn'
+    when target.status <> 'rejected' then 'not_rejected'
+    when target.rejection_round <> notice.round then 'round_changed'
+    when target.reject_reason is null then 'not_rejected'
+    when addr is null then 'no_recipient'
+    else null
+  end;
+
+  if why is not null then
+    update style_rejection_notices
+       set status = 'skipped', last_error = 'skipped: ' || why
+     where id = p_notice;
+    return jsonb_build_object('send', false, 'reason', why);
+  end if;
+
+  update style_rejection_notices
+     set status = 'sending', recipient_email = addr
+   where id = p_notice;
+  return jsonb_build_object('send', true, 'recipient', addr);
+end;
+$fn$;
+
+revoke execute on function public.begin_style_rejection_send(uuid) from public, anon;
+grant execute on function public.begin_style_rejection_send(uuid) to authenticated;
+
 -- ══ 7. Recording the outcome ═══════════════════
 create or replace function public.record_style_rejection_notice(
   p_notice uuid,
@@ -388,8 +474,10 @@ begin
   if not found then
     raise exception 'NOTICE_NOT_FOUND';
   end if;
-  if notice.status <> 'claimed' then
-    raise exception 'NOTICE_NOT_CLAIMED: this notice is %', notice.status;
+  -- Only a send that began may be recorded: its outcome is the provider's,
+  -- whatever the submission has done since.
+  if notice.status <> 'sending' then
+    raise exception 'NOTICE_NOT_SENDING: this notice is %', notice.status;
   end if;
 
   update style_rejection_notices

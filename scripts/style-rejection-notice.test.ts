@@ -25,6 +25,8 @@ import {
   classifyProviderError,
   claimMessage,
   sendClaimedRejection,
+  type BeginFn,
+  type BeginResult,
   type Claim,
   type RecordFn,
   type SendFn,
@@ -58,9 +60,18 @@ const claimed: Claim = {
   reason: "A little blurry — a sharper one would show the weave.",
 };
 
-function fakes(answer: Awaited<ReturnType<SendFn>> | (() => Promise<Awaited<ReturnType<SendFn>>>), recordError: string | null = null) {
+function fakes(
+  answer: Awaited<ReturnType<SendFn>> | (() => Promise<Awaited<ReturnType<SendFn>>>),
+  recordError: string | null = null,
+  beginAnswer: { data: BeginResult | null; error: string | null } = { data: { send: true, recipient: "ananya@example.test" }, error: null }
+) {
   const sent: Parameters<SendFn>[0][] = [];
   const recorded: Parameters<RecordFn>[] = [];
+  const begun: string[] = [];
+  const begin: BeginFn = async (n) => {
+    begun.push(n);
+    return beginAnswer;
+  };
   const send: SendFn = async (m) => {
     sent.push(m);
     return typeof answer === "function" ? answer() : answer;
@@ -69,7 +80,7 @@ function fakes(answer: Awaited<ReturnType<SendFn>> | (() => Promise<Awaited<Retu
     recorded.push(a);
     return { error: recordError };
   };
-  return { send, record, sent, recorded };
+  return { send, begin, record, sent, recorded, begun };
 }
 
 async function unit() {
@@ -120,13 +131,39 @@ async function unit() {
   }
   {
     const f = fakes({ ok: true, id: "x", error: null });
-    const r = await sendClaimedRejection({ ...claimed, recipient: undefined }, f);
-    t("incomplete claim: nothing sent", r.status === "claim_failed" && f.sent.length === 0 && f.recorded.length === 0);
+    const r = await sendClaimedRejection({ ...claimed, notice_id: undefined }, f);
+    t("incomplete claim: nothing begun or sent", r.status === "claim_failed" && f.begun.length === 0 && f.sent.length === 0 && f.recorded.length === 0);
   }
-  for (const o of ["already_accepted", "in_progress", "uncertain", "no_recipient", "withdrawn", "no_intent", "silent", "not_rejected", "not_found"] as const) {
+  // The pre-send check (begin_style_rejection_send).
+  for (const reason of ["withdrawn", "not_rejected", "round_changed", "no_recipient", "not_found"] as const) {
+    const f = fakes({ ok: true, id: "x", error: null }, null, { data: { send: false, reason }, error: null });
+    const r = await sendClaimedRejection(claimed, f);
+    t(`begin says ${reason}: skipped, nothing sent, nothing recorded`, r.status === "skipped" && !r.emailed && f.sent.length === 0 && f.recorded.length === 0 && /No email was sent/.test(r.message));
+  }
+  {
+    const f = fakes({ ok: true, id: "x", error: null }, null, { data: null, error: "connection reset" });
+    const r = await sendClaimedRejection(claimed, f);
+    t("begin fails: nothing sent, stays in progress", r.status === "not_begun" && f.sent.length === 0 && f.recorded.length === 0 && /not resent automatically/.test(r.message));
+  }
+  {
+    const f = fakes({ ok: true, id: "x", error: null }, null, { data: { send: true, recipient: "new-address@example.test" }, error: null });
+    await sendClaimedRejection(claimed, f);
+    t("begin's fresh address is the one used", f.sent[0]?.to === "new-address@example.test");
+  }
+  {
+    const f = fakes({ ok: true, id: "x", error: null });
+    const r = await sendClaimedRejection({ ...claimed, reason: "   " }, f);
+    t("email that cannot be built: nothing begun or sent", r.status === "not_begun" && f.begun.length === 0 && f.sent.length === 0);
+  }
+  {
+    const f = fakes({ ok: true, id: "x", error: null });
+    await sendClaimedRejection(claimed, f);
+    t("order: begin before send, record after", f.begun.length === 1 && f.sent.length === 1 && f.recorded.length === 1);
+  }
+  for (const o of ["already_accepted", "in_progress", "uncertain", "no_recipient", "withdrawn", "no_intent", "silent", "not_rejected", "skipped", "not_found"] as const) {
     const f = fakes({ ok: true, id: "x", error: null });
     const r = await sendClaimedRejection({ outcome: o }, f);
-    t(`claim ${o}: nothing sent, nothing recorded`, f.sent.length === 0 && f.recorded.length === 0 && !r.emailed && r.status === o && r.message.length > 0);
+    t(`claim ${o}: nothing begun, sent or recorded`, f.begun.length === 0 && f.sent.length === 0 && f.recorded.length === 0 && !r.emailed && r.status === o && r.message.length > 0);
     t(`claim ${o}: no delivery claim`, !/delivered|reached their inbox\b(?! )/.test(r.message));
   }
   t("already accepted: says no second email", /no second email/.test(claimMessage({ outcome: "already_accepted" }).message));
@@ -150,10 +187,11 @@ async function unit() {
     "sweepStylePhotos(service)",
     'rpc("claim_style_rejection_notice"',
     "sendClaimedRejection(",
+    'rpc("begin_style_rejection_send"',
     'rpc("record_style_rejection_notice"',
   ];
   const idx = order.map(at);
-  t("route: gate → origin → admin → body → storage → moderate → sweep → claim → send → record",
+  t("route: gate → origin → admin → body → storage → moderate → sweep → claim → begin → record",
     idx.every((v, i) => v > 0 && (i === 0 || v > idx[i - 1])), idx.join(","));
   t("route: no direct stamp write", !/\.update\(\{\s*rejection_emailed_at/.test(r));
   t("route: missing submission → 404 before any claim", /if \(moderated !== true\)/.test(r) && r.indexOf("if (moderated !== true)") < r.indexOf('rpc("claim_style_rejection_notice"') && /status: 404/.test(r));
@@ -163,7 +201,8 @@ async function unit() {
   const ui = read("components/admin/StyleManager.tsx");
   t("screen: shows the route's message", ui.includes("data.message ??"));
   t("screen: no 'has been told' claim", !ui.includes("the customer has been told why") && !ui.includes('" · customer told"'));
-  t("screen: interrupted/uncertain shown as needing investigation", /case "claimed":[\s\S]*EMAIL OUTCOME UNKNOWN[\s\S]*case "uncertain":[\s\S]*EMAIL OUTCOME UNKNOWN/.test(ui) && /will not be resent automatically/.test(ui));
+  t("screen: sending/uncertain shown as outcome unknown", /case "sending":[\s\S]*EMAIL OUTCOME UNKNOWN/.test(ui) && /case "uncertain":[\s\S]*EMAIL OUTCOME UNKNOWN/.test(ui) && /will not be resent automatically/.test(ui));
+  t("screen: claimed shown as not handed over; skipped as not emailed", /case "claimed":[\s\S]*EMAIL NOT HANDED OVER/.test(ui) && /case "skipped":[\s\S]*NOT EMAILED/.test(ui));
   t("screen: accepted is 'accepted by the provider', not 'told'", ui.includes("email accepted by the provider"));
   t("screen: failed and pending distinguished", ui.includes("EMAIL FAILED") && ui.includes("CUSTOMER NOT TOLD yet"));
   const mig = read("supabase/migrations/0076_style_rejection_notices.sql");
@@ -259,6 +298,27 @@ async function database() {
     const claim = async (cl: Client, id: string) => (await cl.query("select claim_style_rejection_notice($1) c", [id])).rows[0].c as Claim;
     const record = (cl: Client, notice: string, outcome: string, pid: string | null = null, err: string | null = null) =>
       cl.query("select record_style_rejection_notice($1, $2, $3, $4)", [notice, outcome, pid, err]);
+    const begin = async (cl: Client, notice: string) => (await cl.query("select begin_style_rejection_send($1) b", [notice])).rows[0].b as BeginResult;
+    // The route's wiring, against the real database, with a mocked provider.
+    const realDeps = (cl: Client, send: SendFn) => ({
+      send,
+      begin: async (n: string) => {
+        try {
+          return { data: await begin(cl, n), error: null };
+        } catch (e) {
+          return { data: null, error: (e as Error).message };
+        }
+      },
+      record: async (n: string, o: string, pid: string | null, err: string | null) => {
+        try {
+          await record(cl, n, o, pid, err);
+          return { error: null };
+        } catch (e) {
+          return { error: (e as Error).message };
+        }
+      },
+      timeoutMs: 2000,
+    });
 
     // ── Privileges ──
     await customer("buyer");
@@ -272,6 +332,7 @@ async function database() {
     t("customer cannot update notices", (await failure(() => c.query("update style_rejection_notices set status = 'pending'"))) !== "" || (await c.query("update style_rejection_notices set status = 'pending'").catch(() => ({ rowCount: -1 }))).rowCount !== 1);
     t("customer cannot claim", (await failure(() => claim(c, s1))) !== "");
     t("customer cannot record", (await failure(() => record(c, "00000000-0000-0000-0000-000000000000", "accepted"))) !== "");
+    t("customer cannot begin a send", (await failure(() => begin(c, "00000000-0000-0000-0000-000000000000"))) !== "");
     t("customer cannot moderate", (await failure(() => moderate(c, s1, "rejected", "x"))) !== "");
     await asRoot(c);
     await c.query("reset role");
@@ -281,6 +342,7 @@ async function database() {
     t("admin without MFA (aal1) cannot moderate", (await failure(() => moderate(c, s1, "rejected", "x"))) !== "");
     t("admin without MFA (aal1) cannot claim", (await failure(() => claim(c, s1))) !== "");
     t("admin without MFA (aal1) cannot record", (await failure(() => record(c, "00000000-0000-0000-0000-000000000000", "accepted"))) !== "");
+    t("admin without MFA (aal1) cannot begin a send", (await failure(() => begin(c, "00000000-0000-0000-0000-000000000000"))) !== "");
     t("…and nothing changed", (await state(s1)).s.status === "pending" && (await state(s1)).n.length === 0);
 
     // ── A rejection with a reason → one intent ──
@@ -309,6 +371,7 @@ async function database() {
     t("second claim: in progress (interrupted or sending), no second send", k2.outcome === "in_progress");
     st = await state(s1);
     t("claimed: stamp still null (claimed ≠ accepted)", st.s.rejection_emailed_at === null && st.n[0].status === "claimed");
+    await begin(c, k1.notice_id!);
     await record(c, k1.notice_id!, "failed", null, "Resend 422");
     st = await state(s1);
     t("record failed: stamp null, failed", st.n[0].status === "failed" && st.s.rejection_emailed_at === null);
@@ -316,12 +379,14 @@ async function database() {
     await moderate(c, s1, "rejected", "Blurry");
     const k3 = await claim(c, s1);
     t("after a definite failure, the same rejection may claim again", k3.outcome === "claimed" && k3.attempt === 2);
+    await begin(c, k3.notice_id!);
     await record(c, k3.notice_id!, "accepted", "re_abc");
     st = await state(s1);
     t("record accepted: notice accepted, stamp set", st.n[0].status === "accepted" && st.n[0].accepted_at !== null && st.s.rejection_emailed_at !== null);
     await asAdmin(c, admin);
     t("accepted cannot be reclaimed", (await claim(c, s1)).outcome === "already_accepted");
-    t("accepted cannot be recorded again", /NOTICE_NOT_CLAIMED/.test(await failure(() => record(c, k3.notice_id!, "failed"))));
+    t("accepted cannot be recorded again", /NOTICE_NOT_SENDING/.test(await failure(() => record(c, k3.notice_id!, "failed"))));
+    t("accepted cannot begin again", /NOTICE_NOT_CLAIMED/.test(await failure(() => begin(c, k3.notice_id!))));
     await asRoot(c);
     t("even the database owner cannot reopen an accepted notice", /NOTICE_(TRANSITION|FINAL)/.test(await failure(() => c.query("update style_rejection_notices set status = 'claimed' where id = $1", [k3.notice_id]))));
     t("…or change its reason", /NOTICE_IMMUTABLE/.test(await failure(() => c.query("update style_rejection_notices set reason_snapshot = 'x' where id = $1", [k3.notice_id]))));
@@ -336,6 +401,7 @@ async function database() {
     await asAdmin(c, admin);
     await moderate(c, su, "rejected", "Not the piece");
     const ku = await claim(c, su);
+    await begin(c, ku.notice_id!);
     await record(c, ku.notice_id!, "uncertain", null, "timeout");
     await moderate(c, su, "rejected", "Not the piece");
     t("uncertain: never claimed again", (await claim(c, su)).outcome === "uncertain");
@@ -384,6 +450,7 @@ async function database() {
     await asAdmin(c, admin);
     const k4 = await claim(c, s1);
     t("round 2 is claimable", k4.outcome === "claimed" && k4.round === 2 && k4.reason === "Still blurry");
+    await begin(c, k4.notice_id!);
     await record(c, k4.notice_id!, "accepted", "re_2");
     t("round 2 accepted; round 1 still accepted", (await state(s1)).n.every((n) => n.status === "accepted"));
 
@@ -403,9 +470,10 @@ async function database() {
     t("re-rejecting after approval: a new round, the old intent stays superseded", st.s.rejection_round === 2 && st.n.length === 2 && st.n[0].status === "superseded" && st.n[1].status === "pending");
     await asAdmin(c, admin);
     const kp = await claim(c, sa);
+    await begin(c, kp.notice_id!); // handed to the provider
     await moderate(c, sa, "pending", null);
     st = await state(sa);
-    t("an in-flight (claimed) notice is left alone when it leaves rejected", st.n[1].status === "claimed");
+    t("an in-flight (sending) notice is left alone when it leaves rejected", st.n[1].status === "sending");
     await asAdmin(c, admin);
     await record(c, kp.notice_id!, "accepted", "re_late");
     st = await state(sa);
@@ -483,18 +551,19 @@ async function database() {
     await as(c, "other");
     t("queue: customers still cannot read it", (await failure(() => c.query("select admin_style_submissions()"))) !== "");
 
-    // ── Audit: withdrawal after a claim records the real outcome ──
+    // ── Audit: withdrawal after the email was handed over records the real outcome ──
     await customer("wl");
     const swl = await submission("wl");
     await asAdmin(c, admin);
     await moderate(c, swl, "rejected", "Blurry");
     const kwl = await claim(c, swl);
+    await begin(c, kwl.notice_id!);
     await as(c, "wl");
     await c.query("update style_submissions set withdrawn_at = now() where id = $1", [swl]);
     await asAdmin(c, admin);
     await record(c, kwl.notice_id!, "accepted", "re_wl");
     st = await state(swl);
-    t("withdrawal after claim: the provider's real answer is still recorded", st.n[0].status === "accepted" && st.s.rejection_emailed_at !== null);
+    t("withdrawal after hand-over: the provider's real answer is still recorded", st.n[0].status === "accepted" && st.s.rejection_emailed_at !== null);
     t("…and no further claim is possible", (await claim(c, swl)).outcome === "withdrawn");
 
     // ── Audit: resubmission after a refused email ──
@@ -503,6 +572,7 @@ async function database() {
     await asAdmin(c, admin);
     await moderate(c, srf, "rejected", "Blurry");
     const krf = await claim(c, srf);
+    await begin(c, krf.notice_id!);
     await record(c, krf.notice_id!, "failed", null, "Resend 422");
     await as(c, "rf");
     await c.query("select resubmit_style($1, null, null, null, 'instagram', 'https://www.instagram.com/p/again/', null, null)", [srf]);
@@ -520,9 +590,153 @@ async function database() {
     await asRoot(c);
     await c.query("delete from style_submissions where id = $1", [sdl]);
     await asAdmin(c, admin);
+    t("deleted after claim: begin finds nothing to send", (await begin(c, kdl.notice_id!)).send === false);
     t("deleted after claim: recording fails loudly, nothing invented", /NOTICE_NOT_FOUND/.test(await failure(() => record(c, kdl.notice_id!, "accepted", "re_dl"))));
     t("deleted: claim says not_found, nothing sent", (await claim(c, sdl)).outcome === "not_found");
     t("deleted: moderate_style answers false (route → 404)", (await moderate(c, sdl, "rejected", "Blurry")).rows[0].r === false);
+
+    // ══ Post-claim safety (TOCTOU): mocked provider, real database ══
+    const providerCalls: string[] = [];
+    const okProvider: SendFn = async (m) => {
+      providerCalls.push(m.to);
+      return { ok: true, id: "re_mock", error: null };
+    };
+    const fresh = async (key: string) => {
+      await customer(key);
+      const id = await submission(key);
+      await asAdmin(c, admin);
+      await moderate(c, id, "rejected", "Blurry");
+      return { id, k: await claim(c, id) };
+    };
+
+    // 1. Claim → customer withdraws → send begins.
+    {
+      const { id, k } = await fresh("t1");
+      await as(c2, "t1");
+      await c2.query("update style_submissions set withdrawn_at = now() where id = $1", [id]);
+      await asAdmin(c, admin);
+      const before = providerCalls.length;
+      const r = await sendClaimedRejection(k, realDeps(c, okProvider));
+      st = await state(id);
+      t("claim → withdraw → send: NOT sent", providerCalls.length === before && r.status === "skipped" && /withdrawn/.test(r.message));
+      t("…recorded as skipped (withdrawn), stamp null", st.n[0].status === "skipped" && st.s.rejection_emailed_at === null);
+      const after = (await rd.query("select last_error from style_rejection_notices where id = $1", [k.notice_id])).rows[0].last_error;
+      t("…with the reason kept", after === "skipped: withdrawn", after);
+      await asAdmin(c, admin);
+      t("…and it cannot be claimed again", (await claim(c, id)).outcome === "withdrawn");
+    }
+    // 2. Claim → customer resubmits → send begins.
+    {
+      const { id, k } = await fresh("t2");
+      await as(c2, "t2");
+      await c2.query("select resubmit_style($1, null, null, null, 'instagram', 'https://www.instagram.com/p/t2/', null, null)", [id]);
+      await asAdmin(c, admin);
+      const before = providerCalls.length;
+      const r = await sendClaimedRejection(k, realDeps(c, okProvider));
+      st = await state(id);
+      t("claim → resubmit → send: NOT sent", providerCalls.length === before && r.status === "skipped" && /no longer turned down/.test(r.message));
+      t("…notice skipped (not superseded: it had been claimed)", st.n[0].status === "skipped" && st.s.status === "pending");
+    }
+    // 3. Claim → admin moves it back to pending → send begins.
+    {
+      const { id, k } = await fresh("t3");
+      await asAdmin(c2, admin);
+      await moderate(c2, id, "pending", null);
+      const before = providerCalls.length;
+      const r = await sendClaimedRejection(k, realDeps(c, okProvider));
+      t("claim → back to pending → send: NOT sent", providerCalls.length === before && r.status === "skipped" && (await state(id)).n[0].status === "skipped");
+    }
+    // 3b. Claim → pending → rejected again (a new round) → the OLD claim begins.
+    {
+      const { id, k } = await fresh("t3b");
+      await asAdmin(c2, admin);
+      await moderate(c2, id, "pending", null);
+      await moderate(c2, id, "rejected", "Different now");
+      const before = providerCalls.length;
+      const r = await sendClaimedRejection(k, realDeps(c, okProvider));
+      st = await state(id);
+      t("stale claim from an earlier round: NOT sent", providerCalls.length === before && r.status === "skipped" && st.n[0].status === "skipped");
+      t("…the new round's intent is untouched and claimable", st.n[1].status === "pending" && (await claim(c, id)).outcome === "claimed");
+    }
+    // 4. Claim → handed over → customer withdraws / resubmits → provider answers.
+    for (const [label, change, expectStamp] of [
+      ["withdraws", "withdraw", true],
+      ["resubmits", "resubmit", false],
+    ] as const) {
+      const { id, k } = await fresh(`t4${change}`);
+      const duringSend: SendFn = async (m) => {
+        providerCalls.push(m.to);
+        await as(c2, `t4${change}`);
+        if (change === "withdraw") await c2.query("update style_submissions set withdrawn_at = now() where id = $1", [id]);
+        else await c2.query("select resubmit_style($1, null, null, null, 'instagram', 'https://www.instagram.com/p/x/', null, null)", [id]);
+        return { ok: true, id: "re_during", error: null };
+      };
+      const r = await sendClaimedRejection(k, realDeps(c, duringSend));
+      st = await state(id);
+      t(`handed over → customer ${label} → accepted: recorded truthfully as accepted`, r.status === "accepted" && st.n[0].status === "accepted");
+      t(`…stamp ${expectStamp ? "set (still rejected, same round)" : "NOT set (no longer rejected)"}`, (st.s.rejection_emailed_at !== null) === expectStamp);
+    }
+    {
+      const { id, k } = await fresh("t4u");
+      const duringSend: SendFn = async () => {
+        await as(c2, "t4u");
+        await c2.query("update style_submissions set withdrawn_at = now() where id = $1", [id]);
+        return { ok: false, id: null, error: "Resend 503" };
+      };
+      const r = await sendClaimedRejection(k, realDeps(c, duringSend));
+      t("handed over → withdraws → 503: stays UNCERTAIN, never turned into failed", r.status === "uncertain" && (await state(id)).n[0].status === "uncertain");
+    }
+    {
+      const { id, k } = await fresh("t4t");
+      const r = await sendClaimedRejection(k, { ...realDeps(c, () => new Promise(() => {})), timeoutMs: 50 });
+      t("handed over → timeout: uncertain", r.status === "uncertain" && (await state(id)).n[0].status === "uncertain");
+    }
+    // One claim can begin at most one send.
+    {
+      const { k } = await fresh("t5");
+      await asAdmin(c, admin);
+      t("begin once: sending", (await begin(c, k.notice_id!)).send === true);
+      t("begin twice: refused", /NOTICE_NOT_CLAIMED/.test(await failure(() => begin(c, k.notice_id!))));
+      const k5b = (await fresh("t5b")).k;
+      t("record needs a begun send (claimed alone refused)", /NOTICE_NOT_SENDING/.test(await failure(() => record(c, k5b.notice_id!, "accepted"))));
+      await asRoot(c);
+      t("owner cannot move sending back to claimed", /NOTICE_TRANSITION/.test(await failure(() => c.query("update style_rejection_notices set status = 'claimed' where id = $1", [k.notice_id]))));
+      await asAdmin(c, admin);
+    }
+    // Concurrency at the last check (two sessions, real row locks).
+    {
+      // a) The withdrawal commits first: begin waits for it, then skips.
+      const { id, k } = await fresh("t6a");
+      await as(c2, "t6a");
+      await c2.query("begin");
+      await c2.query("update style_submissions set withdrawn_at = now() where id = $1", [id]);
+      await asAdmin(c, admin);
+      const pending = begin(c, k.notice_id!);
+      await new Promise((r) => setTimeout(r, 150));
+      await c2.query("commit");
+      t("withdrawal commits before the last check: begin waits, then skips", (await pending).send === false);
+    }
+    {
+      // b) The last check commits first: the withdrawal waits; the send goes
+      //    ahead. This is the residual race, shown rather than hidden.
+      const { id, k } = await fresh("t6b");
+      await asAdmin(c, admin);
+      await c.query("begin");
+      const b = await begin(c, k.notice_id!);
+      await as(c2, "t6b");
+      const withdrawal = c2.query("update style_submissions set withdrawn_at = now() where id = $1", [id]);
+      await new Promise((r) => setTimeout(r, 150));
+      await c.query("commit");
+      await withdrawal;
+      t("last check commits first: it was eligible then, so the send proceeds (residual race)", b.send === true && (await state(id)).n[0].status === "sending");
+    }
+    // Queue labels for the new states.
+    await asAdmin(c, admin);
+    {
+      const qq = (await c.query("select admin_style_submissions() q")).rows[0].q as Array<Record<string, unknown>>;
+      const statuses = new Set(qq.map((r) => r.rejection_notice_status));
+      t("queue: skipped and sending visible to admins", statuses.has("skipped") && statuses.has("sending"));
+    }
 
     // ── Account deletion ──
     await asRoot(c);

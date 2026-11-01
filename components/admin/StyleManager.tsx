@@ -50,7 +50,7 @@ interface Submission {
   customer_name: string | null;
   admin_notified_at: string | null;
   /** The current rejection round's notice (0076), or null when there is none. */
-  rejection_notice_status?: "pending" | "claimed" | "accepted" | "failed" | "uncertain" | null;
+  rejection_notice_status?: "pending" | "claimed" | "sending" | "skipped" | "accepted" | "failed" | "uncertain" | null;
   rejection_notice_claimed_at?: string | null;
 }
 
@@ -65,7 +65,11 @@ function rejectionEmailLabel(row: Submission): { text: string; alert: boolean } 
   }
   switch (row.rejection_notice_status) {
     case "claimed":
-      return { text: " · EMAIL OUTCOME UNKNOWN — an attempt did not report back. Check before contacting the customer; it will not be resent automatically.", alert: true };
+      return { text: " · EMAIL NOT HANDED OVER — an attempt stopped before reaching the email provider (or is running now). It will not be resent automatically.", alert: true };
+    case "sending":
+      return { text: " · EMAIL OUTCOME UNKNOWN — handed to the provider but no result was recorded. Check before contacting the customer; it will not be resent automatically.", alert: true };
+    case "skipped":
+      return { text: " · NOT EMAILED — no longer eligible when it came to send", alert: false };
     case "uncertain":
       return { text: " · EMAIL OUTCOME UNKNOWN — the provider gave no clear answer. Check before contacting the customer; it will not be resent automatically.", alert: true };
     case "failed":
