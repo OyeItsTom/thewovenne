@@ -331,14 +331,17 @@ t("customerVisibleText: blank → null", customerVisibleText(" \n\t ") === null)
   try {
     execFileSync(
       "git",
+      // Only files no other email PR owns. lib/email.ts (#220, #221),
+      // lib/emails/layout.ts and OrdersManager.tsx (#221) legitimately change
+      // when the PRs are combined, so they are not listed here; that E5 does
+      // not touch them is a property of this PR's file list, checked at review.
       ["diff", "--quiet", "main", "--", "lib/creditNote.ts", "components/invoice", "lib/invoice.ts",
-        "components/admin/OrdersManager.tsx", "lib/email.ts", "lib/emails/layout.ts",
         "lib/sameOrigin.ts", "lib/stylePhotoStorage.ts", "app/api/style"],
       { cwd: root }
     );
-    t("credit notes, PDFs, orders screen, email, layout, storage unchanged from main", true);
+    t("credit notes, PDFs, invoices, same-origin helper, style storage and style routes unchanged from main", true);
   } catch {
-    t("credit notes, PDFs, orders screen, email, layout, storage unchanged from main", false);
+    t("credit notes, PDFs, invoices, same-origin helper, style storage and style routes unchanged from main", false);
   }
   // Existing migrations are never edited; Stage B adds exactly one new file.
   const migDiff = execFileSync("git", ["diff", "--name-status", "main", "--", "supabase/migrations"], { cwd: root, encoding: "utf8" }).trim();

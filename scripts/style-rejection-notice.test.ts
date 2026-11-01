@@ -201,9 +201,17 @@ async function unit() {
   const ui = read("components/admin/StyleManager.tsx");
   t("screen: shows the route's message", ui.includes("data.message ??"));
   t("screen: no 'has been told' claim", !ui.includes("the customer has been told why") && !ui.includes('" · customer told"'));
-  t("screen: sending/uncertain shown as outcome unknown", /case "sending":[\s\S]*EMAIL OUTCOME UNKNOWN/.test(ui) && /case "uncertain":[\s\S]*EMAIL OUTCOME UNKNOWN/.test(ui) && /will not be resent automatically/.test(ui));
-  t("screen: claimed shown as not handed over; skipped as not emailed", /case "claimed":[\s\S]*EMAIL NOT HANDED OVER/.test(ui) && /case "skipped":[\s\S]*NOT EMAILED/.test(ui));
-  t("screen: accepted is 'accepted by the provider', not 'told'", ui.includes("email accepted by the provider"));
+  // Each state's label, read from its own case so one cannot borrow another's.
+  const label = (state: string) => (ui.match(new RegExp(`case "${state}":\\s*return \\{ text: "([^"]*)"`)) ?? [])[1] ?? "";
+  t("screen: claimed = send not begun", /SEND NOT BEGUN/.test(label("claimed")) && /never started/.test(label("claimed")), label("claimed"));
+  t("screen: sending = authorised, outcome not recorded, never 'handed to the provider'",
+    /SEND AUTHORISED, OUTCOME NOT RECORDED/.test(label("sending")) && /may have been interrupted before or after reaching/.test(label("sending"))
+    && !/handed (to|over)|reached the provider|was sent|accepted/i.test(label("sending")), label("sending"));
+  t("screen: uncertain = provider response uncertain", /PROVIDER RESPONSE UNCERTAIN/.test(label("uncertain")) && /was called/.test(label("uncertain")), label("uncertain"));
+  t("screen: skipped = deliberately skipped, nothing sent", /DELIBERATELY SKIPPED/.test(label("skipped")) && /nothing was sent/.test(label("skipped")), label("skipped"));
+  t("screen: in-doubt states never resent automatically", ["claimed", "sending", "uncertain"].every((x) => /will not be resent automatically/.test(label(x))));
+  t("screen: no state but accepted claims acceptance", ["claimed", "sending", "uncertain", "skipped", "failed", "pending"].every((x) => !/accepted/i.test(label(x))));
+  t("screen: accepted = provider acceptance confirmed, not delivery", ui.includes("email accepted by the provider (acceptance confirmed; not proof of delivery)"));
   t("screen: failed and pending distinguished", ui.includes("EMAIL FAILED") && ui.includes("CUSTOMER NOT TOLD yet"));
   const mig = read("supabase/migrations/0076_style_rejection_notices.sql");
   t("migration: no delete of rows, no drop of columns", !/\bdelete from\b/i.test(mig.replace(/^--.*$/gm, "")) && !/drop column/i.test(mig));

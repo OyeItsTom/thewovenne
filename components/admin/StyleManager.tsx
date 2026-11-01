@@ -56,22 +56,29 @@ interface Submission {
 
 /**
  * What the queue says about the customer email for a rejection with a reason.
- * "claimed" and "uncertain" both mean nobody knows whether it was sent: they
- * are shown as needing investigation and are never resent automatically.
+ * Each state says only what the database knows:
+ *   claimed    a claim exists; the send was never begun (nothing went out)
+ *   sending    the send was authorised; it may or may not have reached the
+ *              provider (an interruption can stop it before the call), and no
+ *              outcome was recorded
+ *   uncertain  the provider was called and its response was unclear
+ *   accepted   the provider confirmed it accepted the email (not delivery)
+ *   skipped    deliberately not sent: no longer eligible at the last check
+ * None of these is ever resent automatically.
  */
 function rejectionEmailLabel(row: Submission): { text: string; alert: boolean } {
   if (row.rejection_emailed_at || row.rejection_notice_status === "accepted") {
-    return { text: " · email accepted by the provider", alert: false };
+    return { text: " · email accepted by the provider (acceptance confirmed; not proof of delivery)", alert: false };
   }
   switch (row.rejection_notice_status) {
     case "claimed":
-      return { text: " · EMAIL NOT HANDED OVER — an attempt stopped before reaching the email provider (or is running now). It will not be resent automatically.", alert: true };
+      return { text: " · SEND NOT BEGUN — a claim was created but the email was never started (or is starting now). It will not be resent automatically.", alert: true };
     case "sending":
-      return { text: " · EMAIL OUTCOME UNKNOWN — handed to the provider but no result was recorded. Check before contacting the customer; it will not be resent automatically.", alert: true };
+      return { text: " · SEND AUTHORISED, OUTCOME NOT RECORDED — the attempt may have been interrupted before or after reaching the email provider. Check before contacting the customer; it will not be resent automatically.", alert: true };
     case "skipped":
-      return { text: " · NOT EMAILED — no longer eligible when it came to send", alert: false };
+      return { text: " · DELIBERATELY SKIPPED — no longer eligible at the final check (withdrawn, resubmitted or moved); nothing was sent", alert: false };
     case "uncertain":
-      return { text: " · EMAIL OUTCOME UNKNOWN — the provider gave no clear answer. Check before contacting the customer; it will not be resent automatically.", alert: true };
+      return { text: " · PROVIDER RESPONSE UNCERTAIN — the email provider was called but gave no clear answer. Check before contacting the customer; it will not be resent automatically.", alert: true };
     case "failed":
       return { text: " · EMAIL FAILED — the provider refused it; nothing was sent", alert: true };
     case "pending":
