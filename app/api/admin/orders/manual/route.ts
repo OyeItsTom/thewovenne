@@ -1,4 +1,5 @@
 import { adminApiGate } from "@/lib/adminApiGate";
+import { isSameOrigin } from "@/lib/sameOrigin";
 import { NextRequest, NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { createRSCClient } from "@/lib/supabaseRSC";
@@ -81,6 +82,11 @@ interface ManualOrderRequest {
 export async function POST(request: NextRequest) {
   const ended = await adminApiGate(request);
   if (ended) return ended;
+
+  // Only our own admin pages send this: a cross-site form or a request with no
+  // (or a malformed) Origin is refused before anything is read, written or
+  // emailed. Same order as the E3 dispatch route.
+  if (!isSameOrigin(request)) return NextResponse.json({ ok: false, error: "Not allowed." }, { status: 403 });
 
   const session = createRSCClient();
   const { data: isAdmin } = await session.rpc("is_admin");

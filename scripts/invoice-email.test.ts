@@ -25,6 +25,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { renderToBuffer } from "@react-pdf/renderer";
+import { NextRequest } from "next/server";
+import { isSameOrigin } from "../lib/sameOrigin";
 import InvoiceDocument from "../components/invoice/InvoiceDocument";
 import { buildInvoice, inr, type InvoiceData } from "../lib/invoice";
 import { EMAIL_ORIGIN, EMBLEM_URL, escapeHtml, footerText } from "../lib/emails/layout";
@@ -482,6 +484,49 @@ const row = (o: Partial<Parameters<typeof resendDecision>[0]> = {}) => ({
   const list = read("components/admin/InvoiceManager.tsx");
   t("invoices: success label is not 'Sent'", !list.includes('"Sent"') && list.includes('"Accepted"'));
   t("invoices: confirm mentions cancellation", list.includes("The order is cancelled: the email will say so"));
+}
+
+// ── 8b. Same-origin (PR #222 security correction) ──────────────────────────
+
+{
+  const req = (url: string, origin?: string | null) =>
+    new NextRequest(url, { method: "POST", headers: origin === undefined || origin === null ? {} : { origin } });
+  const RESEND = "https://www.thewovenne.com/api/admin/invoice/resend";
+  const MANUAL = "https://www.thewovenne.com/api/admin/orders/manual";
+  for (const url of [RESEND, MANUAL]) {
+    const name = url.endsWith("resend") ? "resend" : "manual";
+    t(`${name}: same-origin admin page permitted`, isSameOrigin(req(url, "https://www.thewovenne.com")));
+    t(`${name}: cross-origin refused`, !isSameOrigin(req(url, "https://evil.example")));
+    t(`${name}: look-alike host refused`, !isSameOrigin(req(url, "https://www.thewovenne.com.evil.example")));
+    t(`${name}: apex vs www refused`, !isSameOrigin(req(url, "https://thewovenne.com")));
+    t(`${name}: absent Origin refused`, !isSameOrigin(req(url)));
+    t(`${name}: "null" Origin refused`, !isSameOrigin(req(url, "null")));
+    t(`${name}: malformed Origin refused`, !isSameOrigin(req(url, "not a url")));
+    t(`${name}: empty Origin refused`, !isSameOrigin(req(url, "")));
+  }
+  t("local dev same port permitted", isSameOrigin(req("http://localhost:3000/api/admin/invoice/resend", "http://localhost:3000")));
+  t("local dev other port refused", !isSameOrigin(req("http://localhost:3000/api/admin/invoice/resend", "http://localhost:3001")));
+  t("Vercel preview host permitted on its own host", isSameOrigin(req("https://thewovenne-git-x.vercel.app/api/admin/orders/manual", "https://thewovenne-git-x.vercel.app")));
+
+  // Order in both routes: gate → same-origin → is_admin → anything else.
+  for (const [name, file, firsts] of [
+    ["resend", "app/api/admin/invoice/resend/route.ts", ["request.json()", '.from("orders")', '.from("credit_notes")', "deliverInvoiceEmail("]],
+    ["manual", "app/api/admin/orders/manual/route.ts", ["request.json()", "createServiceClient()", '.insert(', 'rpc("reserve_stock"', 'rpc("assign_invoice_number"', "deliverInvoiceEmail("]],
+  ] as const) {
+    const src = code(read(file));
+    const gate = src.indexOf("await adminApiGate(request)");
+    const origin = src.indexOf("if (!isSameOrigin(request)) return NextResponse.json({ ok: false, error: \"Not allowed.\" }, { status: 403 })");
+    const admin = src.indexOf('rpc("is_admin")');
+    t(`${name}: imports the shared helper`, src.includes('import { isSameOrigin } from "@/lib/sameOrigin"'));
+    t(`${name}: same-origin check present, 403`, origin > 0, String(origin));
+    t(`${name}: adminApiGate before same-origin`, gate > 0 && gate < origin);
+    t(`${name}: same-origin before is_admin`, origin < admin);
+    t(`${name}: exactly one same-origin check`, (src.match(/isSameOrigin\(request\)/g) ?? []).length === 1);
+    for (const f of firsts) {
+      const at = src.indexOf(f);
+      t(`${name}: ${f} only after same-origin and is_admin`, at > admin && at > origin, String(at));
+    }
+  }
 }
 
 // ── 9. PDF regression ──────────────────────────────────────────────────────
