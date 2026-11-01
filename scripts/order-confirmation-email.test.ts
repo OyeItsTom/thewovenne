@@ -10,10 +10,9 @@
  *      fixed account-orders path;
  *   5. accountCanViewOrder: confirmed Auth email must match; profiles alone is
  *      not trusted; errors answer false;
- *   6. sendOrderConfirmation: same query, recipient and subject; no email, no
- *      send; never throws; one call per invocation (settleOrder's
- *      confirmation_sent_at claim is what makes it once per order, covered by
- *      razorpay-verify / razorpay-webhook).
+ *   6. renderOrderConfirmation: reads the stored order by id, checks the
+ *      button against the frozen recipient, never throws. Sending, retries
+ *      and the delivery record: order-confirmation-delivery.test.ts (R1a).
  *
  *   npx tsx scripts/order-confirmation-email.test.ts
  *
@@ -27,7 +26,7 @@ import {
   orderConfirmationText,
   type OrderEmailData,
 } from "../lib/emails/orderConfirmation";
-import { accountCanViewOrder, sendOrderConfirmation } from "../lib/sendOrderConfirmation";
+import { accountCanViewOrder, renderOrderConfirmation } from "../lib/sendOrderConfirmation";
 import { EMBLEM_URL, EMAIL_ORIGIN } from "../lib/emails/layout";
 import { formatINR } from "../lib/utils";
 
@@ -358,13 +357,14 @@ async function eligibility() {
   t("empty email → guest without lookup", !(await accountCanViewOrder(f.client, "   ")) && f.log.profilePattern === undefined);
 }
 
-// ── 6. sendOrderConfirmation ───────────────────────────────────────────────
-type Sent = { to: string; subject: string; html: string; text: string };
-async function sending() {
-  console.log("6. Sending");
+// ── 6. renderOrderConfirmation ─────────────────────────────────────────────
+// Sending, retries and the delivery record are R1a's (order-confirmation-
+// delivery.test.ts). Here: the render step reads the stored order, checks the
+// button against the frozen recipient, and never throws.
+async function rendering() {
+  console.log("6. Rendering");
   const order = {
     id: "1a2b3c4d-0000-4000-8000-000000000000",
-    customer_email: "ananya@example.com",
     customer_name: "Ananya Rao",
     items: base.items,
     total_inr: 6100,
@@ -373,23 +373,21 @@ async function sending() {
   const run = async (
     opts: Parameters<typeof fakeSupabase>[0],
     canView: boolean | "throw" | "hang" | "slow-true" = false,
-    sendOk = true,
-    deadlineMs = 50
+    deadlineMs = 50,
+    recipient = "ananya@example.com"
   ) => {
     const f = fakeSupabase(opts);
-    const sent: Sent[] = [];
     let threw = false;
+    const seen: string[] = [];
+    let r: Awaited<ReturnType<typeof renderOrderConfirmation>> | null = null;
     try {
-      await sendOrderConfirmation("order_RZP123", {
+      r = await renderOrderConfirmation(order.id, recipient, {
         supabase: f.client,
-        send: async (m) => {
-          sent.push(m as Sent);
-          return sendOk ? { ok: true, id: "re_1", error: null } : { ok: false, id: null, error: "Resend 500" };
-        },
-        canViewOrder: async () => {
+        canViewOrder: async (_s, email) => {
+          seen.push(email);
           if (canView === "throw") throw new Error("x");
           if (canView === "hang") return new Promise<boolean>(() => {});
-          if (canView === "slow-true") return new Promise<boolean>((r) => setTimeout(() => r(true), 200));
+          if (canView === "slow-true") return new Promise<boolean>((res) => setTimeout(() => res(true), 200));
           return canView;
         },
         eligibilityDeadlineMs: deadlineMs,
@@ -397,62 +395,61 @@ async function sending() {
     } catch {
       threw = true;
     }
-    return { sent, threw, log: f.log };
+    return { r, threw, log: f.log, seen };
   };
+  const html = (x: Awaited<ReturnType<typeof run>>) => (x.r && x.r.ok ? x.r.html : "");
+  const text = (x: Awaited<ReturnType<typeof run>>) => (x.r && x.r.ok ? x.r.text : "");
 
   let r = await run({ order }, false);
-  t("loads by razorpay_order_id", r.log.orderEq?.[0] === "razorpay_order_id" && r.log.orderEq?.[1] === "order_RZP123");
+  t("loads the order by its id", r.log.orderEq?.[0] === "id" && r.log.orderEq?.[1] === order.id);
   t(
-    "reads the same columns plus the stored adjustments",
+    "reads the content columns and the stored adjustments (not the email: the recipient is frozen)",
     r.log.select ===
-      "id, customer_email, customer_name, items, total_inr, shipping_address, shipping_cost_inr, coupon_code, coupon_discount_inr, loyalty_discount_inr"
+      "id, customer_name, items, total_inr, shipping_address, shipping_cost_inr, coupon_code, coupon_discount_inr, loyalty_discount_inr"
   );
-  t("one send", r.sent.length === 1);
-  t("to the order's email", r.sent[0]?.to === "ananya@example.com");
-  t("subject unchanged", r.sent[0]?.subject === "Your THE WOVENNE order — 1A2B3C4D");
-  t("guest: no button", !/View your order/.test(r.sent[0]?.html ?? ""));
-  t("html and text both sent", !!r.sent[0]?.html.startsWith("<!doctype html>") && !!r.sent[0]?.text.includes("Order reference: 1A2B3C4D"));
+  t("subject unchanged", !!r.r?.ok && r.r.subject === "Your THE WOVENNE order — 1A2B3C4D");
+  t("guest: no button", r.r?.ok === true && !/View your order/.test(html(r)));
+  t("html and text both rendered", html(r).startsWith("<!doctype html>") && text(r).includes("Order reference: 1A2B3C4D"));
+  t("eligibility is checked against the frozen recipient", r.seen[0] === "ananya@example.com");
 
   r = await run({ order }, true);
-  t("eligible: button", /View your order<\/a>/.test(r.sent[0]?.html ?? ""));
+  t("eligible: button", /View your order<\/a>/.test(html(r)));
 
   r = await run({ order }, "throw");
-  t("eligibility throw: still sends, no button, no throw", r.sent.length === 1 && !/View your order/.test(r.sent[0].html) && !r.threw);
+  t("eligibility throw: renders, no button, no throw", r.r?.ok === true && !/View your order/.test(html(r)) && !r.threw);
 
   let started = Date.now();
   r = await run({ order }, "hang");
-  t("eligibility hangs: sends without button once the deadline passes", r.sent.length === 1 && !/View your order/.test(r.sent[0].html) && !r.threw && Date.now() - started < 1000);
+  t("eligibility hangs: renders without button once the deadline passes", r.r?.ok === true && !/View your order/.test(html(r)) && Date.now() - started < 1000);
 
   r = await run({ order }, "slow-true");
-  t("eligibility slower than the deadline: no button (late answer ignored)", r.sent.length === 1 && !/View your order/.test(r.sent[0].html));
+  t("eligibility slower than the deadline: no button (late answer ignored)", r.r?.ok === true && !/View your order/.test(html(r)));
 
   started = Date.now();
-  r = await run({ order }, true, true, 1500);
-  t("fast eligibility within a real deadline: button, no waiting for the timer", /View your order<\/a>/.test(r.sent[0]?.html ?? "") && Date.now() - started < 500);
+  r = await run({ order }, true, 1500);
+  t("fast eligibility within a real deadline: button, no waiting for the timer", /View your order<\/a>/.test(html(r)) && Date.now() - started < 500);
 
   r = await run({ order: { ...order, total_inr: null } });
-  t("null stored total: no Total paid, never ₹0", r.sent.length === 1 && !r.sent[0].text.includes("Total paid") && !r.sent[0].text.includes("₹0"));
+  t("null stored total: no Total paid, never ₹0", r.r?.ok === true && !text(r).includes("Total paid") && !text(r).includes("₹0"));
 
   r = await run({ order: { ...order, items: [{ name: "Linen Kurta", size: "M", quantity: 1, price_inr: 2000 }], total_inr: 1850, shipping_cost_inr: 100, coupon_code: "WELCOME10", coupon_discount_inr: 200, loyalty_discount_inr: 50 } });
-  t("stored adjustments reach the email as a breakdown", r.sent[0]?.text.includes(`Subtotal: ${formatINR(2000)}\nDiscount (WELCOME10): −${formatINR(200)}\nLoyalty points: −${formatINR(50)}\nDelivery: ${formatINR(100)}\nTotal paid: ${formatINR(1850)}`));
-
-  r = await run({ order: { ...order, customer_email: null } }, true);
-  t("no email: nothing sent", r.sent.length === 0 && !r.threw);
+  t("stored adjustments reach the email as a breakdown", text(r).includes(`Subtotal: ${formatINR(2000)}\nDiscount (WELCOME10): −${formatINR(200)}\nLoyalty points: −${formatINR(50)}\nDelivery: ${formatINR(100)}\nTotal paid: ${formatINR(1850)}`));
 
   r = await run({ order: null });
-  t("no order row: nothing sent, no throw", r.sent.length === 0 && !r.threw);
+  t("no order row: not rendered, not retryable, no throw", r.r?.ok === false && r.r.retryable === false && r.r.reason === "order_missing" && !r.threw);
 
   r = await run({ orderError: true });
-  t("load error: nothing sent, no throw", r.sent.length === 0 && !r.threw);
-
-  r = await run({ order }, false, false);
-  t("send failure: no throw", r.sent.length === 1 && !r.threw);
+  t("load error: not rendered, retryable (the order is fine; the read failed)", r.r?.ok === false && r.r.retryable === true && r.r.reason === "order_load_failed");
 
   r = await run({ order: { ...order, customer_name: null, items: null, total_inr: null, shipping_address: null } });
-  t("sparse order: sends with Hello, and no crash", r.sent.length === 1 && r.sent[0].text.startsWith("Hello,") && !/NaN|undefined/.test(r.sent[0].html + r.sent[0].text));
+  t("sparse order: renders with Hello, and no crash", r.r?.ok === true && text(r).startsWith("Hello,") && !/NaN|undefined/.test(html(r) + text(r)));
 
   r = await run({ order: { ...order, customer_name: `<script>x</script>` } });
-  t("hostile stored name: escaped in what is sent", !/<script>x/.test(r.sent[0]?.html ?? ""));
+  t("hostile stored name: escaped in what is rendered", r.r?.ok === true && !/<script>x/.test(html(r)));
+
+  const throwing = { from() { throw new Error("client exploded"); } } as unknown as Parameters<typeof accountCanViewOrder>[0];
+  const boom = await renderOrderConfirmation(order.id, "a@b.c", { supabase: throwing });
+  t("a throwing client: render_failed, no throw", boom.ok === false && boom.reason === "render_failed");
 }
 
 // A send that never finishes would otherwise let Node exit quietly with no
@@ -464,7 +461,7 @@ const watchdog = setTimeout(() => {
 
 (async () => {
   await eligibility();
-  await sending();
+  await rendering();
   clearTimeout(watchdog);
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

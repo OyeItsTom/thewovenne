@@ -250,7 +250,18 @@ const uuid = () => crypto.randomUUID();
     /createSignedUrls\(paths, 600\)/.test(manager) && /src=\{previews\[row\.photo_path\]\}[\s\S]{0,200}unoptimized/.test(manager));
   t("opening the admin queue runs the backstop sweep", /fetch\("\/api\/admin\/style\/sweep", \{ method: "POST" \}\)/.test(manager));
   t("the old browser cleanup route is gone", !fs.existsSync("app/api/style/cleanup"));
-  t("still no Vercel cron (the project keeps none)", !fs.existsSync("vercel.json") && !fs.existsSync("app/api/cron"));
+  // Style-photo clean-up has no cron: the backstop runs when the admin queue
+  // opens (above). Other jobs may have one (the order-confirmation recovery
+  // worker, R1c-min, at app/api/cron/order-confirmations).
+  const styleCron = (() => {
+    const dir = "app/api/cron";
+    const files = fs.existsSync(dir) ? (fs.readdirSync(dir, { recursive: true }) as string[]).filter((f) => f.endsWith(".ts")) : [];
+    return (
+      (fs.existsSync("vercel.json") && /style|photo/i.test(fs.readFileSync("vercel.json", "utf8"))) ||
+      files.some((f) => /style|photo/i.test(f) || /style_photo|style-gallery|styleSweep/i.test(fs.readFileSync(`${dir}/${f}`, "utf8")))
+    );
+  })();
+  t("still no Vercel cron for style photos (the backstop is the admin queue)", !styleCron);
   const card = read("components/style/StyleCard.tsx");
   const config = read("next.config.mjs");
   t("the gallery serves the public copy UNOPTIMISED (never in the optimizer's 31-day cache)",

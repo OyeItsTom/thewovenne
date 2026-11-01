@@ -39,7 +39,15 @@ export interface World {
   awards: Set<string>;
   couponUses: string[];
   invoiceCalls: number;
+  /** Emails sent (by razorpay order id): one per delivery row, as the lease and key make it. */
   emails: string[];
+  /** order_email_deliveries (0074), modelled: order id → delivery id. */
+  deliveries: Map<string, string>;
+  /** Every enqueue_order_confirmation call, and every attempt made. */
+  enqueueCalls: string[];
+  attempts: string[];
+  /** Set to make enqueue_order_confirmation fail as if 0074 were not applied. */
+  enqueueMissing: boolean;
   updates: { patch: Row; filters: string }[];
   inserts: Row[];
   gatewayDown: boolean;
@@ -83,6 +91,10 @@ export function makeWorld(opts: {
     couponUses: [],
     invoiceCalls: 0,
     emails: [],
+    deliveries: new Map(),
+    enqueueCalls: [],
+    attempts: [],
+    enqueueMissing: false,
     updates: [],
     inserts: [],
     gatewayDown: Boolean(opts.gatewayDown),
@@ -236,6 +248,23 @@ export function makeWorld(opts: {
         if (order && !order.invoice_number) order.invoice_number = `WOV-2026-000${world.invoiceCalls}`;
         return { data: order?.invoice_number ?? null, error: null };
       }
+      case "enqueue_order_confirmation": {
+        // 0074: one transaction — claim confirmation_sent_at (paid, unclaimed)
+        // and create the row; otherwise return the existing row, or none.
+        const orderId = args.p_order_id as string;
+        world.enqueueCalls.push(orderId);
+        if (world.enqueueMissing) {
+          return { data: null, error: { code: "PGRST202", message: "Could not find the function public.enqueue_order_confirmation" } };
+        }
+        const order = world.orders.get(orderId);
+        if (order && order.payment_status === "paid" && order.confirmation_sent_at === null) {
+          order.confirmation_sent_at = new Date().toISOString();
+          const id = `dlv-${orderId}`;
+          world.deliveries.set(orderId, id);
+          return { data: [{ delivery_id: id, created: true }], error: null };
+        }
+        return { data: [{ delivery_id: world.deliveries.get(orderId) ?? null, created: false }], error: null };
+      }
       default:
         throw new Error(`unexpected rpc ${fn}`);
     }
@@ -269,9 +298,15 @@ export function makeWorld(opts: {
     gateway,
     // settlePoints is deliberately NOT injected: the real settleLoyalty runs
     // against this fake, so its reading of the redemption guard is under test.
-    sendConfirmation: (async (id: string) => {
-      world.emails.push(id);
-    }) as unknown as SettlementDeps["sendConfirmation"],
+    // One attempt per settlement call. The lease and the idempotency key mean a
+    // delivery row yields at most one email (scripts/order-confirmation-delivery
+    // proves that against real Postgres); modelled here as "first attempt sends".
+    attemptConfirmation: async (deliveryId: string) => {
+      world.attempts.push(deliveryId);
+      const orderId = [...world.deliveries].find(([, d]) => d === deliveryId)?.[0];
+      const rzp = orderId ? world.orders.get(orderId)?.razorpay_order_id : null;
+      if (rzp && world.attempts.filter((a) => a === deliveryId).length === 1) world.emails.push(rzp);
+    },
   };
 
   return { world, deps };

@@ -43,7 +43,17 @@ const read = (p: string) => fs.readFileSync(p, "utf8");
     !/\b(insert into|update|delete from)\s+public\.analytics/i.test(ops) && ops.includes("analytics_rollup_day(") && ops.includes("analytics_nightly()") && ops.includes("analytics_reconcile("));
   t("the ops script prints IST dates as text (no local-time shift) and quotes the day alias",
     ops.includes("analytics_day_of(now())::text today_ist") && ops.includes("max(day)::text") && ops.includes("::text as day,"));
-  t("no Vercel cron, no new public endpoint for the job", !fs.existsSync("vercel.json") && !fs.existsSync("app/api/cron"));
+  // The ANALYTICS job runs in pg_cron (0070): no Vercel cron and no HTTP
+  // endpoint for it. Other jobs may have their own (the order-confirmation
+  // recovery worker, R1c-min, lives at app/api/cron/order-confirmations).
+  const cronDir = "app/api/cron";
+  const cronFiles = fs.existsSync(cronDir)
+    ? (fs.readdirSync(cronDir, { recursive: true }) as string[]).filter((f) => f.endsWith(".ts"))
+    : [];
+  t("no Vercel cron, no new public endpoint for the job",
+    !(fs.existsSync("vercel.json") && /analytic/i.test(fs.readFileSync("vercel.json", "utf8"))) &&
+      !cronFiles.some((f) => /analytic/i.test(f) || /analytic/i.test(fs.readFileSync(`${cronDir}/${f}`, "utf8"))) &&
+      !fs.readdirSync("app/api").some((d) => /analytic/i.test(d)));
 
   const engine = await startEngine();
   if (!engine) {
