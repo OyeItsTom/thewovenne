@@ -8,6 +8,7 @@ import { buttonClassName } from "@/components/ui/Button";
 import OrderStatusTrail from "@/components/account/OrderStatusTrail";
 import InvoiceLink from "@/components/order/InvoiceLink";
 import ShareYourStyle from "@/components/style/ShareYourStyle";
+import { INDIA_POST_LABEL, INDIA_POST_TRACKING_URL } from "@/lib/couriers/indiaPost";
 
 export const metadata: Metadata = {
   title: "Your orders | THE WOVENNE",
@@ -154,13 +155,31 @@ export default async function OrdersPage() {
                           <span className="text-ink/60"> · {order.courier_name}</span>
                         )}
                       </p>
-                      {/* Deliberately not a link: we store the reference, not a
-                          courier-specific tracking URL, and guessing one that
-                          404s is worse than none. */}
-                      <p className="mt-1 text-xs text-ink/50">
-                        Track this with {order.courier_name || "the courier"} using
-                        the number above.
-                      </p>
+                      {/* Never a link built from the number: we store the
+                          reference, not a courier-specific tracking URL, and
+                          guessing one that 404s is worse than none. India Post
+                          tracking is a form on its home page (with a
+                          verification step), so that page is linked as it is. */}
+                      {order.courier_name === INDIA_POST_LABEL ? (
+                        <p className="mt-1 text-xs text-ink/50">
+                          Track this on{" "}
+                          <a
+                            href={INDIA_POST_TRACKING_URL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="underline hover:text-terracotta"
+                          >
+                            India Post&apos;s website
+                          </a>
+                          : enter the number above and complete the verification
+                          step the page asks for.
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-xs text-ink/50">
+                          Track this with {order.courier_name || "the courier"} using
+                          the number above.
+                        </p>
+                      )}
                     </div>
                   )}
 
