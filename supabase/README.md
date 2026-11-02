@@ -213,6 +213,14 @@ before each policy, `on conflict do nothing` on every seed. Re-running any of
 them on a populated database is safe. Skip `0007` if you don't want the
 placeholder catalogue.
 
+## Recovery (rolling a migration back)
+
+Migrations here are forward-only. The few that have a rehearsed, guarded
+rollback keep it in [`recovery/`](recovery/README.md) (currently 0074, 0075 and
+0076), run only with `scripts/run-recovery-sql.mjs`, never with the migration
+runner. Read that README first: for most problems the answer is to roll the
+application back and keep the migration.
+
 ## Why these are split
 
 They replace a single 418-line `schema.sql`. That file stopped being runnable —
