@@ -49,7 +49,12 @@ export interface InvoiceData {
   shipping: number;
   /** What was actually charged. */
   total: number;
-  payment: { provider: string; reference: string | null; status: string };
+  /**
+   * `method` is orders.payment_method (0044): "razorpay" online, or how an
+   * in-person sale was paid. Null on rows that predate it. Printed by the V2
+   * layout only; nothing here derives an amount from it.
+   */
+  payment: { provider: string; reference: string | null; status: string; method: string | null };
   /** Null until GST registration — see BUSINESS.gstin. */
   tax: { label: string; amount: number }[] | null;
 }
@@ -72,6 +77,7 @@ interface OrderRowLike {
   loyalty_points_spent?: number | null;
   payment_provider: string | null;
   payment_status: string | null;
+  payment_method?: string | null;
   razorpay_order_id: string | null;
   tax?: unknown;
 }
@@ -131,6 +137,7 @@ export function buildInvoice(order: OrderRowLike): InvoiceData | null {
       provider: order.payment_provider ?? "razorpay",
       reference: order.razorpay_order_id,
       status: order.payment_status ?? "pending",
+      method: order.payment_method ?? null,
     },
     tax,
   };
@@ -141,7 +148,7 @@ export const INVOICE_SELECT =
   "id, invoice_number, invoice_issued_at, created_at, customer_name, customer_email, " +
   "customer_phone, shipping_address, items, total_inr, shipping_cost_inr, coupon_code, " +
   "coupon_discount_inr, loyalty_discount_inr, loyalty_points_spent, payment_provider, " +
-  "payment_status, razorpay_order_id, tax";
+  "payment_status, payment_method, razorpay_order_id, tax";
 
 /**
  * "INR 8,900" — Indian digit grouping, no decimals.

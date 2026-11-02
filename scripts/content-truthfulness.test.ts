@@ -131,7 +131,9 @@ check("the hero eyebrow is the strapline, full stop included", DEFAULT_CONTENT.h
 // DEFERRED, NOT MISSED. Invoices and credit notes are rendered on demand, so a
 // tagline change would restyle documents already issued. They keep the old
 // tagline until a separate financial-document branding decision.
-for (const f of ["components/invoice/InvoiceDocument.tsx", "components/invoice/CreditNoteDocument.tsx"]) {
+// V1 (frozen for issued invoices) and the credit note keep it. Invoice V2 drops
+// the tagline by owner decision (2 Nov 2026), which is checked in invoice-v2.test.ts.
+for (const f of ["components/invoice/InvoiceDocumentV1.tsx", "components/invoice/CreditNoteDocument.tsx"]) {
   check(`${f}: tagline deliberately unchanged in SEO-5E`, read(f).includes("Woven in India · Worn for life"), true);
 }
 
