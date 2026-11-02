@@ -196,14 +196,18 @@ t("leading spaces and newlines", greet("\n  Ravi\nKumar").x.includes("Hello Ravi
 
 // ── 3. Facts match the PDF ──────────────────────────────────────────────────
 
-const pdfSource = read("components/invoice/InvoiceDocument.tsx");
-t(
-  "PDF date format is the one the email copies",
-  pdfSource.includes(`new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })`)
-);
-t("PDF prints issuedAt with dateOf", pdfSource.includes("{dateOf(data.issuedAt)}"));
-t("PDF prints data.orderReference", pdfSource.includes("{data.orderReference}"));
-t("PDF prints the total with inr()", /inr\(data\.total\)/.test(pdfSource));
+// Both invoice layouts (Invoice V2 keeps V1 for invoices issued before it), so
+// whichever one an invoice is drawn in, the email quotes the same facts.
+for (const layout of ["InvoiceDocumentV1", "InvoiceDocumentV2"]) {
+  const pdfSource = read(`components/invoice/${layout}.tsx`);
+  t(
+    `${layout}: date format is the one the email copies`,
+    pdfSource.includes(`new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })`)
+  );
+  t(`${layout}: prints issuedAt with dateOf`, pdfSource.includes("{dateOf(data.issuedAt)}"));
+  t(`${layout}: prints data.orderReference`, pdfSource.includes("{data.orderReference}"));
+  t(`${layout}: prints the total with inr()`, /inr\(data\.total\)/.test(pdfSource));
+}
 
 for (const [label, inv, d] of [
   ["manual issued", manual, issued(manual)],
@@ -537,21 +541,37 @@ async function pdfTests() {
     t(`${label} PDF renders`, buf.subarray(0, 5).toString() === "%PDF-" && buf.length > 2000, String(buf.length));
   }
   // E4's own invariants, by file. Only files no other email PR owns: the
-  // invoice and credit-note documents, their builders, their download routes,
-  // and the two migrations that define invoice and credit-note numbering.
-  // lib/email.ts, lib/emails/layout.ts and the migrations folder as a whole
-  // legitimately change when #220/#221/#223 are combined, so they are checked
-  // below by the contract E4 relies on instead of by "unchanged from main".
+  // credit-note document and builder, the download routes, and the two
+  // migrations that define invoice and credit-note numbering. lib/email.ts,
+  // lib/emails/layout.ts and the migrations folder as a whole legitimately
+  // change when #220/#221/#223 are combined, so they are checked below by the
+  // contract E4 relies on instead of by "unchanged from main".
+  //
+  // The invoice document and lib/invoice.ts are no longer on this list: Invoice
+  // V2 adds a second layout and one printed field (payment_method). Their
+  // invariants are checked instead, by scripts/invoice-v2.test.ts (figures
+  // unchanged) and just below (the V1 layout byte-identical to the one E4 shipped).
   try {
     execFileSync(
       "git",
-      ["diff", "--quiet", "main", "--", "lib/invoice.ts", "components/invoice", "lib/creditNote.ts", "app/api/invoice", "app/api/credit-note",
+      ["diff", "--quiet", "main", "--", "components/invoice/CreditNoteDocument.tsx", "lib/creditNote.ts", "app/api/invoice", "app/api/credit-note",
         "supabase/migrations/0037_coupons_and_invoices.sql", "supabase/migrations/0043_credit_notes.sql"],
       { cwd: root }
     );
-    t("invoice/credit-note PDFs, builders, download routes and numbering migrations unchanged from main", true);
+    t("credit-note PDF and builder, download routes and numbering migrations unchanged from main", true);
   } catch {
-    t("invoice/credit-note PDFs, builders, download routes and numbering migrations unchanged from main", false, "git diff main shows changes");
+    t("credit-note PDF and builder, download routes and numbering migrations unchanged from main", false, "git diff main shows changes");
+  }
+  // 76aa2d8 is main before E4 and before Invoice V2: the layout every invoice
+  // issued so far was drawn in.
+  try {
+    const shipped = execFileSync("git", ["show", "76aa2d8:components/invoice/InvoiceDocument.tsx"], { cwd: root, encoding: "utf8" });
+    const v1 = fs.existsSync(path.join(root, "components/invoice/InvoiceDocumentV1.tsx"))
+      ? read("components/invoice/InvoiceDocumentV1.tsx")
+      : read("components/invoice/InvoiceDocument.tsx");
+    t("V1 invoice layout byte-identical to the one already issued (76aa2d8)", v1 === shipped);
+  } catch (e) {
+    t("V1 invoice layout byte-identical to the one already issued (76aa2d8)", false, String(e));
   }
 
   // Numbering: defined once, never redefined by a later migration (any PR).
