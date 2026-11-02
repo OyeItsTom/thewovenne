@@ -1,4 +1,5 @@
 import { adminApiGate } from "@/lib/adminApiGate";
+import { isSameOrigin } from "@/lib/sameOrigin";
 import { NextRequest, NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { createRSCClient } from "@/lib/supabaseRSC";
@@ -6,6 +7,7 @@ import { createServiceClient } from "@/lib/supabase";
 import InvoiceDocument from "@/components/invoice/InvoiceDocument";
 import { buildInvoice, INVOICE_SELECT } from "@/lib/invoice";
 import { sendEmail } from "@/lib/email";
+import { deliverInvoiceEmail, type InvoiceEmailOutcome } from "@/lib/invoiceEmail";
 import { OFFLINE_METHODS, type PaymentMethod } from "@/lib/paymentMethods";
 import {
   findShortages,
@@ -80,6 +82,11 @@ interface ManualOrderRequest {
 export async function POST(request: NextRequest) {
   const ended = await adminApiGate(request);
   if (ended) return ended;
+
+  // Only our own admin pages send this: a cross-site form or a request with no
+  // (or a malformed) Origin is refused before anything is read, written or
+  // emailed. Same order as the E3 dispatch route.
+  if (!isSameOrigin(request)) return NextResponse.json({ ok: false, error: "Not allowed." }, { status: 403 });
 
   const session = createRSCClient();
   const { data: isAdmin } = await session.rpc("is_admin");
@@ -320,7 +327,15 @@ export async function POST(request: NextRequest) {
 
   // Emailed only if there is somewhere to send it. A market stall customer who
   // did not give an address still gets a recorded sale and an invoice on file.
-  let emailed = false;
+  //
+  // The outcome is reported in four distinguishable ways (WP-EMAIL-E4): no
+  // address, no invoice, the provider refused or did not answer, or the
+  // provider accepted it. Accepted is not delivered, and the screen says so.
+  let invoiceEmail: InvoiceEmailOutcome = {
+    status: "no_address",
+    message: "No invoice email was sent: no email address was given.",
+    detail: null,
+  };
   if (body.customerEmail?.trim()) {
     try {
       const { data: row } = await db
@@ -329,28 +344,33 @@ export async function POST(request: NextRequest) {
         .eq("id", orderId)
         .maybeSingle();
       const invoice = row ? buildInvoice(row as unknown as Parameters<typeof buildInvoice>[0]) : null;
-      if (invoice) {
-        const pdf = await renderToBuffer(InvoiceDocument({ data: invoice }));
-        const sent = await sendEmail({
-          to: invoice.customer.email,
-          subject: `Your invoice ${invoice.invoiceNumber} — THE WOVENNE`,
-          html:
-            `<p>Hello ${invoice.customer.name || "there"},</p>` +
-            `<p>Thank you for your purchase. Your invoice <strong>${invoice.invoiceNumber}</strong> is attached.</p>` +
-            `<p>THE WOVENNE</p>`,
-          text: `Your invoice ${invoice.invoiceNumber} is attached.`,
-          attachments: [
-            { filename: `${invoice.invoiceNumber}.pdf`, content: Buffer.from(pdf).toString("base64") },
-          ],
-        });
-        emailed = sent.ok;
+      invoiceEmail = await deliverInvoiceEmail(
+        { invoice, kind: "issued" },
+        {
+          send: sendEmail,
+          renderPdf: async (inv) => renderToBuffer(InvoiceDocument({ data: inv })),
+        }
+      );
+      if (invoiceEmail.status === "no_invoice") {
+        invoiceEmail = {
+          ...invoiceEmail,
+          message: row
+            ? "No invoice email was sent: the invoice number was not assigned. Once it is fixed, send it from Invoices."
+            : "No invoice email was sent: the order could not be read back to build the invoice. You can send it from Invoices.",
+        };
       }
     } catch (e) {
       // Never fatal. The order exists and the invoice can be resent from the
       // invoice list; failing here would suggest the sale had not been recorded.
       console.error(`Manual order ${orderId}: invoice email failed`, e);
+      invoiceEmail = {
+        status: "not_prepared",
+        message: "No invoice email was sent: something went wrong preparing it. You can send it from Invoices.",
+        detail: e instanceof Error ? e.message : String(e),
+      };
     }
   }
+  const emailed = invoiceEmail.status === "accepted";
 
   const { data: finished } = await db
     .from("orders")
@@ -363,7 +383,10 @@ export async function POST(request: NextRequest) {
     orderId,
     invoiceNumber: (finished as { invoice_number?: string } | null)?.invoice_number ?? null,
     total: (finished as { total_inr?: number } | null)?.total_inr ?? goods + shipping,
+    // True only when the email provider accepted it. Not proof of delivery.
     emailed,
+    invoiceEmailStatus: invoiceEmail.status,
+    invoiceEmailMessage: invoiceEmail.message,
     stockShort: Boolean(stockError),
     consentRecorded: consent.recorded,
     // Reported separately from "recorded" on purpose: a consent that reaches

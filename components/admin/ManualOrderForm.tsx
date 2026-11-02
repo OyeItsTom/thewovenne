@@ -59,7 +59,11 @@ interface Line {
 interface Result {
   invoiceNumber: string | null;
   total: number;
+  /** True only when the email provider accepted it — not proof of delivery. */
   emailed: boolean;
+  /** WP-EMAIL-E4: accepted | no_address | no_invoice | not_prepared | rejected | unknown. */
+  invoiceEmailStatus?: string;
+  invoiceEmailMessage?: string;
   stockShort: boolean;
   consentRecorded: boolean;
   consentReachable: boolean;
@@ -333,7 +337,12 @@ export default function ManualOrderForm() {
         <ul className="space-y-1.5 text-sm text-ink/70">
           <li>Invoice <strong className="font-medium text-ink">{done.invoiceNumber ?? "not assigned"}</strong></li>
           <li>Total {formatINR(Number(done.total))}</li>
-          <li>{done.emailed ? "Invoice emailed to the customer." : "No invoice email sent — no address given, or the provider refused it."}</li>
+          <li className={done.emailed || done.invoiceEmailStatus === "no_address" ? undefined : "text-terracotta-dark"}>
+            {done.invoiceEmailMessage ??
+              (done.emailed
+                ? "The invoice email was accepted by the email provider. That does not confirm it reached their inbox."
+                : "No invoice email was sent.")}
+          </li>
           {done.consentRecorded && (
             <li>
               {done.consentReachable
@@ -606,8 +615,9 @@ export default function ManualOrderForm() {
                   {canConsent ? (
                     <>
                       Recorded against this sale with the date. They will only
-                      actually receive marketing email if they have an account —
-                      order emails are separate and always sent.
+                      actually receive marketing email if they have an account.
+                      The invoice email is separate and does not depend on
+                      this choice.
                     </>
                   ) : (
                     <>Needs an email address before it can mean anything.</>
