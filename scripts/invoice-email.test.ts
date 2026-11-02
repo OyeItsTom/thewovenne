@@ -536,15 +536,51 @@ async function pdfTests() {
     const buf = Buffer.from(await renderToBuffer(InvoiceDocument({ data: inv })));
     t(`${label} PDF renders`, buf.subarray(0, 5).toString() === "%PDF-" && buf.length > 2000, String(buf.length));
   }
+  // E4's own invariants, by file. Only files no other email PR owns: the
+  // invoice and credit-note documents, their builders, their download routes,
+  // and the two migrations that define invoice and credit-note numbering.
+  // lib/email.ts, lib/emails/layout.ts and the migrations folder as a whole
+  // legitimately change when #220/#221/#223 are combined, so they are checked
+  // below by the contract E4 relies on instead of by "unchanged from main".
   try {
     execFileSync(
       "git",
-      ["diff", "--quiet", "main", "--", "lib/invoice.ts", "components/invoice", "lib/creditNote.ts", "lib/email.ts", "lib/emails/layout.ts", "supabase/migrations", "app/api/invoice", "app/api/credit-note"],
+      ["diff", "--quiet", "main", "--", "lib/invoice.ts", "components/invoice", "lib/creditNote.ts", "app/api/invoice", "app/api/credit-note",
+        "supabase/migrations/0037_coupons_and_invoices.sql", "supabase/migrations/0043_credit_notes.sql"],
       { cwd: root }
     );
-    t("PDF, numbering, credit-note, email and layout sources unchanged from main", true);
+    t("invoice/credit-note PDFs, builders, download routes and numbering migrations unchanged from main", true);
   } catch {
-    t("PDF, numbering, credit-note, email and layout sources unchanged from main", false, "git diff main shows changes");
+    t("invoice/credit-note PDFs, builders, download routes and numbering migrations unchanged from main", false, "git diff main shows changes");
+  }
+
+  // Numbering: defined once, never redefined by a later migration (any PR).
+  const migDir = path.join(root, "supabase", "migrations");
+  const migs = fs.readdirSync(migDir).filter((f) => /^\d{4}_.*\.sql$/.test(f));
+  const definers = (re: RegExp) => migs.filter((f) => re.test(code(fs.readFileSync(path.join(migDir, f), "utf8")).replace(/^\s*--.*$/gm, "")));
+  for (const [what, re, only] of [
+    ["assign_invoice_number()", /create\s+(or\s+replace\s+)?function\s+public\.assign_invoice_number\b/i, "0037_coupons_and_invoices.sql"],
+    ["invoice_number_seq", /create\s+sequence\s+(if\s+not\s+exists\s+)?invoice_number_seq\b/i, "0037_coupons_and_invoices.sql"],
+    ["issue_credit_note()", /create\s+(or\s+replace\s+)?function\s+public\.issue_credit_note\b/i, "0043_credit_notes.sql"],
+    ["credit_note_number_seq", /create\s+sequence\s+(if\s+not\s+exists\s+)?credit_note_number_seq\b/i, "0043_credit_notes.sql"],
+  ] as const) {
+    const found = definers(re);
+    t(`numbering: ${what} defined only in ${only}`, found.length === 1 && found[0] === only, found.join(", "));
+  }
+  t("numbering: no migration alters or resets the invoice / credit-note sequences",
+    definers(/(alter|drop)\s+sequence\s+[^;]*\b(invoice_number_seq|credit_note_number_seq)\b|setval\s*\(\s*'(invoice_number_seq|credit_note_number_seq)'/i).length === 0);
+
+  // The email contract E4 uses (true on main and after R1 adds fields).
+  const emailSrc = code(read("lib/email.ts"));
+  t("email contract: sendEmail is exported", /export async function sendEmail\s*\(/.test(emailSrc));
+  for (const field of ["to: string;", "subject: string;", "html: string;", "text: string;", "attachments?: { filename: string; content: string }[];"]) {
+    t(`email contract: sendEmail accepts ${field}`, emailSrc.includes(field));
+  }
+  t("email contract: result carries ok and error", /ok: boolean;/.test(emailSrc) && /error: string \| null;/.test(emailSrc));
+  t("email contract: attachments still reach Resend", /attachments: opts\.attachments\?\.length \? opts\.attachments : undefined/.test(emailSrc));
+  const layoutSrc = read("lib/emails/layout.ts");
+  for (const helper of ["renderEmail", "heading", "greeting", "greetingText", "paragraph", "strong", "infoBox", "closing", "footerText", "html"]) {
+    t(`layout contract: ${helper} still exported`, new RegExp(`export (function|const) ${helper}\\b`).test(layoutSrc));
   }
 }
 
