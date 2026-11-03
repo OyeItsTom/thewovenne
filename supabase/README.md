@@ -30,6 +30,11 @@ staging, disaster recovery or local.
    before connecting; an exported `SUPABASE_DB_URL` that differs, any
    inherited `PG*` variable, or a URL query parameter other than `sslmode`
    is refused; and writes need `--expect-host` to match the host exactly.
+   **TLS is verified** (libpq `verify-full`): a non-local database needs
+   `SUPABASE_DB_SSLROOTCERT=<absolute path>` in `.env.local`, naming the
+   project's CA certificate (Database Settings → SSL Configuration; not a
+   publicly trusted CA). The certificate chain and the hostname are both
+   checked, and the `target:` line prints the CA's SHA-256 fingerprint.
    Pasting files into the SQL editor also works; the ledger then only knows
    what 0057 backfilled. Run `0008` as it stands — it promotes nobody until step 5. Skip
    `0007` if you don't want the placeholder catalogue (see below).

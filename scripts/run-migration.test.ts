@@ -20,11 +20,17 @@
  *   D. The target: hostile shell and libpq variables, duplicate or tampered
  *      .env.local, --expect-host, and that no credential is ever printed.
  *   E. security-posture.ts --production under the same rule (read-only).
+ *   F. TLS verification (rule 8) against the same server with throwaway
+ *      certificates made here by openssl: a trusted CA connects (and the
+ *      session really is TLS); an untrusted CA, a hostname mismatch, a
+ *      self-signed server and a server without TLS are all rejected with
+ *      nothing applied; bad CA configuration is refused before connecting.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
 import { startEngine, type Client } from "./pg-world";
 
 const ROOT = path.join(__dirname, "..");
@@ -145,7 +151,7 @@ const EH = ["--expect-host", "localhost"];
     await clone("a1");
     let r = mig(good, "a1", [m(F1), ...EH]);
     t("in-order apply → exit 0", r.code === 0, r.out);
-    t("…prints the target before anything else, without credentials", /^target: host=localhost port=\d+ database=a1 project_ref=n\/a$/m.test(r.out.split("\n")[0]), r.out.split("\n")[0]);
+    t("…prints the target before anything else, without credentials", /^target: host=localhost port=\d+ database=a1 project_ref=n\/a tls=off$/m.test(r.out.split("\n")[0]), r.out.split("\n")[0]);
     t("…prints applied + recorded + the verify block", /applied .* — recorded in schema_migrations at /.test(r.out) && /fixture_alpha/.test(r.out) && /│|\bverify\b/.test(r.out), r.out);
     t("…ledger row with a real applied_at; the table exists", (await ledgerHas("a1", F1)) !== null && (await tableExists("a1", "fixture_alpha")));
 
@@ -302,6 +308,113 @@ const EH = ["--expect-host", "localhost"];
     t("…with a hostile exported SUPABASE_DB_URL → exit 2", r.code === 2 && /differs from .env.local/.test(r.out), `${r.code} ${r.out}`);
     r = runPosture("e1", [], { env: { PGHOST: "hostile.example.invalid" } });
     t("…with an inherited PGHOST → exit 2", r.code === 2 && /PGHOST/.test(r.out), `${r.code} ${r.out}`);
+
+    console.log("\n=== F. TLS: verify-full against controlled certificates ===");
+    const pki = fs.mkdtempSync(path.join(os.tmpdir(), "runmig-pki-"));
+    const ossl = (...a: string[]) => execFileSync("openssl", a, { cwd: pki, stdio: "pipe" });
+    fs.writeFileSync(path.join(pki, "ext.cnf"), [
+      "[req]", "distinguished_name=dn", "[dn]",
+      "[ca]", "basicConstraints=critical,CA:TRUE", "keyUsage=critical,keyCertSign,cRLSign", "subjectKeyIdentifier=hash",
+      "[localhost]", "basicConstraints=CA:FALSE", "extendedKeyUsage=serverAuth", "subjectAltName=DNS:localhost",
+      "[other]", "basicConstraints=CA:FALSE", "extendedKeyUsage=serverAuth", "subjectAltName=DNS:other.example.invalid", ""].join("\n"));
+    const makeCa = (n: string) => ossl("req", "-x509", "-new", "-nodes", "-newkey", "rsa:2048", "-keyout", `${n}.key`, "-out", `${n}.crt`,
+      "-days", "2", "-subj", `/CN=Throwaway ${n}`, "-config", "ext.cnf", "-extensions", "ca");
+    const makeLeaf = (n: string, ca: string | null, ext: string) => {
+      if (ca === null) {
+        ossl("req", "-x509", "-new", "-nodes", "-newkey", "rsa:2048", "-keyout", `${n}.key`, "-out", `${n}.crt`, "-days", "2", "-subj", "/CN=localhost", "-config", "ext.cnf", "-extensions", ext);
+      } else {
+        ossl("req", "-new", "-nodes", "-newkey", "rsa:2048", "-keyout", `${n}.key`, "-out", `${n}.csr`, "-subj", "/CN=localhost", "-config", "ext.cnf");
+        ossl("x509", "-req", "-in", `${n}.csr`, "-CA", `${ca}.crt`, "-CAkey", `${ca}.key`, "-CAcreateserial", "-out", `${n}.crt`, "-days", "2", "-extfile", "ext.cnf", "-extensions", ext);
+      }
+      fs.chmodSync(path.join(pki, `${n}.key`), 0o600);
+    };
+    makeCa("caA"); makeCa("caB");
+    makeLeaf("srv", "caA", "localhost");      // trusted chain, right name
+    makeLeaf("srvOther", "caA", "other");     // trusted chain, wrong name
+    makeLeaf("srvSelf", null, "localhost");   // self-signed, right name
+    const P = (f: string) => path.join(pki, f);
+    const fpA = new crypto.X509Certificate(fs.readFileSync(P("caA.crt"))).fingerprint256.replace(/:/g, "").toLowerCase();
+    const serve = async (cert: string | null) => {
+      if (cert) {
+        await root.query(`alter system set ssl_cert_file = '${P(cert + ".crt")}'`);
+        await root.query(`alter system set ssl_key_file = '${P(cert + ".key")}'`);
+      }
+      await root.query(`alter system set ssl = ${cert ? "on" : "off"}`);
+      await root.query("select pg_reload_conf()");
+      await new Promise((res) => setTimeout(res, 700));
+      return (await open("postgres", async (c) => (await c.query("show ssl")).rows[0].ssl)) as string;
+    };
+    const tlsEnv = (db: string, ca: string | null, q = "?sslmode=verify-full") =>
+      `SUPABASE_DB_URL=${urlFor(db, q)}\n${ca === null ? "" : `SUPABASE_DB_SSLROOTCERT=${ca}\n`}`;
+    const rejectedTls = (r: Run, re: RegExp) => r.code === 1 && /FAILED — rolled back, nothing applied/.test(r.out) && re.test(r.out);
+
+    await clone("f1");
+    t("server TLS on with a caA-signed localhost certificate", (await serve("srv")) === "on");
+    before = await fingerprint("f1");
+    r = mig(good, "f1", [m(F1), ...EH], { envFile: tlsEnv("f1", P("caB.crt")) });
+    t("untrusted CA (caB) → rejected, exit 1, nothing applied", rejectedTls(r, /self[- ]signed certificate in certificate chain|unable to (verify|get local issuer)/i) && (await fingerprint("f1")) === before, `${r.code} ${r.out}`);
+    r = mig(good, "f1", [m(F1), ...EH], { envFile: tlsEnv("f1", P("caA.crt")) });
+    t("trusted CA (caA) + matching hostname → applied, exit 0", r.code === 0 && (await ledgerHas("f1", F1)) !== null, r.out);
+    t("…the target line prints tls=verify-full and caA's fingerprint", new RegExp(`^target: host=localhost port=${port} database=f1 project_ref=n/a tls=verify-full ca_sha256=${fpA}$`, "m").test(r.out), r.out);
+    {
+      // In-process, with the helper's own client config: the session really is TLS.
+      const { resolveTarget } = await import(path.join(__dirname, "lib", "db-target.mjs"));
+      fs.writeFileSync(path.join(good, ".env.local"), tlsEnv("f1", P("caA.crt")));
+      const tg = resolveTarget({ write: false, env: {}, cwd: good });
+      const pgmod = (await import("pg")).default;
+      const c = new pgmod.Client(tg.clientConfig);
+      await c.connect();
+      const ssl = (await c.query("select ssl, version from pg_stat_ssl where pid = pg_backend_pid()")).rows[0];
+      await c.end();
+      t("…pg_stat_ssl confirms the session is encrypted", ssl?.ssl === true && /^TLSv1\.[23]$/.test(ssl.version), JSON.stringify(ssl));
+      t("…and the client config verifies (rejectUnauthorized, servername, only the given CA)",
+        tg.clientConfig.ssl?.rejectUnauthorized === true && tg.clientConfig.ssl?.servername === "localhost" && tg.clientConfig.ssl?.ca === fs.readFileSync(P("caA.crt"), "utf8"));
+    }
+    r = mig(good, "f1", [m(F2), ...EH], { envFile: tlsEnv("f1", P("caA.crt"), "?sslmode=require") });
+    t("sslmode=require is treated as verify-full (trusted → exit 0)", r.code === 0 && /tls=verify-full/.test(r.out), r.out);
+    r = mig(good, "f1", [m(F3), ...EH], { envFile: tlsEnv("f1", P("caB.crt"), "?sslmode=require") });
+    t("sslmode=require with an untrusted CA → rejected, exit 1 (never encrypted-but-unverified)", rejectedTls(r, /certificate/i) && (await ledgerHas("f1", F3)) === null, `${r.code} ${r.out}`);
+
+    t("server switched to a caA-signed certificate for other.example.invalid", (await serve("srvOther")) === "on");
+    before = await fingerprint("f1");
+    r = mig(good, "f1", [m(F3), ...EH], { envFile: tlsEnv("f1", P("caA.crt")) });
+    t("hostname mismatch (trusted CA) → rejected, exit 1, nothing applied", rejectedTls(r, /does not match certificate's altnames|Hostname\/IP does not match/i) && (await fingerprint("f1")) === before, `${r.code} ${r.out}`);
+    t("server switched to a self-signed localhost certificate", (await serve("srvSelf")) === "on");
+    r = mig(good, "f1", [m(F3), ...EH], { envFile: tlsEnv("f1", P("caA.crt")) });
+    t("self-signed server certificate → rejected, exit 1, nothing applied", rejectedTls(r, /self[- ]signed certificate|unable to verify/i) && (await fingerprint("f1")) === before, `${r.code} ${r.out}`);
+    t("server TLS off", (await serve(null)) === "off");
+    r = mig(good, "f1", [m(F3), ...EH], { envFile: tlsEnv("f1", P("caA.crt")) });
+    t("server without TLS → rejected, exit 1, nothing applied (no plaintext fallback)", rejectedTls(r, /does not support SSL/i) && (await fingerprint("f1")) === before, `${r.code} ${r.out}`);
+
+    // Configuration refusals: exit 2 before any connection.
+    fs.writeFileSync(P("notpem.crt"), "not a certificate\n");
+    const refusedCfg: [string, string, RegExp, Record<string, string>?, string?][] = [
+      ["verify-full without SUPABASE_DB_SSLROOTCERT", tlsEnv("f1", null), /set SUPABASE_DB_SSLROOTCERT=/],
+      ["a relative CA path", tlsEnv("f1", "caA.crt"), /must be an absolute path/],
+      ["a CA path that does not exist", tlsEnv("f1", P("missing.crt")), /does not exist/],
+      ["a CA file with no PEM certificate", tlsEnv("f1", P("notpem.crt")), /holds no PEM certificate/],
+      ["a leaf certificate given as the CA", tlsEnv("f1", P("srv.crt")), /is not a CA/],
+      ["SUPABASE_DB_SSLROOTCERT defined twice", tlsEnv("f1", P("caA.crt")) + `SUPABASE_DB_SSLROOTCERT=${P("caB.crt")}\n`, /SUPABASE_DB_SSLROOTCERT is defined 2 times/],
+      ["an exported SUPABASE_DB_SSLROOTCERT that differs", tlsEnv("f1", P("caA.crt")), /exports a SUPABASE_DB_SSLROOTCERT that differs/, { SUPABASE_DB_SSLROOTCERT: P("caB.crt") }],
+      ["sslmode=no-verify", tlsEnv("f1", P("caA.crt"), "?sslmode=no-verify"), /sslmode=no-verify is not supported/],
+      ["sslmode=prefer", tlsEnv("f1", P("caA.crt"), "?sslmode=prefer"), /sslmode=prefer is not supported/],
+      ["sslmode=verify-ca (no hostname check)", tlsEnv("f1", P("caA.crt"), "?sslmode=verify-ca"), /sslmode=verify-ca is not supported/],
+      ["a non-loopback host with no CA configured", `SUPABASE_DB_URL=postgresql://postgres:hostile-secret@hostile.example.invalid:5432/postgres\n`, /hostile\.example\.invalid must be reached with its TLS certificate verified/, {}, "hostile.example.invalid"],
+      ["a non-loopback IP address", `SUPABASE_DB_URL=postgresql://postgres:hostile-secret@10.255.255.1:5432/postgres\nSUPABASE_DB_SSLROOTCERT=${P("caA.crt")}\n`, /is an IP address; use the hostname/, {}, "10.255.255.1"],
+    ];
+    for (const [name, envFile, re, env, host] of refusedCfg) {
+      r = mig(good, "f1", [m(F3), "--expect-host", host ?? "localhost"], { envFile, env });
+      t(`${name} → exit 2, before connecting`, r.code === 2 && re.test(r.out) && !/ECONN|ENOTFOUND|ETIMEDOUT/.test(r.out), `${r.code} ${r.out}`);
+    }
+    t("…none of the TLS refusals or rejections changed the database", (await fingerprint("f1")) === before);
+
+    t("server TLS back on (caA, localhost)", (await serve("srv")) === "on");
+    await clone("f2");
+    r = runPosture("f2", ["--expect-host", "localhost"], { envFile: tlsEnv("f2", P("caA.crt")) });
+    t("posture --production over verified TLS → tls line, MATCHES, exit 0", r.code === 0 && /tls=verify-full ca_sha256=/.test(r.out) && /MATCHES/.test(r.out), r.out.slice(-500));
+    r = runPosture("f2", [], { envFile: tlsEnv("f2", P("caB.crt")) });
+    t("posture with an untrusted CA → fails, non-zero, no MATCHES", r.code !== 0 && !/MATCHES/.test(r.out) && /certificate/i.test(r.out), `${r.code} ${r.out.slice(-400)}`);
+    await serve(null);
 
     console.log("\n=== credentials ===");
     const leaked = outputs.filter((o) => o.includes(PASSWORD) || o.includes("hostile-secret"));
