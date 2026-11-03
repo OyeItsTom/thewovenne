@@ -143,6 +143,10 @@ export function resolveTarget({ write, expectHost, env = process.env, cwd = proc
   const ref = /^db\.([a-z0-9]+)\.supabase\.co$/.exec(host)?.[1] ?? /^postgres\.([a-z0-9]+)$/.exec(user)?.[1] ?? null;
   const base = `target: host=${host} port=${port} database=${database} project_ref=${ref ?? "n/a"}`;
 
+  // The host check comes first: "wrong database" is the diagnosis that matters most.
+  if (write && !expectHost) refuse(`--expect-host <host> is required for a tool that writes. (${base})`);
+  if (expectHost && expectHost.toLowerCase() !== host) refuse(`host is ${host}, expected ${expectHost}. (${base})`);
+
   // Rule 8. require is treated as verify-full (never encrypted-but-unverified).
   const verify = !loopback || sslmode === "require" || sslmode === "verify-full";
   let ssl = false;
@@ -157,9 +161,6 @@ export function resolveTarget({ write, expectHost, env = process.env, cwd = proc
 
   const target = { host, port, database, projectRef: ref, loopback, tls };
   target.line = `${base} tls=${tls}`;
-
-  if (write && !expectHost) refuse(`--expect-host <host> is required for a tool that writes. (${target.line})`);
-  if (expectHost && expectHost.toLowerCase() !== host) refuse(`host is ${host}, expected ${expectHost}. (${target.line})`);
 
   // Explicit parts only: nothing for node-postgres to fill in from the
   // environment (rule 3 already refused those variables) or from the string.
