@@ -16,13 +16,27 @@ staging, disaster recovery or local.
    refuses to run on a database that already has Wovenne tables. **Skipping it
    produces a database that looks right and is not** — see "Privilege baseline".
 3. **Run every migration in number order**, `0001` to the newest, as
-   `postgres`. Prefer the runner, which applies each file in one transaction,
-   prints its verify block and records it in `schema_migrations` (0057):
-   `node scripts/run-migration.mjs supabase/migrations/0001_core_tables.sql`,
-   and so on — it connects to `SUPABASE_DB_URL` from `.env.local`, so check
-   that names the NEW project. Pasting files
-   into the SQL editor also works; the ledger then only knows what 0057
-   backfilled. Run `0008` as it stands — it promotes nobody until step 5. Skip
+   `postgres`. `0001`–`0056` predate the ledger: apply them with `psql` on
+   the direct connection (or the SQL editor), in order. From `0057` on, use
+   the runner, which applies each file in one transaction, prints its verify
+   block and records it in `schema_migrations` (0057):
+   `node scripts/run-migration.mjs supabase/migrations/0057_migration_ledger.sql --expect-host db.<ref>.supabase.co`,
+   and so on. It refuses (exit 2) a file whose predecessors from 0057 on are
+   not all in the ledger, or when the ledger already holds a later one; a
+   re-run exits 3, `NOTHING APPLIED`. Exit 0 means applied and recorded.
+   **Target rule** (`scripts/lib/db-target.mjs`, shared with
+   `security-posture.ts --production` and the recovery runner): the database
+   is `SUPABASE_DB_URL` in `.env.local` only, printed as `target: host=…`
+   before connecting; an exported `SUPABASE_DB_URL` that differs, any
+   inherited `PG*` variable, or a URL query parameter other than `sslmode`
+   is refused; and writes need `--expect-host` to match the host exactly.
+   **TLS is verified** (libpq `verify-full`): a non-local database needs
+   `SUPABASE_DB_SSLROOTCERT=<absolute path>` in `.env.local`, naming the
+   project's CA certificate (Database Settings → SSL Configuration; not a
+   publicly trusted CA). The certificate chain and the hostname are both
+   checked, and the `target:` line prints the CA's SHA-256 fingerprint.
+   Pasting files into the SQL editor also works; the ledger then only knows
+   what 0057 backfilled. Run `0008` as it stands — it promotes nobody until step 5. Skip
    `0007` if you don't want the placeholder catalogue (see below).
 4. **Verify schema and security**, from a checkout with `.env.local` pointing
    at the new project:
