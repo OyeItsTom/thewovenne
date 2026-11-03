@@ -11,53 +11,74 @@
  * applies in schema_migrations; a rollback must not be recorded as a migration.
  * The SQL file carries its own BEGIN/COMMIT, guards and self-check. This
  * script only:
- *   - takes the connection from SUPABASE_DB_URL (environment first, then the
- *     repository's .env.local), and prints host, port and database;
+ *   - takes the connection by the shared target rule (scripts/lib/db-target.mjs):
+ *     SUPABASE_DB_URL from ./.env.local only, the same database
+ *     run-migration.mjs uses; a differing exported SUPABASE_DB_URL, inherited
+ *     PG* variables or URL query overrides are refused; host, port, database
+ *     and project ref are printed before connecting;
  *   - refuses unless --expect-host matches that host exactly, so a rollback
  *     meant for a rehearsal cannot reach Production, or the reverse;
  *   - refuses without --i-have-a-verified-backup (runbook R0 step 3);
+ *   - runs only its own NNNN_rollback.sql files from the supabase/recovery/
+ *     next to it, so no migration can bypass run-migration.mjs's ledger and
+ *     order checks through here; unknown options are refused;
  *   - on any error, issues ROLLBACK, prints the database's message and exits 1.
  *     The file's guards guarantee nothing changed in that case.
  *
  * It never prints the connection string or the password.
+ *
+ * Exit codes: 0 completed; 1 failed and rolled back (including a guard's
+ * refusal inside the SQL); 2 refused before connecting, nothing ran.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { TargetRefused, expectHostArg, resolveTarget } from "./lib/db-target.mjs";
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-
-const args = process.argv.slice(2);
-const file = args.find((a) => a.endsWith(".sql"));
-const at = args.indexOf("--expect-host");
-const expectHost = at >= 0 ? args[at + 1] : null;
-const backedUp = args.includes("--i-have-a-verified-backup");
+// Exit codes: 0 the file completed; 1 it failed and was rolled back; 2 refused
+// before connecting (usage, file, target), nothing ran.
+const KNOWN_FLAGS = new Set(["--expect-host", "--i-have-a-verified-backup"]);
+// Only this runner's own reviewed recovery files: a migration (or any other
+// .sql) run through here would bypass the migration runner's ledger and order
+// checks. Resolved from the script, so a pinned tools checkout runs its own.
+const RECOVERY_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "supabase", "recovery");
+const NAME = /^\d{4}_rollback\.sql$/;
 
 function fail(msg, code = 2) {
   console.error(msg);
   process.exit(code);
 }
-if (!file || !fs.existsSync(file)) fail("usage: node scripts/run-recovery-sql.mjs <file.sql> --expect-host <host> --i-have-a-verified-backup");
-if (!expectHost) fail("Refusing: --expect-host <host> is required.");
-if (!backedUp) fail("Refusing: take and verify a backup first, then pass --i-have-a-verified-backup.");
+const USAGE = "usage: node scripts/run-recovery-sql.mjs supabase/recovery/NNNN_rollback.sql --expect-host <host> --i-have-a-verified-backup";
 
-let url = process.env.SUPABASE_DB_URL;
-if (!url) {
-  const envFile = path.join(REPO, ".env.local");
-  if (fs.existsSync(envFile)) {
-    const line = fs.readFileSync(envFile, "utf8").split("\n").find((l) => l.startsWith("SUPABASE_DB_URL="));
-    if (line) url = line.slice("SUPABASE_DB_URL=".length).trim().replace(/^["']|["']$/g, "");
-  }
+const args = process.argv.slice(2);
+let expectHost;
+try { expectHost = expectHostArg(args); } catch (e) { fail(e.message); }
+const unknown = args.filter((a) => a.startsWith("--") && !KNOWN_FLAGS.has(a));
+if (unknown.length) fail(`Refusing: unknown option(s) ${unknown.join(" ")}. Nothing ran.`);
+const positional = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--expect-host");
+if (positional.length !== 1) fail(USAGE);
+const file = positional[0];
+const backedUp = args.includes("--i-have-a-verified-backup");
+
+if (!fs.existsSync(file)) fail(`Refusing: ${file} does not exist. Nothing ran.\n${USAGE}`);
+if (!NAME.test(path.basename(file)) || !fs.existsSync(RECOVERY_DIR)
+    || fs.realpathSync(path.dirname(path.resolve(file))) !== fs.realpathSync(RECOVERY_DIR)) {
+  fail(`Refusing: ${file} is not a recovery file of this runner (${RECOVERY_DIR}/NNNN_rollback.sql). Migrations go through run-migration.mjs. Nothing ran.`);
 }
-if (!url) fail("Refusing: SUPABASE_DB_URL is not set.");
+if (!expectHost) fail("Refusing: --expect-host <host> is required. Nothing ran.");
+if (!backedUp) fail("Refusing: take and verify a backup first, then pass --i-have-a-verified-backup. Nothing ran.");
 
-const u = new URL(url);
-const local = ["localhost", "127.0.0.1", "::1"].includes(u.hostname);
-console.log(`target: host=${u.hostname} port=${u.port || "5432"} database=${u.pathname.slice(1)}`);
-if (u.hostname !== expectHost) fail(`Refusing: host is ${u.hostname}, expected ${expectHost}. Nothing ran.`);
+let target;
+try {
+  target = resolveTarget({ write: true, expectHost });
+} catch (e) {
+  if (e instanceof TargetRefused) fail(e.message);
+  throw e;
+}
+console.log(target.line);
 
-const client = new pg.Client({ connectionString: url, ssl: local ? false : { rejectUnauthorized: false } });
+const client = new pg.Client(target.clientConfig);
 client.on("notice", (n) => console.log(`notice: ${n.message}`));
 await client.connect();
 try {

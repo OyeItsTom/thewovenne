@@ -19,6 +19,7 @@
  * state: the runbook's preflight (posture MATCH, backup) covers that.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { asAdmin, asRoot, asService, asStaffPasswordOnly, asUser, failure, makeAdmin, startEngine, type Client } from "./pg-world";
@@ -115,11 +116,22 @@ async function main() {
     return c;
   };
   const port = async (c: Client) => (await c.query("select inet_server_port() p")).rows[0].p as number;
-  const run = async (which: keyof typeof ROLLBACK, c: Client, db: string, extra = ["--expect-host", "localhost", "--i-have-a-verified-backup"]) => {
-    const url = `postgres://postgres:throwaway@localhost:${await port(c)}/${db}`;
+  const run = async (which: keyof typeof ROLLBACK, c: Client, db: string, extra = ["--expect-host", "localhost", "--i-have-a-verified-backup"],
+                     opts: { env?: Record<string, string>; envFile?: string; file?: string } = {}) => {
+    // The runner reads its target from ./.env.local only (scripts/lib/db-target.mjs),
+    // so each run gets a temp working directory holding one, and an environment
+    // with nothing inherited that could name a database.
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "recovery-run-"));
+    fs.writeFileSync(path.join(cwd, ".env.local"), opts.envFile ?? `SUPABASE_DB_URL=postgres://postgres:throwaway@localhost:${await port(c)}/${db}\n`);
     try {
-      const out = execFileSync("node", [RUNNER, ROLLBACK[which], ...extra], {
-        env: { ...process.env, SUPABASE_DB_URL: url }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      const out = execFileSync("node", [RUNNER, opts.file ?? ROLLBACK[which], ...extra], {
+        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "",
+          ...(process.env.NODE_OPTIONS ? { NODE_OPTIONS: process.env.NODE_OPTIONS } : {}),
+          ...(process.env.A3_NETGUARD_LOG ? { A3_NETGUARD_LOG: process.env.A3_NETGUARD_LOG } : {}),
+          ...opts.env,
+        } as unknown as NodeJS.ProcessEnv,
       });
       return { code: 0, out };
     } catch (e) {
@@ -226,6 +238,32 @@ async function main() {
       t("runner refuses an unexpected host (nothing runs)", wrong.code === 2 && /Refusing: host is localhost/.test(wrong.out));
       const nob = await run("0076", c, "a", ["--expect-host", "localhost"]);
       t("runner refuses without --i-have-a-verified-backup", nob.code === 2 && /verify a backup first/.test(nob.out));
+      // The shared target rule (scripts/lib/db-target.mjs). Every refusal: exit 2, before
+      // connecting, 0076 still applied. The hostile host is fake and never resolvable.
+      const HOSTILE = "postgresql://postgres:hostile-secret@hostile.example.invalid:5432/postgres";
+      const pgp = await port(c);
+      const refusedBefore = async (name: string, r: { code: number; out: string }, re: RegExp) =>
+        t(name, r.code === 2 && re.test(r.out) && !/hostile-secret|throwaway/.test(r.out) && (await ledger(c, M76)) === 1, `${r.code} ${r.out}`);
+      await refusedBefore("runner refuses a differing exported SUPABASE_DB_URL (R-4)",
+        await run("0076", c, "a", undefined, { env: { SUPABASE_DB_URL: HOSTILE } }), /differs from \.env\.local/);
+      await refusedBefore("runner refuses inherited PGHOST/PGPASSWORD",
+        await run("0076", c, "a", undefined, { env: { PGHOST: "hostile.example.invalid", PGPASSWORD: "hostile-secret" } }), /inherited PostgreSQL variables are set \(PGHOST, PGPASSWORD\)/);
+      await refusedBefore("runner refuses a ?host= override in the URL",
+        await run("0076", c, "a", undefined, { envFile: `SUPABASE_DB_URL=postgres://postgres:throwaway@localhost:${pgp}/a?host=hostile.example.invalid\n` }), /query parameters \(host\)/);
+      await refusedBefore("runner refuses SUPABASE_DB_URL defined twice in .env.local",
+        await run("0076", c, "a", undefined, { envFile: `SUPABASE_DB_URL=postgres://postgres:throwaway@localhost:${pgp}/a\nSUPABASE_DB_URL=${HOSTILE}\n` }), /defined 2 times/);
+      await refusedBefore("runner refuses an .env.local host that differs from --expect-host",
+        await run("0076", c, "a", undefined, { envFile: `SUPABASE_DB_URL=${HOSTILE}\n` }), /host is hostile\.example\.invalid, expected localhost/);
+      await refusedBefore("runner refuses --expect-host with no value",
+        await run("0076", c, "a", ["--i-have-a-verified-backup", "--expect-host"]), /--expect-host needs a host/);
+      await refusedBefore("runner refuses an unknown option",
+        await run("0076", c, "a", ["--expect-host", "localhost", "--i-have-a-verified-backup", "--force"]), /unknown option\(s\) --force/);
+      await refusedBefore("runner refuses a migration file (no bypass of run-migration.mjs)",
+        await run("0076", c, "a", undefined, { file: path.join(MIGRATIONS, M76) }), /not a recovery file of this runner/);
+      const stray = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "stray-")), "0076_rollback.sql");
+      fs.copyFileSync(ROLLBACK["0076"], stray);
+      await refusedBefore("runner refuses a recovery-named file outside its own supabase/recovery/",
+        await run("0076", c, "a", undefined, { file: stray }), /not a recovery file of this runner/);
       const r = await run("0076", c, "a");
       t("safe rollback succeeds", r.code === 0 && /ROLLED BACK 0076/.test(r.out), r.out);
       t("catalog == clean 0075", diff(S["0075"], await snapshot(c)) === "", diff(S["0075"], await snapshot(c)));
