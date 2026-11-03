@@ -1,5 +1,4 @@
 import { createServiceClient } from "./supabase";
-import { sendEmail } from "./email";
 import {
   ACCOUNT_ORDERS_PATH,
   orderConfirmationHtml,
@@ -95,119 +94,108 @@ async function withinDeadline(check: Promise<boolean>, ms: number): Promise<bool
   }
 }
 
-export interface ConfirmationDeps {
+export interface RenderDeps {
   supabase: ServiceClient;
-  send: typeof sendEmail;
   canViewOrder: (supabase: ServiceClient, email: string) => Promise<boolean>;
   /** Overridable for tests only. */
   eligibilityDeadlineMs: number;
 }
 
+export type RenderedConfirmation =
+  | { ok: true; subject: string; html: string; text: string }
+  /** retryable: nothing about the order is wrong; the database could not be read. */
+  | { ok: false; retryable: boolean; reason: "order_load_failed" | "order_missing" | "render_failed" };
+
 /**
- * Send the confirmation for a paid order.
+ * Render the confirmation for one paid order, addressed to `recipient`.
  *
  * Reads the order back from the database rather than taking it from the
- * request, so the email says what was actually recorded. If the two ever
- * disagree, the customer should see the version we will ship from.
+ * request, so the email says what was actually recorded. The recipient is the
+ * one frozen on the delivery record at payment (0074), so the "View your order"
+ * check is made against the address the email actually goes to.
  *
- * Called by settleOrder only after it has won the confirmation_sent_at claim,
- * so it is attempted at most once per order. Unchanged by E2: the recipient,
- * the subject, the trigger and the never-throw contract. E2 reads four more
- * stored columns (delivery charge, coupon, points) for the breakdown.
+ * Rendered ONCE per delivery: lib/orderConfirmationDelivery freezes the result
+ * before the first request, and every retry sends that frozen copy. Never
+ * throws.
  */
-export async function sendOrderConfirmation(
-  razorpayOrderId: string,
-  deps?: Partial<ConfirmationDeps>
-): Promise<void> {
-  const supabase = deps?.supabase ?? createServiceClient();
-  const send = deps?.send ?? sendEmail;
-  const canViewOrder = deps?.canViewOrder ?? accountCanViewOrder;
-  const deadline = deps?.eligibilityDeadlineMs ?? ELIGIBILITY_DEADLINE_MS;
-
-  const { data, error } = await supabase
-    .from("orders")
-    .select(
-      "id, customer_email, customer_name, items, total_inr, shipping_address, shipping_cost_inr, coupon_code, coupon_discount_inr, loyalty_discount_inr"
-    )
-    .eq("razorpay_order_id", razorpayOrderId)
-    .maybeSingle();
-
-  if (error || !data) {
-    console.error(
-      `Order confirmation: could not load ${razorpayOrderId}: ${error?.message ?? "no row"}`
-    );
-    return;
-  }
-
-  const order = data as {
-    id: string;
-    customer_email: string | null;
-    customer_name: string | null;
-    items: OrderEmailItem[] | null;
-    total_inr: number | null;
-    shipping_address: ShippingAddress | null;
-    shipping_cost_inr?: number | null;
-    coupon_code?: string | null;
-    coupon_discount_inr?: number | null;
-    loyalty_discount_inr?: number | null;
-  };
-
-  if (!order.customer_email) {
-    // Pre-0020 orders, and the rare paid-with-no-pending-row case. Nothing to
-    // send to; the order itself is already flagged for review.
-    console.error(`Order ${order.id} has no email — no confirmation sent.`);
-    return;
-  }
-
-  // The first block of the uuid is short enough to read down a phone and long
-  // enough to be unambiguous at this volume.
-  const orderRef = order.id.split("-")[0].toUpperCase();
-
-  let eligible = false;
+export async function renderOrderConfirmation(
+  orderId: string,
+  recipient: string,
+  deps?: Partial<RenderDeps>
+): Promise<RenderedConfirmation> {
   try {
-    eligible = await withinDeadline(
-      Promise.resolve().then(() => canViewOrder(supabase, order.customer_email as string)),
-      deadline
-    );
-  } catch {
-    eligible = false;
-  }
+    const supabase = deps?.supabase ?? createServiceClient();
+    const canViewOrder = deps?.canViewOrder ?? accountCanViewOrder;
+    const deadline = deps?.eligibilityDeadlineMs ?? ELIGIBILITY_DEADLINE_MS;
 
-  const emailData = {
-    orderRef,
-    customerName: order.customer_name,
-    items: order.items ?? [],
-    total: order.total_inr ?? null,
-    address: order.shipping_address ?? EMPTY_ADDRESS,
-    adjustments: {
-      shipping: order.shipping_cost_inr,
-      couponCode: order.coupon_code,
-      couponDiscount: order.coupon_discount_inr,
-      loyaltyDiscount: order.loyalty_discount_inr,
-    },
-    accountOrdersHref: eligible ? ACCOUNT_ORDERS_PATH : null,
-  };
+    const { data, error } = await supabase
+      .from("orders")
+      .select(
+        "id, customer_name, items, total_inr, shipping_address, shipping_cost_inr, coupon_code, coupon_discount_inr, loyalty_discount_inr"
+      )
+      .eq("id", orderId)
+      .maybeSingle();
 
-  let html: string;
-  let text: string;
-  try {
-    html = orderConfirmationHtml(emailData);
-    text = orderConfirmationText(emailData);
+    if (error) {
+      console.error(`Order confirmation: could not load order ${orderId}: ${error.message}`);
+      return { ok: false, retryable: true, reason: "order_load_failed" };
+    }
+    if (!data) {
+      console.error(`Order confirmation: order ${orderId} not found.`);
+      return { ok: false, retryable: false, reason: "order_missing" };
+    }
+
+    const order = data as {
+      id: string;
+      customer_name: string | null;
+      items: OrderEmailItem[] | null;
+      total_inr: number | null;
+      shipping_address: ShippingAddress | null;
+      shipping_cost_inr?: number | null;
+      coupon_code?: string | null;
+      coupon_discount_inr?: number | null;
+      loyalty_discount_inr?: number | null;
+    };
+
+    // The first block of the uuid is short enough to read down a phone and long
+    // enough to be unambiguous at this volume.
+    const orderRef = String(order.id).split("-")[0].toUpperCase();
+
+    let eligible = false;
+    try {
+      eligible = await withinDeadline(
+        Promise.resolve().then(() => canViewOrder(supabase, recipient)),
+        deadline
+      );
+    } catch {
+      eligible = false;
+    }
+
+    const emailData = {
+      orderRef,
+      customerName: order.customer_name,
+      items: order.items ?? [],
+      total: order.total_inr ?? null,
+      address: order.shipping_address ?? EMPTY_ADDRESS,
+      adjustments: {
+        shipping: order.shipping_cost_inr,
+        couponCode: order.coupon_code,
+        couponDiscount: order.coupon_discount_inr,
+        loyaltyDiscount: order.loyalty_discount_inr,
+      },
+      accountOrdersHref: eligible ? ACCOUNT_ORDERS_PATH : null,
+    };
+
+    return {
+      ok: true,
+      subject: orderConfirmationSubject(orderRef),
+      html: orderConfirmationHtml(emailData),
+      text: orderConfirmationText(emailData),
+    };
   } catch (e) {
     // The layout refuses unsafe links by throwing. Nothing here passes one,
     // but a rendering fault must not escape into payment settlement.
-    console.error(`Order ${order.id}: confirmation could not be rendered — not sent:`, e);
-    return;
-  }
-
-  const result = await send({
-    to: order.customer_email,
-    subject: orderConfirmationSubject(orderRef),
-    html,
-    text,
-  });
-
-  if (!result.ok) {
-    console.error(`Order ${order.id}: confirmation not sent — ${result.error}`);
+    console.error(`Order ${orderId}: confirmation could not be rendered:`, e);
+    return { ok: false, retryable: false, reason: "render_failed" };
   }
 }

@@ -1,7 +1,7 @@
 import { razorpay } from "./razorpay";
 import { createServiceClient } from "./supabase";
 import { settleLoyalty } from "./settleLoyalty";
-import { sendOrderConfirmation } from "./sendOrderConfirmation";
+import { attemptOrderConfirmation, enqueueOrderConfirmation } from "./orderConfirmationDelivery";
 import { toPaise } from "./utils";
 import { recordPurchase } from "./analyticsPurchase";
 
@@ -25,8 +25,11 @@ import { recordPurchase } from "./analyticsPurchase";
  *   award       loyalty_ledger_one_award_per_order (0029)
  *   coupon      redeem_coupon() is idempotent per order (0037)
  *   invoice     assign_invoice_number() returns the existing number (0037)
- *   email       orders.confirmation_sent_at, claimed by a conditional UPDATE
- *               (prevents a duplicate send; does not guarantee delivery)
+ *   email       enqueue_order_confirmation() (0074) claims confirmation_sent_at
+ *               and creates the order's one delivery row in one transaction;
+ *               the row's lease and idempotency key govern every attempt
+ *               (prevents duplicates; Resend acceptance is recorded, inbox
+ *               delivery is not known)
  *   order row   an UPDATE to fixed values — writing it twice is writing it once
  *
  * There is deliberately no `if (already paid) return` at the top. That is a
@@ -129,7 +132,7 @@ export interface SettlementResult {
   /** No pending row existed; a thin, flagged row was recorded instead. */
   orphan: boolean;
   stock: StockOutcome;
-  /** True when THIS call won the confirmation claim and attempted the send. */
+  /** True when THIS call won the confirmation claim (and created the delivery row). */
   emailClaimed: boolean;
   /** True when this call set needs_review (it never clears it). */
   flaggedForReview: boolean;
@@ -143,7 +146,8 @@ export interface SettlementDeps {
   supabase: ReturnType<typeof createServiceClient>;
   gateway: Pick<typeof razorpay, "payments">;
   settlePoints: typeof settleLoyalty;
-  sendConfirmation: typeof sendOrderConfirmation;
+  /** One attempt at a delivery row (lib/orderConfirmationDelivery). */
+  attemptConfirmation: (deliveryId: string) => Promise<unknown>;
 }
 
 export async function settleOrder(
@@ -153,7 +157,7 @@ export async function settleOrder(
   const supabase = deps?.supabase ?? createServiceClient();
   const gateway = deps?.gateway ?? razorpay;
   const settlePoints = deps?.settlePoints ?? settleLoyalty;
-  const sendConfirmation = deps?.sendConfirmation ?? sendOrderConfirmation;
+  const attemptConfirmation = deps?.attemptConfirmation ?? ((id: string) => attemptOrderConfirmation(id));
 
   const nothing = (outcome: SettlementOutcome, paymentStatus: string | null): SettlementResult => ({
     outcome,
@@ -440,47 +444,39 @@ export async function settleOrder(
     }
   }
 
-  // ── Confirmation email: at most one send attempt ──
-  // CLAIMED, NOT CHECKED. This UPDATE matches only while the column is still
-  // null, so of two settlements arriving together — a browser callback and a
-  // webhook, or the same callback replayed — exactly one gets a row back and
-  // only that one attempts the send. The other sees nothing and stays quiet.
-  // A check-then-act here would send two; an in-memory flag would not survive
-  // a second server.
+  // ── Confirmation email: one durable delivery per order (0074) ──
+  // CLAIMED, NOT CHECKED. enqueue_order_confirmation() claims
+  // confirmation_sent_at with the same conditional UPDATE as before AND creates
+  // the delivery row, in one transaction: of two settlements arriving together
+  // exactly one gets created = true, and there is no moment where the claim
+  // exists without its row.
   //
-  // WHAT THIS GUARANTEES, AND WHAT IT DOES NOT. It prevents a duplicate: the
-  // customer is never emailed twice for one order. It does not guarantee
-  // delivery: the claim is taken before the send, so if the provider then
-  // fails, the column is already set and no replay will try again. Recovery
-  // today is the manual re-send from the admin. Anything stronger — a retry
-  // that cannot double-send — needs a durable outbox or an idempotency key
-  // the provider honours, and is deliberately not built here.
+  // EVERY settlement then makes one attempt at the row, and the row decides.
+  // An attempt runs only when the row is due — never accepted, not in progress
+  // under another lease, past its backoff, and inside Resend's idempotency
+  // window if it may already have been accepted — and sends the frozen payload
+  // under the row's fixed key. So a replay or a late webhook is a safe retry,
+  // not a second email. "accepted" means Resend accepted it, not that it
+  // arrived.
+  //
+  // IF 0074 IS NOT APPLIED the enqueue fails, nothing is claimed and nothing is
+  // sent: there is no fallback to the untracked sender. Deploy the migration
+  // first. A later settlement for the order enqueues once it exists.
   let emailClaimed = false;
   if (markedPaid && hasLines) {
-    const { data: won, error: claimError } = await supabase
-      .from("orders")
-      .update({ confirmation_sent_at: new Date().toISOString() })
-      .eq("id", orderId)
-      .is("confirmation_sent_at", null)
-      .select("id");
+    const queued = await enqueueOrderConfirmation(supabase, orderId);
+    emailClaimed = queued.created;
+    const deliveryId = queued.deliveryId;
 
-    if (claimError) {
-      console.error(
-        `Could not claim the confirmation email for ${razorpayOrderId}: ${claimError.message}`
-      );
+    if (deliveryId) {
+      // Not awaited: the customer's confirmation page must not wait on an email
+      // provider. If this process stops mid-attempt the row's lease runs out
+      // and the next attempt takes over with the same key and payload. Wrapped
+      // so a synchronous throw is caught like a rejection.
+      void Promise.resolve()
+        .then(() => attemptConfirmation(deliveryId))
+        .catch((e) => console.error(`Order confirmation attempt failed for ${razorpayOrderId}:`, e));
     }
-    emailClaimed = Boolean(won?.length);
-  }
-
-  if (emailClaimed) {
-    // Not awaited: the customer's confirmation page must not wait on an email
-    // provider, nor fail because one is down. Wrapped so that a synchronous
-    // throw, or a sender that did not return a promise, is caught the same
-    // way as a rejection — the payment is recorded by now, and nothing about
-    // the email may turn that into an error for the caller.
-    void Promise.resolve()
-      .then(() => sendConfirmation(razorpayOrderId))
-      .catch((e) => console.error(`Order confirmation email failed for ${razorpayOrderId}:`, e));
   }
 
   // Analytics: one purchase event per paid online order (the database

@@ -91,8 +91,9 @@ async function main() {
     check("   but the shelf moved once: 5 → 4", world.stock.get("prod-A|M"), 4);
     check("   one claim exists", [...world.claims], ["ord-1|prod-A|M"]);
     check("5. second attempt does not win the email", second.emailClaimed, false);
-    check("6. one send attempt in total — duplicate prevented", world.emails, ["order_1"]);
-    check("   confirmation_sent_at was set once, not overwritten", world.updates.filter((u) => "confirmation_sent_at" in u.patch).length, 2, "two conditional UPDATEs were issued; only the first matched");
+    check("6. one email in total — duplicate prevented", world.emails, ["order_1"]);
+    check("   enqueue was called twice; one delivery row exists", [world.enqueueCalls.length, world.deliveries.size], [2, 1]);
+    check("   the replay attempted the SAME row (the row, not the caller, decides)", world.attempts, ["dlv-ord-1", "dlv-ord-1"]);
     check("12. one award", world.awards.size, 1);
     check("13. one redemption — the second hit the index and was read as done", world.redemptions.size, 1);
     check("    and did NOT flag the order", world.orders.get("ord-1")!.needs_review, false);
@@ -307,28 +308,39 @@ async function main() {
   {
     const { world, deps } = makeWorld({});
     await settle(deps);
-    const claim = world.updates.find((u) => "confirmation_sent_at" in u.patch)!;
-    check("the claim is a conditional UPDATE on id AND confirmation_sent_at IS null", claim.filters, "id eq ord-1, confirmation_sent_at is null");
-    check("it carries nothing but the timestamp", Object.keys(claim.patch), ["confirmation_sent_at"]);
+    check("the claim is enqueue_order_confirmation(order id) — one transaction with the delivery row (0074)", world.enqueueCalls, ["ord-1"]);
+    check("settlement no longer writes confirmation_sent_at itself", world.updates.filter((u) => "confirmation_sent_at" in u.patch).length, 0);
     // A row already claimed by someone else — a webhook that got there first.
     const w2 = makeWorld({ order: { confirmation_sent_at: "2026-09-19T00:00:00Z" } });
     const r = await settle(w2.deps);
     check("a row already claimed yields no email from this caller", [r.emailClaimed, w2.world.emails.length], [false, 0]);
+    check("an order claimed before 0074 (no delivery row) gets no attempt", w2.world.attempts.length, 0);
+
+    // 0074 not applied: no fallback to the untracked sender.
+    const w3 = makeWorld({});
+    w3.world.enqueueMissing = true;
+    const m = await settle(w3.deps);
+    check("migration missing: settlement still succeeds", [m.ok, m.outcome], [true, "settled"]);
+    check("migration missing: nothing claimed, no attempt, no email", [m.emailClaimed, w3.world.attempts.length, w3.world.emails.length], [false, 0, 0]);
+    check("migration missing: confirmation_sent_at left unset for a later settlement", w3.world.orders.get("ord-1")!.confirmation_sent_at, null);
+    w3.world.enqueueMissing = false;
+    const later = await settle(w3.deps);
+    check("once 0074 exists, a later settlement enqueues and sends once", [later.emailClaimed, w3.world.emails.length], [true, 1]);
   }
 
-  console.log("\n=== a failed send is contained, and not retried ===");
+  console.log("\n=== a failed attempt is contained; a replay attempts the same row ===");
   {
     const { world, deps } = makeWorld({});
-    const sends: string[] = [];
-    deps.sendConfirmation = ((id: string) => {
-      sends.push(id);
+    const attempts: string[] = [];
+    deps.attemptConfirmation = ((id: string) => {
+      attempts.push(id);
       throw new Error("provider down");
-    }) as unknown as SettlementDeps["sendConfirmation"];
+    }) as unknown as SettlementDeps["attemptConfirmation"];
     const r = await settle(deps);
-    check("a sender that throws synchronously does not fail settlement", [r.ok, r.emailClaimed], [true, true]);
+    check("an attempt that throws synchronously does not fail settlement", [r.ok, r.emailClaimed], [true, true]);
     check("the claim is consumed", typeof world.orders.get("ord-1")!.confirmation_sent_at, "string");
     const again = await settle(deps);
-    check("a replay does NOT retry the send — at most one attempt", [again.emailClaimed, sends.length], [false, 1], "recovery is the admin re-send, by design");
+    check("a replay does not claim again, but attempts the same delivery row", [again.emailClaimed, attempts], [false, ["dlv-ord-1", "dlv-ord-1"]], "whether it sends is the row's lease and backoff, proven in order-confirmation-delivery");
   }
 
   console.log("\n=== the route refuses a bad signature before touching anything ===");

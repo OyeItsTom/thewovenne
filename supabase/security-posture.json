@@ -393,6 +393,32 @@
       },
       "columns": {}
     },
+    "order_email_deliveries": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
+    "order_email_recovery_settings": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
     "orders": {
       "kind": "r",
       "rls": true,
@@ -1027,6 +1053,13 @@
         "service_role"
       ]
     },
+    "begin_order_email_request(uuid,uuid,text,text,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "can_read_analytics()": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -1059,6 +1092,13 @@
       ]
     },
     "checkout_prices(uuid[])": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "claim_order_email_delivery(uuid,integer)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
       "execute": [
@@ -1163,6 +1203,13 @@
         "service_role"
       ]
     },
+    "enqueue_order_confirmation(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "ensure_category_draft(uuid)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -1200,6 +1247,13 @@
       "searchPath": "public",
       "execute": [
         "authenticated",
+        "service_role"
+      ]
+    },
+    "expire_stale_order_email_deliveries(interval)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
         "service_role"
       ]
     },
@@ -1269,6 +1323,20 @@
         "service_role"
       ]
     },
+    "list_due_order_email_deliveries(integer)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "list_unqueued_paid_orders(integer)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "log_admin_action()": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -1309,6 +1377,27 @@
       "searchPath": "public",
       "execute": [
         "authenticated",
+        "service_role"
+      ]
+    },
+    "order_email_deliveries_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "order_email_deliveries_scrub()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "order_email_delivery_summary()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
         "service_role"
       ]
     },
@@ -1430,6 +1519,13 @@
     "record_marketing_send(uuid,text,text,text,uuid)": {
       "securityDefiner": true,
       "searchPath": "public",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "record_order_email_outcome(uuid,uuid,text,text,integer,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
       "execute": [
         "service_role"
       ]
