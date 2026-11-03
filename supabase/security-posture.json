@@ -1185,6 +1185,14 @@
         "service_role"
       ]
     },
+    "dispatch_order(uuid,text,text,boolean,boolean)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
     "draft_is_noop(text,uuid)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -1292,6 +1300,14 @@
     },
     "is_admin()": {
       "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "is_speed_post_consignment(text)": {
+      "securityDefiner": false,
       "searchPath": "public, pg_temp",
       "execute": [
         "authenticated",
@@ -1407,6 +1423,13 @@
       "execute": [
         "anon",
         "authenticated",
+        "service_role"
+      ]
+    },
+    "orders_dispatch_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": [
         "service_role"
       ]
     },
@@ -1642,6 +1665,14 @@
       ]
     },
     "settle_draft(text,uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    "shipment_email_status(uuid[])": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
       "execute": [

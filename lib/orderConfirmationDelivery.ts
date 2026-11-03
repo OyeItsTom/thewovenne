@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createServiceClient } from "./supabase";
 import { emailConfigured, sendEmail, type SendOutcome } from "./email";
 import { renderOrderConfirmation } from "./sendOrderConfirmation";
+import { renderShipmentNotification } from "./sendShipmentNotification";
 
 /**
  * Durable order-confirmation sending (WP-EMAIL-R1a, migration 0074).
@@ -98,6 +99,8 @@ export interface AttemptDeps {
   supabase: ServiceClient;
   send: typeof sendEmail;
   render: typeof renderOrderConfirmation;
+  /** Builds a shipment_notification row's email (0075, WP-EMAIL-E3). */
+  renderShipment: typeof renderShipmentNotification;
   configured: () => boolean;
   timeoutMs: number;
   leaseSeconds: number;
@@ -108,6 +111,7 @@ export interface AttemptDeps {
 interface ClaimedRow {
   id: string;
   order_id: string;
+  kind: string;
   recipient: string | null;
   lease_token: string;
   payload_sha256: string | null;
@@ -138,6 +142,7 @@ export async function attemptOrderConfirmation(
   const supabase = deps?.supabase ?? createServiceClient();
   const send = deps?.send ?? sendEmail;
   const render = deps?.render ?? renderOrderConfirmation;
+  const renderShipment = deps?.renderShipment ?? renderShipmentNotification;
   const configured = deps?.configured ?? emailConfigured;
   const timeoutMs = deps?.timeoutMs ?? CONFIRMATION_TIMEOUT_MS;
   const leaseSeconds = deps?.leaseSeconds ?? CONFIRMATION_LEASE_SECONDS;
@@ -195,7 +200,14 @@ export async function attemptOrderConfirmation(
         await record(token, "failed", { code: "no_recipient" });
         return "failed";
       }
-      const rendered = await render(row.order_id, row.recipient);
+      // Each kind has its own email; a row of a kind this build does not know
+      // is never sent as something else.
+      const rendered =
+        row.kind === "order_confirmation"
+          ? await render(row.order_id, row.recipient)
+          : row.kind === "shipment_notification"
+            ? await renderShipment(row.order_id, row.recipient)
+            : ({ ok: false, retryable: false, reason: "unknown_kind" } as const);
       if (!rendered.ok) {
         const outcome: SendOutcome = rendered.retryable ? "retryable" : "failed";
         await record(token, outcome, { code: rendered.reason });
@@ -207,6 +219,18 @@ export async function attemptOrderConfirmation(
         text: rendered.text,
         sha: payloadHash({ recipient: row.recipient, ...rendered }),
       };
+    } else if (row.kind === "shipment_notification") {
+      // A retry of a frozen shipping email. Its words are fixed, but whether
+      // it should still go is not: an order cancelled after a refused or
+      // unanswered first attempt must not then be told it is on its way.
+      // (A retry under the same key after Resend did accept is idempotent
+      // anyway.) The rendered content is discarded — only the verdict counts.
+      const still = await renderShipment(row.order_id, row.recipient ?? "");
+      if (!still.ok) {
+        const outcome: SendOutcome = still.retryable ? "retryable" : "failed";
+        await record(token, outcome, { code: still.reason });
+        return outcome;
+      }
     }
 
     // Nothing reaches Resend, so nothing starts the idempotency window.

@@ -242,10 +242,55 @@ export function link(href: string, label: string): SafeHtml {
  * Outlook desktop draws square corners and only the text is clickable there.
  */
 export function button(opts: { href: string; label: string }): SafeHtml {
-  const href = safeHref(opts.href);
+  return buttonMarkup(safeHref(opts.href), opts.label);
+}
+
+// ── Approved external destinations ──────────────────────────────────────────
+//
+// safeHref allows the shop's own origin and nothing else, and stays that way.
+// A few transactional emails must send the customer somewhere official that
+// is not us — a courier's tracking page. Those destinations are listed here,
+// one exact URL each, after someone has checked them. There is no pattern, no
+// host wildcard and no way for a caller to add one: a URL that is not on this
+// list, character for character after URL parsing, is refused.
+
+/**
+ * India Post's tracking form (WP-EMAIL-E3). Checked 1 Nov 2026: the home page
+ * carries "Consignment / Money Order Number" with a CAPTCHA, and India Post's
+ * own /track-and-trace redirects (307) here. A CAPTCHA means no address can
+ * take the consignment number, so none is built from it.
+ */
+export const INDIA_POST_TRACKING_URL = "https://www.indiapost.gov.in/";
+
+const APPROVED_EXTERNAL_LINKS: ReadonlySet<string> = new Set([INDIA_POST_TRACKING_URL]);
+
+/** The URL, if it is exactly an approved external destination. Throws otherwise. */
+export function approvedExternalHref(target: string): string {
+  const t = String(target ?? "");
+  if (!t || /[\s\u0000-\u001f\u007f\\]/.test(t)) {
+    throw new TypeError(`External link refused (empty, whitespace or backslash): ${JSON.stringify(t)}`);
+  }
+  let url: URL;
+  try {
+    url = new URL(t);
+  } catch {
+    throw new TypeError(`External link refused (not a URL): ${JSON.stringify(t)}`);
+  }
+  if (url.href !== t || !APPROVED_EXTERNAL_LINKS.has(url.href)) {
+    throw new TypeError(`External link refused (not an approved destination): ${JSON.stringify(t)}`);
+  }
+  return url.href;
+}
+
+/** A button to an approved external destination (see APPROVED_EXTERNAL_LINKS). */
+export function externalButton(opts: { href: string; label: string }): SafeHtml {
+  return buttonMarkup(approvedExternalHref(opts.href), opts.label);
+}
+
+function buttonMarkup(href: string, label: string): SafeHtml {
   return row(
     "padding-bottom:28px;",
-    html`<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="${new SafeHtml(EMAIL_COLORS.ink)}" style="border-radius:999px;background:${new SafeHtml(EMAIL_COLORS.ink)};mso-padding-alt:14px 28px;"><a href="${href}" style="display:inline-block;padding:14px 28px;font-family:${new SafeHtml(FONT)};font-size:15px;line-height:18px;letter-spacing:1px;color:#ffffff;text-decoration:none;border-radius:999px;">${opts.label}</a></td></tr></table>`
+    html`<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="${new SafeHtml(EMAIL_COLORS.ink)}" style="border-radius:999px;background:${new SafeHtml(EMAIL_COLORS.ink)};mso-padding-alt:14px 28px;"><a href="${href}" style="display:inline-block;padding:14px 28px;font-family:${new SafeHtml(FONT)};font-size:15px;line-height:18px;letter-spacing:1px;color:#ffffff;text-decoration:none;border-radius:999px;">${label}</a></td></tr></table>`
   );
 }
 

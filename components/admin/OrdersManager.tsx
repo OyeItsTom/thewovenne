@@ -7,13 +7,14 @@ import { formatINR } from "@/lib/utils";
 import {
   getAllOrders,
   orderRef,
-  STATUS_FLOW,
   STATUS_LABEL,
   type Order,
   type OrderStatus,
 } from "@/lib/orders";
 import InvoiceLink from "@/components/order/InvoiceLink";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
+import DispatchPanel, { DispatchRecord, type DispatchDone } from "@/components/admin/DispatchPanel";
+import { shipmentEmailView, type ShipmentEmailRow, type ShipmentEmailView } from "@/lib/shipmentEmailState";
 
 /**
  * Every order, and the controls to move one along.
@@ -21,10 +22,10 @@ import { paymentMethodLabel } from "@/lib/paymentMethods";
  * Until now a paid order was invisible outside SQL — there was no way to see
  * that money had arrived, let alone mark it sent.
  *
- * Dispatch details are typed in rather than pulled from Shiprocket. Booking
- * happens on Shiprocket's own dashboard, where the courier options and rates
- * already are; this records the outcome. The API integration can replace the
- * typing later without changing what is stored.
+ * Dispatch is India Post Speed Post only, through DispatchPanel and
+ * /api/admin/orders/dispatch (WP-EMAIL-E3c): the database's dispatch_order()
+ * is the only way an order becomes shipped, and it records one shipping email.
+ * Courier and consignment are never edited from here (0075 refuses it).
  */
 /**
  * Which orders are on screen.
@@ -68,9 +69,24 @@ export default function OrdersManager() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("open");
+  const [emails, setEmails] = useState<Record<string, ShipmentEmailRow>>({});
 
   const load = useCallback(async () => {
-    setOrders(await getAllOrders(getBrowserSupabase()));
+    const supabase = getBrowserSupabase();
+    const all = await getAllOrders(supabase);
+    setOrders(all);
+    // What happened to each shipping email (0075). Admin-only; if it cannot be
+    // read the screen still works, it just says nothing about the email.
+    const dispatched = all.filter((o) => o.status === "shipped" || o.status === "delivered").map((o) => o.id).slice(0, 500);
+    if (dispatched.length === 0) {
+      setEmails({});
+      return;
+    }
+    const { data, error: statusError } = await supabase.rpc("shipment_email_status", { p_order_ids: dispatched });
+    if (statusError || !Array.isArray(data)) return;
+    setEmails(
+      Object.fromEntries((data as (ShipmentEmailRow & { order_id: string })[]).map((r) => [r.order_id, r]))
+    );
   }, []);
 
   useEffect(() => {
@@ -141,11 +157,12 @@ export default function OrdersManager() {
     await load();
   }
 
-  /** Stamps the matching timestamp, so "when did it ship?" is answerable. */
-  function advanceTo(order: Order, status: OrderStatus) {
+  /**
+   * Stamps the matching timestamp. Never "shipped": that is dispatch_order(),
+   * through DispatchPanel, and 0075 refuses it as a plain update.
+   */
+  function advanceTo(order: Order, status: Exclude<OrderStatus, "shipped">) {
     const changes: Partial<Order> = { status };
-    if (status === "shipped" && !order.shipped_at)
-      changes.shipped_at = new Date().toISOString();
     if (status === "delivered" && !order.delivered_at)
       changes.delivered_at = new Date().toISOString();
     // Only ever an unpaid order by the time this runs — a paid one goes through
@@ -368,8 +385,18 @@ export default function OrdersManager() {
                 <StatusControls
                   order={order}
                   busy={working}
+                  email={
+                    order.status === "shipped" || order.status === "delivered"
+                      ? shipmentEmailView(emails[order.id] ?? null, { inPerson: order.payment_provider !== "razorpay" })
+                      : null
+                  }
                   onAdvance={(s) => advanceTo(order, s)}
                   onPatch={(c) => patch(order, c)}
+                  onDispatched={async (r) => {
+                    setError(null);
+                    setNotice(dispatchNotice(order, r));
+                    await load();
+                  }}
                 />
 
                 {/* Paid and not already cancelled. An unpaid order has nothing
@@ -440,58 +467,85 @@ function StatusPill({ status, paid }: { status: OrderStatus; paid: boolean }) {
   );
 }
 
+/** What the admin is told after a dispatch: the facts, then the email outcome. */
+function dispatchNotice(order: Order, r: DispatchDone): string {
+  const head =
+    r.outcome === "already_dispatched"
+      ? `${orderRef(order.id)} was already dispatched with ${r.consignment}; nothing was changed.`
+      : `${orderRef(order.id)} dispatched with India Post — Speed Post, ${r.consignment}.`;
+  return `${head} ${r.email.label}${r.email.detail ? ` — ${r.email.detail}` : "."}`;
+}
+
 /**
- * Moving an order along, and recording how it was sent.
+ * Moving an order along.
  *
- * Status only moves forward through the flow, one step at a time, with cancel
- * always available. A free choice of any status invites mis-clicks that are
- * hard to notice — an order silently back at "placed" after dispatch is worse
- * than one that needs two clicks.
+ * Status only moves forward, one step at a time, with cancel always available.
+ * A free choice of any status invites mis-clicks that are hard to notice — an
+ * order silently back at "placed" after dispatch is worse than one that needs
+ * two clicks.
+ *
+ * "SHIPPED" IS NOT A BUTTON. A paid order is dispatched through DispatchPanel,
+ * which says the parcel has been handed to India Post and emails the customer
+ * once; the database refuses every other way into shipped (0075), and refuses
+ * "delivered" for an online order that was never dispatched. An in-person
+ * order can be marked delivered directly — it was handed over at the stall.
  */
 function StatusControls({
   order,
   busy,
+  email,
   onAdvance,
   onPatch,
+  onDispatched,
 }: {
   order: Order;
   busy: boolean;
-  onAdvance: (s: OrderStatus) => void;
+  email: ShipmentEmailView | null;
+  onAdvance: (s: Exclude<OrderStatus, "shipped">) => void;
   onPatch: (changes: Partial<Order>) => void;
+  onDispatched: (r: DispatchDone) => void;
 }) {
-  const [courier, setCourier] = useState(order.courier_name ?? "");
-  const [awb, setAwb] = useState(order.awb_number ?? "");
   const [cost, setCost] = useState(String(order.shipping_cost_inr ?? 0));
   const [note, setNote] = useState(order.admin_note ?? "");
 
-  const index = STATUS_FLOW.indexOf(order.status);
-  const next = index >= 0 && index < STATUS_FLOW.length - 1 ? STATUS_FLOW[index + 1] : null;
   const cancelled = order.status === "cancelled";
+  const inPerson = order.payment_provider !== "razorpay";
+  const dispatchable = !cancelled && (order.status === "placed" || order.status === "confirmed");
+  const dispatched = order.status === "shipped" || order.status === "delivered";
+
+  // The one plain status step available from here, if any.
+  const next: Exclude<OrderStatus, "shipped"> | null =
+    cancelled
+      ? null
+      : order.status === "placed"
+        ? "confirmed"
+        : order.status === "shipped"
+          ? "delivered"
+          : order.status === "confirmed" && inPerson && order.payment_status === "paid"
+            ? "delivered"
+            : null;
 
   return (
     <div className="space-y-5 rounded-xl bg-linen/40 p-4">
-      <div>
-        <h4 className="text-xs uppercase tracking-wider text-ink/50">Dispatch</h4>
-        <p className="mt-1 text-xs text-ink/50">
-          Book on Shiprocket, then record what you chose here. Nothing is booked
-          automatically.
-        </p>
+      {dispatchable && (
+        <DispatchPanel order={order} disabled={busy} onDone={onDispatched} />
+      )}
+      {dispatched && <DispatchRecord order={order} email={email} />}
+
+      <div className={dispatchable || dispatched ? "border-t border-ink/10 pt-4" : undefined}>
+        <h4 className="text-xs uppercase tracking-wider text-ink/50">Shipping cost and note</h4>
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <Field label="Courier" value={courier} onChange={setCourier} placeholder="Delhivery" />
-          <Field label="AWB / tracking no." value={awb} onChange={setAwb} placeholder="1234567890" />
           <Field label="Shipping cost (₹)" value={cost} onChange={setCost} type="number" />
+          <Field
+            label="Internal note (never shown to the customer)"
+            value={note}
+            onChange={setNote}
+            className="sm:col-span-2"
+          />
         </div>
-        <Field
-          label="Internal note (never shown to the customer)"
-          value={note}
-          onChange={setNote}
-          className="mt-3"
-        />
         <button
           onClick={() =>
             onPatch({
-              courier_name: courier.trim() || null,
-              awb_number: awb.trim() || null,
               shipping_cost_inr: Number(cost) || 0,
               admin_note: note.trim() || null,
             })
@@ -499,22 +553,17 @@ function StatusControls({
           disabled={busy}
           className="mt-3 rounded-full border border-ink/20 px-4 py-2 text-xs text-ink transition-colors hover:border-ink disabled:opacity-40"
         >
-          Save dispatch details
+          Save cost and note
         </button>
       </div>
 
       <div className="border-t border-ink/10 pt-4">
         <h4 className="text-xs uppercase tracking-wider text-ink/50">Status</h4>
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          {next && !cancelled && (
+          {next && (
             <button
               onClick={() => onAdvance(next)}
-              disabled={busy || (next === "shipped" && !awb.trim())}
-              title={
-                next === "shipped" && !awb.trim()
-                  ? "Add a tracking number first — the customer sees it on their order."
-                  : undefined
-              }
+              disabled={busy}
               className="inline-flex items-center gap-2 rounded-full bg-ink px-5 py-2 text-xs font-medium text-cream transition-colors hover:bg-ink-light disabled:opacity-40"
             >
               {busy ? (
@@ -522,7 +571,9 @@ function StatusControls({
               ) : (
                 <PackageCheck className="h-3.5 w-3.5" />
               )}
-              Mark {STATUS_LABEL[next].toLowerCase()}
+              {next === "delivered" && order.status === "confirmed"
+                ? "Mark delivered (handed over in person)"
+                : `Mark ${STATUS_LABEL[next].toLowerCase()}`}
             </button>
           )}
 
@@ -563,13 +614,6 @@ function StatusControls({
             To cancel this order, use &ldquo;Cancel &amp; issue credit note&rdquo;
             below. It is paid, so undoing it means issuing a credit note — the
             invoice cannot be edited away.
-          </p>
-        )}
-
-        {next === "shipped" && !awb.trim() && (
-          <p className="mt-2 text-xs text-ink/50">
-            Add a tracking number above before marking it shipped — it&apos;s what
-            the customer sees on their order.
           </p>
         )}
       </div>
