@@ -18,11 +18,8 @@
  * Contacts nothing: Supabase points at a closed local port for the route test,
  * every Resend call is a fake, and the database is a throwaway local cluster.
  */
-process.env.NEXT_PUBLIC_SUPABASE_URL = "http://127.0.0.1:9";
-process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon";
-process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service";
-process.env.RESEND_API_KEY = "re_" + "dummy_key_for_tests_only_000000";
-
+// Must stay the first import: sets the test env before any Supabase client loads.
+import "./order-confirmation-recovery.env";
 import { NextRequest } from "next/server";
 import { asRoot, asService, failure, startEngine, type Client } from "./pg-world";
 import { cronAuthorised } from "../lib/cronAuth";
