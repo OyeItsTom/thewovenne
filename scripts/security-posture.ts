@@ -7,8 +7,9 @@
  *   # …and rewrite the manifest from that replay (after a reviewed migration)
  *   PG_HARNESS_DIR=/tmp/pgh npx tsx scripts/security-posture.ts --replay --write
  *   # PRODUCTION vs the manifest — read-only: a READ ONLY transaction, catalog
- *   # queries only, always rolled back. Reads SUPABASE_DB_URL from .env.local.
- *   npx tsx scripts/security-posture.ts --production
+ *   # queries only, always rolled back. Target per scripts/lib/db-target.mjs
+ *   # (.env.local only, printed first); --expect-host <host> optional.
+ *   npx tsx scripts/security-posture.ts --production [--expect-host <host>]
  *
  * The manifest (supabase/security-posture.json) records, for every Wovenne-owned
  * object in public (and the storage policies and buckets the migrations make):
@@ -159,11 +160,19 @@ async function main() {
   let where: string;
 
   if (args.includes("--production")) {
-    const env = Object.fromEntries(fs.readFileSync(".env.local", "utf8").split("\n")
-      .filter((l) => l.includes("=") && !l.trim().startsWith("#"))
-      .map((l) => { const i = l.indexOf("="); return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^["']|["']$/g, "")]; }));
-    if (!env.SUPABASE_DB_URL) throw new Error("SUPABASE_DB_URL is not set in .env.local");
-    const c = new pg.Client({ connectionString: env.SUPABASE_DB_URL, ssl: { rejectUnauthorized: false },
+    // The shared target rule (scripts/lib/db-target.mjs): .env.local only,
+    // hostile inherited variables refused, target printed before connecting.
+    // Read-only, so --expect-host is optional here; if given it must match.
+    const { resolveTarget, expectHostArg, TargetRefused } = await import("./lib/db-target.mjs");
+    let target;
+    try {
+      target = resolveTarget({ write: false, expectHost: expectHostArg(args) });
+    } catch (e) {
+      if (e instanceof TargetRefused) { console.error(e.message); process.exit(2); }
+      throw e;
+    }
+    console.log(target.line);
+    const c = new pg.Client({ ...target.clientConfig,
       options: "-c default_transaction_read_only=on -c statement_timeout=60000" });
     await c.connect();
     try {
@@ -191,7 +200,7 @@ async function main() {
     }
     where = "clean replay";
   } else {
-    console.error("usage: security-posture.ts --replay [--write] | --production");
+    console.error("usage: security-posture.ts --replay [--write] | --production [--expect-host <host>]");
     process.exit(2);
   }
 

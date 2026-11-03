@@ -8,7 +8,14 @@ import pg from "pg";
  * a policy nobody has checked.
  *
  *   node scripts/style-security.test.mjs
+ *
+ * Exit code: 0 only when every assertion passed (and at least one ran); 1 on
+ * any FAIL, any ERROR, or anything that stops the run before the summary.
+ * It used to print "N passed, M failed" and exit 0 regardless (A4 finding H2).
  */
+// Pessimistic by default: any path that does not reach the end — a refused
+// connection, a throw, a failed rollback — leaves the process failing.
+process.exitCode=1;
 const env=Object.fromEntries(fs.readFileSync(".env.local","utf8").split("\n").filter(l=>l.trim()&&!l.trim().startsWith("#")&&l.includes("=")).map(l=>{const i=l.indexOf("=");return[l.slice(0,i).trim(),l.slice(i+1).trim().replace(/^["']|["']$/g,"")]}));
 const c=new pg.Client({connectionString:env.SUPABASE_DB_URL, ssl:{rejectUnauthorized:false}});
 let ok=0,bad=0; const t=(n,p,d="")=>{console.log(`  ${p?"PASS":"FAIL"}  ${n}${d?"  — "+d:""}`);p?ok++:bad++;};
@@ -114,4 +121,5 @@ finally{
     left.rows[0].s===baseline.s && left.rows[0].o===baseline.o && left.rows[0].a===baseline.a,
     `submissions ${left.rows[0].s}/${baseline.s}, orders ${left.rows[0].o}/${baseline.o}, sessions ${left.rows[0].a}/${baseline.a}`);
   await c.end(); console.log(`\n${ok} passed, ${bad} failed`);
+  process.exitCode = bad===0 && ok>0 ? 0 : 1;
 }
