@@ -17,7 +17,7 @@ older, longer history and is not current beyond early October.
 
 - **Stack:** Next.js 14.2.5 (App Router), React 18, TypeScript 5, Tailwind 3. Supabase: Postgres 17, Auth, Storage and PostgREST, through `@supabase/ssr` and `supabase-js` 2. Hosted on Vercel; `sharp` runs server-side.
 - **No staging.** Production is the working database. Every production migration, merge and config change needs explicit owner approval, one narrow step at a time.
-- **Migrations** are applied with `node scripts/run-migration.mjs <file>`. It runs in one transaction and records the ledger row.
+- **Migrations** are applied with `node scripts/run-migration.mjs <file> --expect-host <host>`. It runs in one transaction and records the ledger row. It enforces numeric order against the ledger (exit 2), exits 3 on a re-run, and reads its target only from `.env.local` (rule in `supabase/README.md` step 3).
 - **Razorpay is still on Test keys.** Live activation is deferred to final go-live.
 
 ## Recent production work, all live and verified
