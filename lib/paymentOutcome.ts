@@ -192,14 +192,14 @@ export const HOLD_COPY: Record<PaymentHoldState, HoldCopy> = {
     next: "Message us with the reference below and we will confirm whether anything was taken.",
   },
   // A payment that reached us after the order had been cancelled (0077). The
-  // payment is recorded as owed back in full; nothing has been refunded yet,
-  // and nothing here may say it has, or when it will be.
+  // payment is recorded as owed back in full. Owner-approved wording (4 Nov
+  // 2026): it names no refund date and never says a refund has been made.
   order_cancelled: {
     tone: "uncertain",
-    title: "This order had already been cancelled",
+    title: "Your order was already cancelled when we received your payment.",
     body:
-      "Your payment reached us after this order was cancelled, so the order will not be sent. We have recorded your payment and it is owed back to you in full. Please do not pay again.",
-    next: "We will contact you about returning your payment. If you have not heard from us, message us with the reference below.",
+      "Your order will not be dispatched, and a full refund is due. Our team will review the payment and arrange the refund. Please do not make another payment for this order.",
+    next: "If you need assistance, please contact Wovenne.",
   },
   unverified: {
     tone: "uncertain",

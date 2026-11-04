@@ -54,6 +54,16 @@ async function main() {
     check("a repeat: same outcome, not re-flagged by this call, one obligation seen twice", [again.outcome, again.flaggedForReview, [...world.obligations.values()].map((o) => o.times_seen)], ["order_cancelled", false, [2]]);
   }
 
+  console.log("\n=== settleOrder: cancelled order, captured amount differs from the order ===");
+  {
+    const { world, deps } = makeWorld({ order: { status: "cancelled" }, payment: { amount: 300000 } });
+    const r = await settleOrder({ razorpayOrderId: "order_1", razorpayPaymentId: "pay_1" }, deps);
+    check("still recorded as owed (not dropped as a mismatch), with the captured amount", [r.outcome, [...world.obligations.values()].map((o) => o.amount_paise)], ["order_cancelled", [300000]]);
+    const open = makeWorld({ payment: { amount: 300000 } });
+    const r2 = await settleOrder({ razorpayOrderId: "order_1", razorpayPaymentId: "pay_1" }, open.deps);
+    check("an OPEN order with a different amount is still a mismatch, nothing touched", [r2.outcome, open.world.updates.length, open.world.reserveCalls.length, open.world.obligations.size], ["mismatch", 0, 0, 0]);
+  }
+
   console.log("\n=== settleOrder: replay for a paid order cancelled afterwards (D6) ===");
   {
     const { world, deps } = makeWorld({ order: { status: "cancelled", payment_status: "paid", razorpay_payment_id: "pay_1", invoice_number: "WOV-2026-0009" } });
@@ -122,7 +132,8 @@ async function main() {
     check("the hold state round-trips through the URL", parseHoldState("order_cancelled"), "order_cancelled");
     const copy = HOLD_COPY.order_cancelled;
     const text = `${copy.title} ${copy.body} ${copy.next}`;
-    check("copy says not to pay again", /do not pay again/i.test(text), true);
+    check("copy is the owner-approved message, word for word", [copy.title, copy.body, copy.next], ["Your order was already cancelled when we received your payment.", "Your order will not be dispatched, and a full refund is due. Our team will review the payment and arrange the refund. Please do not make another payment for this order.", "If you need assistance, please contact Wovenne."]);
+    check("copy tells them not to pay again", /do not make another payment/i.test(text), true);
     check("copy never says a refund was made, started or when it lands", /refunded|refund (has|was) been|within \d|working days|on its way/i.test(text), false);
   }
 

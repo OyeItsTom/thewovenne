@@ -329,7 +329,11 @@ async function main() {
       const p = await liveProduct(w.root, w.admin, { stock: 3 });
       const o = await pendingOrder(w.root, p.productId);
       await settleNew(w.root, o.rzp, "pay_hist");
+      // Simulate a pre-0077 row: the guard (rightly) refuses clearing the id, so
+      // the fixture bypasses triggers for this one statement.
+      await w.root.query("set session_replication_role = replica");
       await w.root.query("update orders set razorpay_payment_id = null where id = $1", [o.id]);
+      await w.root.query("set session_replication_role = origin");
       const r = await settleNew(w.root, o.rzp, "pay_hist");
       const s = await state(w.root, o.id, p.productId);
       check("historical paid order (no payment id): replay settles idempotently and records the id", [r.path, r.stock, s.paymentId, s.sales, s.shelf], ["settled", "already_reserved", "pay_hist", 1, 2]);
@@ -525,6 +529,72 @@ async function main() {
       await asRoot(w.root);
       await w.root.query("alter table orders enable trigger orders_cancel_guard");
       check("…and 0077's guard refuses it on its own", [only0077.code, (only0077.error ?? "").startsWith("A cancelled order cannot be marked paid")], ["55000", true]);
+    }
+
+    console.log("\nOS-1 — refund-owed integrity (final review)");
+    // The operator's reconciliation queries (report §4), verbatim.
+    const RECON_OWED = `select r.razorpay_payment_id, r.reason, r.amount_paise::int, r.order_total_paise_at_capture::int as expected
+                          from payment_refund_obligations r where r.state = 'owed' and r.razorpay_order_id = $1 order by r.first_seen_at`;
+    const RECON_UNCOUNTED = `select o.razorpay_payment_id, o.status, o.payment_status from orders o
+                              where o.razorpay_payment_id is not null and o.payment_status is distinct from 'paid' and o.razorpay_order_id = $1`;
+    {
+      const p = await liveProduct(w.root, w.admin, { stock: 3 });
+      const o = await pendingOrder(w.root, p.productId);
+      await adminCancelUnpaid(w.root, w.admin, o.id);
+      const a = await settleNew(w.root, o.rzp, "pay_dist_a");
+      const b = await settleNew(w.root, o.rzp, "pay_dist_b", { amount: 260000 });
+      await settleNew(w.root, o.rzp, "pay_dist_a");
+      await asRoot(w.root);
+      check("two distinct late payments: two obligations, each its own payment id and amount (one differs from the total)",
+        [a.path, b.path, (await w.root.query(RECON_OWED, [o.rzp])).rows],
+        ["refund_owed", "refund_owed", [
+          { razorpay_payment_id: "pay_dist_a", reason: "captured_after_cancellation", amount_paise: 250000, expected: 250000 },
+          { razorpay_payment_id: "pay_dist_b", reason: "captured_after_cancellation", amount_paise: 260000, expected: 250000 },
+        ]]);
+      check("…and the repeat of pay_dist_a counted on its own row only", (await obligations(w.root, o.id)).map((x) => [x.razorpay_payment_id, x.times_seen]), [["pay_dist_a", 2], ["pay_dist_b", 1]]);
+      const contra = await outcome(settleNew(w.root, o.rzp, "pay_dist_a", { amount: 999900 }));
+      check("a repeat with different evidence for the same payment id is refused (55000), nothing changed",
+        [contra.code, (await obligations(w.root, o.id)).map((x) => [x.razorpay_payment_id, x.amount_paise, x.times_seen])],
+        ["55000", [["pay_dist_a", 250000, 2], ["pay_dist_b", 260000, 1]]]);
+      const s = await state(w.root, o.id, p.productId);
+      check("no sale from any of them", [s.status, s.payment, s.sales, s.shelf, s.invoiced], ["cancelled", "pending", 0, 3, false]);
+
+      // Ordinary order edits cannot make an obligation disappear.
+      await asAdmin(w.root, w.admin);
+      await w.root.query("update orders set needs_review = false, admin_note = 'checked', status = 'placed' where id = $1", [o.id]);
+      const del = await outcome(w.root.query("delete from orders where id = $1", [o.id]));
+      await asRoot(w.root);
+      check("admin clears the flag and edits the order: obligations still listed", (await w.root.query(RECON_OWED, [o.rzp])).rows.length, 2);
+      check("admin cannot delete an order", del.code, "42501");
+      await asService(w.root);
+      await w.root.query("delete from orders where id = $1", [o.id]);
+      await asRoot(w.root);
+      check("even if the order row is deleted, the obligations survive with their Razorpay ids",
+        (await w.root.query("select order_id, razorpay_order_id from payment_refund_obligations where razorpay_payment_id in ('pay_dist_a','pay_dist_b')")).rows.map((r) => [r.order_id, r.razorpay_order_id]),
+        [[null, o.rzp], [null, o.rzp]]);
+    }
+    {
+      // The settling payment id is evidence: no role may change or clear it.
+      const p = await liveProduct(w.root, w.admin, { stock: 3 });
+      const o = await pendingOrder(w.root, p.productId);
+      await settleNew(w.root, o.rzp, "pay_fixed");
+      await asAdmin(w.root, w.admin);
+      const byAdmin = [
+        await outcome(w.root.query("update orders set razorpay_payment_id = 'pay_other' where id = $1", [o.id])),
+        await outcome(w.root.query("update orders set razorpay_payment_id = null where id = $1", [o.id])),
+      ].map((x) => x.code);
+      await asService(w.root);
+      const bySvc = (await outcome(w.root.query("update orders set razorpay_payment_id = null where id = $1", [o.id]))).code;
+      await asRoot(w.root);
+      check("payment id cannot be changed or cleared by an admin or service_role", [byAdmin, bySvc, (await state(w.root, o.id, p.productId)).paymentId], [["55000", "55000"], "55000", "pay_fixed"]);
+
+      // Marking the order unpaid (still possible for an admin until OS-2, D4)
+      // must not hide the captured money from reconciliation.
+      await asAdmin(w.root, w.admin);
+      await w.root.query("update orders set payment_status = 'pending' where id = $1", [o.id]);
+      await asRoot(w.root);
+      check("an order un-paid by hand still shows its captured payment in the reconciliation query",
+        (await w.root.query(RECON_UNCOUNTED, [o.rzp])).rows, [{ razorpay_payment_id: "pay_fixed", status: "placed", payment_status: "pending" }]);
     }
 
     console.log("\nOS-1 — permissions");
