@@ -68,6 +68,7 @@ const HOLD_STATES: PaymentHoldState[] = [
   "unknown_status",
   "unverified",
   "order_cancelled",
+  "unrecorded",
 ];
 
 const src = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");

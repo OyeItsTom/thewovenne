@@ -112,7 +112,15 @@ export type SettlementOutcome =
    * recorded as a refund owed (0077) and nothing is fulfilled; a replay for an
    * order that was paid and then cancelled changes nothing.
    */
-  | "order_cancelled";
+  | "order_cancelled"
+  /**
+   * Razorpay says captured, but nothing was committed here: the database
+   * refused or could not be reached (or the pending row vanished). NOT a
+   * success and NOT a failure — the money may well have moved. Nothing was
+   * written, so a retry (the webhook's) records it; the customer is told not
+   * to pay again.
+   */
+  | "unrecorded";
 
 export type StockOutcome =
   /** Stock came out on this call. */
@@ -305,7 +313,7 @@ export async function settleOrder(
     if (orderId) await recordPurchase(supabase, orderId);
 
     return {
-      outcome: "settled",
+      outcome: orderId !== null ? "settled" : "unrecorded",
       paymentStatus: status,
       ok: orderId !== null,
       orderId,
@@ -419,6 +427,23 @@ export async function settleOrder(
     }
   } catch (e) {
     console.error(`settle_razorpay_payment threw for ${razorpayOrderId}:`, e);
+  }
+
+  // NOTHING COMMITTED. Say so, and do nothing else: no points (a redemption is
+  // irreversible), no coupon, no email, no analytics. The transaction above is
+  // all-or-nothing, so a retry starts from a clean slate. "settled" is only
+  // ever returned for a payment that is recorded.
+  if (!markedPaid) {
+    return {
+      outcome: "unrecorded",
+      paymentStatus: status,
+      ok: false,
+      orderId,
+      orphan: false,
+      stock: "none",
+      emailClaimed: false,
+      flaggedForReview: false,
+    };
   }
   const stockShort = stock === "failed" || stock === "none";
 

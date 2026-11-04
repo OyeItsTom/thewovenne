@@ -597,6 +597,54 @@ async function main() {
         (await w.root.query(RECON_UNCOUNTED, [o.rzp])).rows, [{ razorpay_payment_id: "pay_fixed", status: "placed", payment_status: "pending" }]);
     }
 
+    console.log("\nOS-1 — loyalty moves only for a settled, uncancelled order");
+    {
+      await asRoot(w.root);
+      await w.root.query(`insert into site_content (key, value, draft_value) values ('store_settings', '{"loyalty_enabled": true}', '{"loyalty_enabled": true}')
+                          on conflict (key) do update set value = coalesce(site_content.value, '{}'::jsonb) || '{"loyalty_enabled": true}'`);
+      const uid = (await w.root.query("insert into auth.users (email) values ('loyal-os1@example.test') returning id")).rows[0].id;
+      await w.root.query("insert into profiles (id, email, is_admin) values ($1, 'loyal-os1@example.test', false) on conflict (id) do nothing", [uid]);
+      await w.root.query("insert into loyalty_ledger (user_id, points, reason) values ($1, 1000, 'opening balance')", [uid]);
+      const p = await liveProduct(w.root, w.admin, { stock: 5 });
+      const mk = async () => {
+        const o = await pendingOrder(w.root, p.productId);
+        await w.root.query("update orders set customer_email = 'loyal-os1@example.test' where id = $1", [o.id]);
+        return o;
+      };
+      const redeem = async (orderId: string | null) => {
+        await asService(w.root);
+        try { return (await w.root.query("select public.redeem_loyalty_points($1, 300, $2) r", [uid, orderId])).rows[0].r as { ok: boolean }; }
+        finally { await asRoot(w.root); }
+      };
+      const award = async (orderId: string) => {
+        await asService(w.root);
+        try { return (await w.root.query("select public.award_loyalty_points($1) n", [orderId])).rows[0].n as number; }
+        finally { await asRoot(w.root); }
+      };
+      const balance = async () => (await w.root.query("select public.loyalty_balance($1) b", [uid])).rows[0].b as number;
+
+      const unpaid = await mk();
+      check("redeem against an UNPAID order is refused; balance untouched", [(await redeem(unpaid.id)).ok, await balance()], [false, 1000]);
+      check("award for an unpaid order is 0", await award(unpaid.id), 0);
+
+      const late = await mk();
+      await adminCancelUnpaid(w.root, w.admin, late.id);
+      await settleNew(w.root, late.rzp, "pay_loyal_late");
+      check("late capture on a cancelled order: redeem refused, award 0, balance untouched", [(await redeem(late.id)).ok, await award(late.id), await balance()], [false, 0, 1000]);
+
+      const paid = await mk();
+      await settleNew(w.root, paid.rzp, "pay_loyal_ok");
+      check("paid open order: redeem allowed (1000 → 700), award paid out", [(await redeem(paid.id)).ok, await balance(), (await award(paid.id)) > 0], [true, 700, true]);
+
+      const thenCancelled = await mk();
+      await settleNew(w.root, thenCancelled.rzp, "pay_loyal_then_cancel");
+      await cancelOrder(w.root, w.admin, thenCancelled.id);
+      const before = await balance();
+      check("paid then cancelled: a late redeem/award moves nothing", [(await redeem(thenCancelled.id)).ok, await award(thenCancelled.id), await balance()], [false, 0, before]);
+
+      check("a redemption with no order is unchanged by 0077", (await redeem(null)).ok, true);
+    }
+
     console.log("\nOS-1 — permissions");
     {
       const p = await liveProduct(w.root, w.admin, { stock: 3 });

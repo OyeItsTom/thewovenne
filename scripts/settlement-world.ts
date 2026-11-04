@@ -314,6 +314,11 @@ export function makeWorld(opts: {
       }
       case "redeem_loyalty_points": {
         const orderId = args.p_order_id as string;
+        // 0077: only against a paid, uncancelled order.
+        const target = world.orders.get(orderId);
+        if (orderId && (!target || target.payment_status !== "paid" || target.status === "cancelled")) {
+          return { data: { ok: false, reason: "The order is not settled, so no points were spent." }, error: null };
+        }
         if (world.redemptions.has(orderId)) {
           return { data: null, error: { code: "23505", message: "loyalty_ledger_one_redemption_per_order" } };
         }

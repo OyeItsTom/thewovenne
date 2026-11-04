@@ -90,7 +90,45 @@ async function main() {
     (deps.supabase as unknown as { rpc: unknown }).rpc = async (f: string, a: unknown) =>
       f === "settle_razorpay_payment" ? { data: null, error: { code: "57014", message: "canceling statement due to statement timeout" } } : rpc(f, a);
     const r = await settleOrder({ razorpayOrderId: "order_1", razorpayPaymentId: "pay_1" }, deps);
-    check("not recorded: ok false, nothing else attempted", [r.outcome, r.ok, r.emailClaimed, world.invoiceCalls, world.emails.length, world.orders.get("ord-1")!.payment_status], ["settled", false, false, 0, 0, "pending"]);
+    check("not recorded: outcome 'unrecorded' (never 'settled'), nothing else attempted",
+      [r.outcome, r.ok, r.emailClaimed, world.invoiceCalls, world.emails.length, world.orders.get("ord-1")!.payment_status], ["unrecorded", false, false, 0, 0, "pending"]);
+    check("…the browser is held (not success, not 'payment failed', no pay button)",
+      resolvePaymentOutcome({ verified: true, outcome: r.outcome, recorded: r.ok }), { action: "hold", state: "unrecorded" });
+  }
+  {
+    // Loyalty: points the customer chose to spend must not move before the payment is recorded.
+    const { world, deps } = makeWorld({ order: { loyalty_points_spent: 400 }, profile: true });
+    const rpc = (deps.supabase as unknown as { rpc: (f: string, a: unknown) => Promise<unknown> }).rpc;
+    (deps.supabase as unknown as { rpc: unknown }).rpc = async (f: string, a: unknown) =>
+      f === "settle_razorpay_payment" ? { data: null, error: { code: "08006", message: "connection failure" } } : rpc(f, a);
+    const r = await settleOrder({ razorpayOrderId: "order_1", razorpayPaymentId: "pay_1" }, deps);
+    check("database failure: no points redeemed or awarded", [r.outcome, world.redemptions.size, world.awards.size], ["unrecorded", 0, 0]);
+    (deps.supabase as unknown as { rpc: unknown }).rpc = rpc;
+    const again = await settleOrder({ razorpayOrderId: "order_1", razorpayPaymentId: "pay_1" }, deps);
+    await tick();
+    check("the retry records it and only then moves points (once)", [again.outcome, again.ok, world.redemptions.size, world.awards.size], ["settled", true, 1, 1]);
+  }
+  {
+    // The pending row vanished between the read and the lock: also unrecorded, not settled.
+    const { world, deps } = makeWorld({});
+    const rpc = (deps.supabase as unknown as { rpc: (f: string, a: unknown) => Promise<unknown> }).rpc;
+    (deps.supabase as unknown as { rpc: unknown }).rpc = async (f: string, a: unknown) =>
+      f === "settle_razorpay_payment" ? { data: { path: "no_order" }, error: null } : rpc(f, a);
+    const r = await settleOrder({ razorpayOrderId: "order_1", razorpayPaymentId: "pay_1" }, deps);
+    check("row vanished under the lock → unrecorded", [r.outcome, r.ok, world.emails.length], ["unrecorded", false, 0]);
+  }
+  {
+    // Orphan path whose insert also fails → unrecorded.
+    const { deps } = makeWorld({ order: null });
+    const sb = deps.supabase as unknown as { from: (t: string) => unknown };
+    const from = sb.from.bind(sb);
+    sb.from = (t: string) => {
+      const q = from(t) as { insert: unknown };
+      if (t === "orders") q.insert = () => ({ select: () => ({ maybeSingle: async () => ({ data: null, error: { code: "08006", message: "down" } }) }) });
+      return q;
+    };
+    const r = await settleOrder({ razorpayOrderId: "order_1", razorpayPaymentId: "pay_1" }, deps);
+    check("no pending row and the thin row cannot be written → unrecorded", [r.outcome, r.ok, r.orphan], ["unrecorded", false, true]);
   }
 
   console.log("\n=== webhook ===");
@@ -134,6 +172,10 @@ async function main() {
     const text = `${copy.title} ${copy.body} ${copy.next}`;
     check("copy is the owner-approved message, word for word", [copy.title, copy.body, copy.next], ["Your order was already cancelled when we received your payment.", "Your order will not be dispatched, and a full refund is due. Our team will review the payment and arrange the refund. Please do not make another payment for this order.", "If you need assistance, please contact Wovenne."]);
     check("copy tells them not to pay again", /do not make another payment/i.test(text), true);
+    const u = HOLD_COPY.unrecorded;
+    const ut = `${u.title} ${u.body} ${u.next}`;
+    check("unrecorded copy: tells them not to pay again", /do not make another payment/i.test(ut), true);
+    check("unrecorded copy: claims neither success nor failure, nor dispatch", /\b(success|successful|confirmed order|has been placed|failed|was not taken|dispatch(ed)? (soon|today)|on its way)\b/i.test(ut), false);
     check("copy never says a refund was made, started or when it lands", /refunded|refund (has|was) been|within \d|working days|on its way/i.test(text), false);
   }
 

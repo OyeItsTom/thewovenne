@@ -265,6 +265,11 @@ export async function handleRazorpayWebhook(
           `Webhook for ${target.razorpayOrderId}: not settled (${result.outcome}, status ${result.paymentStatus ?? "unknown"}).`
         );
         return { status: 200, body: { ok: true, settled: false, outcome: result.outcome } };
+      case "unrecorded":
+        // Razorpay says captured; nothing was committed here (database refused
+        // or unreachable). Nothing was written, so a retry is a clean retry.
+        console.error(`Webhook for ${target.razorpayOrderId}: payment captured but not recorded — retry.`);
+        return { status: 500, body: { error: "settlement not recorded" } };
       case "order_cancelled":
         // The order was cancelled. settle_razorpay_payment (0077) has already
         // recorded a payment captured after the cancellation as a refund owed
