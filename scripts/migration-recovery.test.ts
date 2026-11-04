@@ -318,7 +318,11 @@ async function main() {
         t(`0076 ${name}: nothing changed`, diff(b.s, await snapshot(d)) === "" && b.n === (await notices())
           && b.x === JSON.stringify((await d.query("select * from style_submissions order by id")).rows) && (await ledger(d, M76)) === 1);
       };
-      const rej = (w: Client, id: string, reason: string | null) => w.query("select moderate_style($1, 'rejected', $2)", [id, reason]);
+      // FU-6: on 0076 an explained rejection goes through reject_style_with_notice.
+      const rej = (w: Client, id: string, reason: string | null) =>
+        reason === null
+          ? w.query("select moderate_style($1, 'rejected', null)", [id])
+          : w.query("select reject_style_with_notice($1, $2)", [id, reason]);
       const claimSend = async (w: Client, id: string, outcome: string | null) => {
         const cl = (await w.query("select claim_style_rejection_notice($1) c", [id])).rows[0].c;
         if (outcome === null) return;

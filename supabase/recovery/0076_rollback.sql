@@ -31,7 +31,10 @@
 --   was removed). Accepted as the cost of the old code working.
 -- What it removes: style_rejection_notices (only backfilled rows, all
 --   re-derivable), rejection_round and its check, the claim/begin/record
---   functions, both triggers and their functions, and the 0076 ledger row.
+--   functions, reject_style_with_notice and style_moderate_internal (FU-6),
+--   both triggers and their functions, and the 0076 ledger row.
+--   It expects the FU-6 version of 0076: against a 0076 without those two
+--   functions the DROP fails and the whole rollback changes nothing.
 -- ═══════════════════════════════════════════════════════════════════════════
 begin;
 set local lock_timeout = '5s';
@@ -90,6 +93,9 @@ drop function public.style_rejection_supersede();
 drop function public.claim_style_rejection_notice(uuid);
 drop function public.begin_style_rejection_send(uuid);
 drop function public.record_style_rejection_notice(uuid, text, text, text);
+-- FU-6: the explained-rejection door and the private body both functions used.
+drop function public.reject_style_with_notice(uuid, text);
+drop function public.style_moderate_internal(uuid, text, text);
 drop table public.style_rejection_notices;          -- its trigger, policy and index go with it
 drop function public.style_rejection_notice_guard();
 alter table public.style_submissions

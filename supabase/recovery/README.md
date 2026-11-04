@@ -27,7 +27,7 @@ Each one:
 |---|---|
 | 0074 | The pre-R1 app never touches 0074's objects. Confirmations go out the old way, protected by `orders.confirmation_sent_at` (0058). Delivery rows stay as evidence; nothing sends them while #220 is not deployed (no worker, no `CRON_SECRET` effect). **Safe.** |
 | 0075 | The pre-E3 Orders screen cannot mark orders shipped (the guard refuses direct updates), so **dispatch is unavailable**. Everything else works. Keep the dispatch freeze until the fixed E3 is deployed, or roll the schema back if still allowed. |
-| 0076 | The pre-#223 reject route still emails, but its stamp is refused: the admin sees "sent but not recorded — do not send again". **Safe** with the explained-rejection freeze kept. Silent rejections and approvals work. |
+| 0076 | The pre-#223 reject route cannot turn anything down **with a reason**: `moderate_style` refuses it (`EXPLAINED_REJECTION_MOVED`, FU-6) before that route sends any email, so no duplicate is possible. **But** that route takes the public gallery copy down *before* the refused call: on an **approved** submission the picture breaks while the row stays published (recover: "Take it off", then "Put it on the site"). So keep the style-moderation freeze while old code runs. Silent rejections, take-offs and approvals work. |
 
 Roll back a **schema** only when the schema itself is harmful **and** the script's guards allow it. In practice that means inside the migration window, before the feature is used.
 
