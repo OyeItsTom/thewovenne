@@ -292,7 +292,7 @@ t("customerVisibleText: blank → null", customerVisibleText(" \n\t ") === null)
 
   const routes: [string, string, string[]][] = [
     ["cancel", "app/api/admin/orders/cancel/route.ts", ["request.json()", 'rpc("cancel_order"', '.from("orders")', "sendEmail("]],
-    ["reject", "app/api/admin/style/reject/route.ts", ["request.json()", "createServiceClient()", "removeGalleryCopies(", 'rpc("moderate_style"', 'rpc("claim_style_rejection_notice"', "sendClaimedRejection(", 'rpc("record_style_rejection_notice"']],
+    ["reject", "app/api/admin/style/reject/route.ts", ["request.json()", "createServiceClient()", "removeGalleryCopies(", 'rpc("reject_style_with_notice"', 'rpc("claim_style_rejection_notice"', "sendClaimedRejection(", 'rpc("record_style_rejection_notice"']],
     ["moderate", "app/api/admin/style/moderate/route.ts", ["request.json()", "createServiceClient()", 'rpc("approve_style"', 'rpc("moderate_style"', "removeGalleryCopies("]],
   ];
   for (const [name, file, after] of routes) {
@@ -321,7 +321,7 @@ t("customerVisibleText: blank → null", customerVisibleText(" \n\t ") === null)
   t("cancel route: no refund wording source left", !cancel.includes("isOffline") && !cancel.includes("paidInPerson"));
   t("cancel route: email failure still returns ok", /return NextResponse\.json\(\{\s*ok: true,/.test(cancel));
   const reject = code(read("app/api/admin/style/reject/route.ts"));
-  t("reject route: same moderation call", /rpc\("moderate_style", \{\s*p_id: id,\s*p_status: "rejected",\s*p_reason: trimmed,\s*\}\)/.test(reject));
+  t("reject route: explained rejection through reject_style_with_notice (FU-6)", /rpc\("reject_style_with_notice", \{\s*p_id: id,\s*p_reason: trimmed,\s*\}\)/.test(reject) && !/rpc\("moderate_style"/.test(code(reject)));
   // Stage B (0076): the stamp is written only by record_style_rejection_notice
   // after provider acceptance; the route never writes it directly.
   t("reject route: stamp only via the record function after a claim", !/\.update\(\{\s*rejection_emailed_at/.test(reject)

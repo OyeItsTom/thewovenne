@@ -11,11 +11,11 @@
 --   * could only say "accepted": a failure or a lost answer left no trace.
 --
 -- WHAT THIS ADDS
---   1. style_submissions.rejection_round: bumped by moderate_style() only on a
+--   1. style_submissions.rejection_round: bumped by the moderation body only on a
 --      transition INTO rejected, so each rejection event has an immutable
 --      identity (submission, round).
 --   2. style_rejection_notices: one row per (submission, round) when the
---      rejection carries a customer-visible reason. Created by moderate_style()
+--      rejection carries a customer-visible reason. Created by the moderation body
 --      in the same transaction as the rejection: the intent is durable before
 --      any email is attempted. Silent rejections create none.
 --   3. claim_style_rejection_notice(): locks the submission and atomically
@@ -32,8 +32,11 @@
 --      whatever the submission has done since: the provider's real answer.
 --      Only "accepted" sets rejection_emailed_at, which therefore still means
 --      "the provider accepted it", never "claimed" or "queued".
---   6. moderate_style(): row lock; rejected → rejected with the same reason is
---      a no-op; with a different reason it is refused (ALREADY_REJECTED).
+--   6. Moderation: row lock; rejected → rejected with the same reason is a
+--      no-op; with a different reason it is refused (ALREADY_REJECTED). An
+--      EXPLAINED rejection now goes only through reject_style_with_notice();
+--      moderate_style() refuses one (EXPLAINED_REJECTION_MOVED), so a route
+--      from before 0076 cannot email outside the notice record (FU-6, R-1).
 --   7. Leaving "rejected" (approval, back to pending, resubmission) marks any
 --      unsent intent of that round superseded. History is never deleted or
 --      reset by moderation.
@@ -163,10 +166,32 @@ comment on column style_submissions.rejection_emailed_at is
    style_rejection_notices.';
 
 -- ══ 4. Moderation, locked, with the intent ═════
-create or replace function public.moderate_style(
+-- One private body, two doors (FU-6, finding R-1).
+--
+--   style_moderate_internal()   the decision itself. Not callable by anyone.
+--   moderate_style()            approve / pending / SILENT rejection only.
+--   reject_style_with_notice()  an EXPLAINED rejection, which also records the
+--                               notice. Only the 0076-aware reject route calls it.
+--
+-- WHY TWO DOORS. Before 0076 the reject route called moderate_style() with a
+-- reason, then emailed the customer itself, then wrote rejection_emailed_at.
+-- That route still exists in every deployment from before #223, and Vercel can
+-- bring it back with an instant rollback. Against this database it would email
+-- without any record (0076 refuses its stamp), and a later 0076-aware send would
+-- tell the customer a second time. Because it calls moderate_style() with a
+-- reason, refusing exactly that call stops it at its first database step: its
+-- code returns on that error BEFORE it reaches the email. This holds for any
+-- deployment, at any time, with no operator switch to remember.
+--
+-- WHAT IT DOES NOT STOP. That old route takes the submission's PUBLIC gallery
+-- copy down BEFORE this call. On an approved submission the refusal therefore
+-- leaves it approved with its public picture gone (the database is unchanged).
+-- Only duplicate email is prevented here; the release runbook keeps a
+-- moderation freeze for any window in which that old route can run.
+create or replace function public.style_moderate_internal(
   p_id uuid,
   p_status text,
-  p_reason text default null
+  p_reason text
 )
 returns boolean
 language plpgsql
@@ -230,8 +255,59 @@ begin
 end;
 $fn$;
 
+revoke execute on function public.style_moderate_internal(uuid, text, text) from public, anon, authenticated, service_role;
+
+create or replace function public.moderate_style(
+  p_id uuid,
+  p_status text,
+  p_reason text default null
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can moderate submissions';
+  end if;
+  -- Refused BEFORE the row is read or locked, so the "same rejection again"
+  -- no-op cannot answer true either: a pre-0076 route re-pressed on a row that
+  -- is already rejected would otherwise go on to email again.
+  if p_status = 'rejected' and nullif(btrim(coalesce(p_reason, '')), '') is not null then
+    raise exception 'EXPLAINED_REJECTION_MOVED: this admin page is out of date and cannot turn a submission down with a reason. The decision was not recorded and no email was sent. Reload the current admin page.';
+  end if;
+  return public.style_moderate_internal(p_id, p_status, null);
+end;
+$fn$;
+
 revoke execute on function public.moderate_style(uuid, text, text) from public, anon;
 grant execute on function public.moderate_style(uuid, text, text) to authenticated, service_role;
+
+create or replace function public.reject_style_with_notice(
+  p_id uuid,
+  p_reason text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can moderate submissions';
+  end if;
+  if nullif(btrim(coalesce(p_reason, '')), '') is null then
+    raise exception 'REASON_REQUIRED: an explained rejection needs a reason; a silent one goes through moderate_style()';
+  end if;
+  return public.style_moderate_internal(p_id, 'rejected', p_reason);
+end;
+$fn$;
+
+-- service_role too, explicitly: only an aal2 admin's own session may call it,
+-- whatever the project's default privileges grant to new functions.
+revoke execute on function public.reject_style_with_notice(uuid, text) from public, anon, service_role;
+grant execute on function public.reject_style_with_notice(uuid, text) to authenticated;
 
 -- ══ 5. Leaving rejected supersedes unsent intents ══
 -- approve_style, moderate_style(pending|approved) and resubmit_style all move a
@@ -588,6 +664,7 @@ select
   has_column_privilege('authenticated', 'public.style_submissions', 'withdrawn_at', 'UPDATE') as customer_withdraw_update_must_be_true,
   has_table_privilege('authenticated', 'public.style_rejection_notices', 'INSERT') as notice_insert_must_be_false,
   has_function_privilege('anon', 'public.claim_style_rejection_notice(uuid)', 'EXECUTE') as anon_claim_must_be_false,
+  has_function_privilege('authenticated', 'public.style_moderate_internal(uuid, text, text)', 'EXECUTE') as internal_moderation_callable_must_be_false,
   (select count(*) from style_rejection_notices where backfilled) as backfilled_accepted_notices,
   (select count(*) from style_submissions s
      where s.status = 'rejected' and s.reject_reason is not null and s.rejection_emailed_at is null) as historical_unemailed_not_sent;

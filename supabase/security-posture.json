@@ -1495,6 +1495,13 @@
         "service_role"
       ]
     },
+    "reject_style_with_notice(uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": [
+        "authenticated"
+      ]
+    },
     "release_stock(jsonb,uuid,text)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -1620,6 +1627,11 @@
       "execute": [
         "service_role"
       ]
+    },
+    "style_moderate_internal(uuid,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public",
+      "execute": []
     },
     "style_photo_garbage(interval)": {
       "securityDefiner": true,

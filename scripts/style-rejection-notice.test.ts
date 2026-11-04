@@ -183,7 +183,7 @@ async function unit() {
     'rpc("is_admin")',
     "request.json()",
     "removeGalleryCopies(service, [id])",
-    'rpc("moderate_style"',
+    'rpc("reject_style_with_notice"',
     "sweepStylePhotos(service)",
     'rpc("claim_style_rejection_notice"',
     "sendClaimedRejection(",
@@ -302,7 +302,11 @@ async function database() {
       return { s, n };
     };
     const admin = await makeAdmin(c, "admin@example.test");
-    const moderate = (cl: Client, id: string, status: string, reason: string | null) => cl.query("select moderate_style($1, $2, $3) r", [id, status, reason]);
+    // FU-6: an explained rejection goes through reject_style_with_notice, as the route does.
+    const moderate = (cl: Client, id: string, status: string, reason: string | null) =>
+      status === "rejected" && reason !== null && reason.trim() !== ""
+        ? cl.query("select reject_style_with_notice($1, $2) r", [id, reason])
+        : cl.query("select moderate_style($1, $2, $3) r", [id, status, reason]);
     const claim = async (cl: Client, id: string) => (await cl.query("select claim_style_rejection_notice($1) c", [id])).rows[0].c as Claim;
     const record = (cl: Client, notice: string, outcome: string, pid: string | null = null, err: string | null = null) =>
       cl.query("select record_style_rejection_notice($1, $2, $3, $4)", [notice, outcome, pid, err]);
@@ -370,6 +374,40 @@ async function database() {
     t("different reason: refused ALREADY_REJECTED, reason unchanged", /ALREADY_REJECTED/.test(diff) && st.s.reject_reason === "Blurry" && st.n.length === 1);
     await asAdmin(c, admin);
     t("silent on a reasoned rejection: refused (a reason change)", /ALREADY_REJECTED/.test(await failure(() => moderate(c, s1, "rejected", null))));
+
+    // ── FU-6 (R-1): moderate_style no longer takes an explained rejection ──
+    // A reject route from before 0076 calls moderate_style WITH a reason, then
+    // emails. Refusing that call is what stops it before the email.
+    const raw = (cl: Client, id: string, status: string, reason: string | null) => cl.query("select moderate_style($1, $2, $3) r", [id, status, reason]);
+    await customer("fu6legacy");
+    const legacy = await submission("fu6legacy");
+    await asAdmin(c, admin);
+    const legacyNew = await failure(() => raw(c, legacy, "rejected", "Blurry"));
+    let lg = await state(legacy);
+    t("FU-6: moderate_style with a reason on a pending row is refused, nothing changes", /EXPLAINED_REJECTION_MOVED/.test(legacyNew) && lg.s.status === "pending" && lg.s.rejection_round === 0 && lg.n.length === 0, legacyNew);
+    await asAdmin(c, admin);
+    const legacySame = await failure(() => raw(c, s1, "rejected", "Blurry"));
+    t("FU-6: moderate_style with the SAME reason on an already-rejected row is refused (the no-op no longer answers true)", /EXPLAINED_REJECTION_MOVED/.test(legacySame), legacySame);
+    await asAdmin(c, admin);
+    t("FU-6: a whitespace-only reason is a silent rejection, still allowed", (await failure(() => raw(c, legacy, "rejected", "   "))) === "" && (await state(legacy)).s.status === "rejected" && (await state(legacy)).n.length === 0);
+    await asAdmin(c, admin);
+    t("FU-6: back to pending through moderate_style still works", (await failure(() => raw(c, legacy, "pending", null))) === "" && (await state(legacy)).s.status === "pending");
+    await asAdmin(c, admin);
+    t("FU-6: reject_style_with_notice needs a reason", /REASON_REQUIRED/.test(await failure(() => c.query("select reject_style_with_notice($1, $2)", [legacy, "  "]))));
+    await asStaffPasswordOnly(c, admin);
+    t("FU-6: reject_style_with_notice needs an aal2 admin", (await failure(() => c.query("select reject_style_with_notice($1, 'x')", [legacy]))) !== "");
+    await as(c, "buyer");
+    t("FU-6: a customer cannot call reject_style_with_notice", (await failure(() => c.query("select reject_style_with_notice($1, 'x')", [legacy]))) !== "");
+    t("FU-6: the private body is not callable by a customer", /permission denied/.test(await failure(() => c.query("select style_moderate_internal($1, 'rejected', 'x')", [legacy]))));
+    await asAdmin(c, admin);
+    t("FU-6: …nor by an admin", /permission denied/.test(await failure(() => c.query("select style_moderate_internal($1, 'rejected', 'x')", [legacy]))));
+    await c.query("reset role");
+    await c.query("set role service_role");
+    t("FU-6: …nor by service_role", /permission denied/.test(await failure(() => c.query("select style_moderate_internal($1, 'rejected', 'x')", [legacy]))));
+    t("FU-6: service_role cannot call reject_style_with_notice either (explicit revoke)", /permission denied/.test(await failure(() => c.query("select reject_style_with_notice($1, 'x')", [legacy]))));
+    await asRoot(c);
+    lg = await state(legacy);
+    t("FU-6: …and none of those changed the row", lg.s.status === "pending" && lg.n.length === 0);
 
     // ── Claims ──
     await asAdmin(c, admin);

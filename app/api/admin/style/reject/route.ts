@@ -28,7 +28,7 @@ import { sendClaimedRejection, type BeginResult, type Claim, type NoticeReport }
  * rather than quietly doing the silent thing under a name that promises a
  * message.
  *
- * AT MOST ONE EMAIL PER REJECTION (0076, WP-EMAIL-E5 Stage B). moderate_style
+ * AT MOST ONE EMAIL PER REJECTION (0076, WP-EMAIL-E5 Stage B). reject_style_with_notice
  * records the rejection and, in the same transaction, one notification intent
  * for this rejection round; repeating the same rejection changes nothing, and
  * a different reason on an already-rejected submission is refused (409).
@@ -71,9 +71,12 @@ export async function POST(request: NextRequest) {
   const down = await removeGalleryCopies(service, [id]);
   if (down.failed) console.error(`style reject ${id}: ${down.failed}`);
 
-  const { data: moderated, error: rpcError } = await supabase.rpc("moderate_style", {
+  // reject_style_with_notice, not moderate_style: since 0076 moderate_style
+  // refuses a reason, which is what stops a route from before 0076 emailing
+  // outside the notice record (FU-6). Against a database without 0076 this
+  // call fails, and the route stops here: nothing claimed, nothing sent.
+  const { data: moderated, error: rpcError } = await supabase.rpc("reject_style_with_notice", {
     p_id: id,
-    p_status: "rejected",
     p_reason: trimmed,
   });
   if (rpcError) {

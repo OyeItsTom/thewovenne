@@ -238,7 +238,7 @@ const uuid = () => crypto.randomUUID();
   t("take off / silent reject: public copy removed FIRST, then moderate_style with the admin's session, then the sweep",
     before(moderate, "removeGalleryCopies(service, [id])", 'supabase.rpc("moderate_style"', "sweepStylePhotos(service)"));
   t("reject with a reason: public copy removed FIRST, then recorded, then the sweep",
-    adminGate.test(reject) && before(reject, "removeGalleryCopies(service, [id])", 'rpc("moderate_style"', "sweepStylePhotos(service)"));
+    adminGate.test(reject) && before(reject, "removeGalleryCopies(service, [id])", 'rpc("reject_style_with_notice"', "sweepStylePhotos(service)"));
   t("admin delete: admin-gated; public copy FIRST, then the row with the admin's session, original by name, then the sweep",
     adminGate.test(adminDelete) && /await supabase\s*\.from\("style_submissions"\)\s*\.delete\(\)/.test(adminDelete)
     && before(adminDelete, "removeGalleryCopies(service, [id])", '.from("style_submissions")', "storage.from(STYLE_PHOTO_BUCKET).remove([original])", "sweepStylePhotos(service)"));
@@ -467,7 +467,7 @@ const uuid = () => crypto.randomUUID();
     g = await garbage();
     t("re-approval publishes a NEW copy; the old one stays named", named(g, "style-gallery", copy1) && !named(g, "style-gallery", copy2));
     await asAdmin(c, admin);
-    await c.query("select moderate_style($1, 'rejected', 'blurry')", [sid]);
+    await c.query("select reject_style_with_notice($1, 'blurry')", [sid]);
     t("rejecting clears photo_url", (await row(sid)).photo_url === null);
     g = await garbage();
     t("…and names the copy at once; the private original is kept for the customer's resubmission",
