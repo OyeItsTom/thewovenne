@@ -265,6 +265,16 @@ export async function handleRazorpayWebhook(
           `Webhook for ${target.razorpayOrderId}: not settled (${result.outcome}, status ${result.paymentStatus ?? "unknown"}).`
         );
         return { status: 200, body: { ok: true, settled: false, outcome: result.outcome } };
+      case "order_cancelled":
+        // The order was cancelled. settle_razorpay_payment (0077) has already
+        // recorded a payment captured after the cancellation as a refund owed
+        // and flagged the order — durably, in the same transaction that read
+        // the status — or recognised a replay for an order paid and then
+        // cancelled. Nothing a retry could add: acknowledge.
+        console.error(
+          `Webhook for ${target.razorpayOrderId}: order is cancelled — payment ${target.razorpayPaymentId} not fulfilled (refund owed if captured after cancellation).`
+        );
+        return { status: 200, body: { ok: true, settled: false, outcome: result.outcome } };
       default:
         // Settled outcome but nothing recorded (no row could be written).
         console.error(`Webhook settlement could not record ${target.razorpayOrderId}.`);
