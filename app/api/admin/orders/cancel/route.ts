@@ -1,4 +1,5 @@
 import { adminApiGate } from "@/lib/adminApiGate";
+import { isSameOrigin } from "@/lib/sameOrigin";
 import { NextRequest, NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { createRSCClient } from "@/lib/supabaseRSC";
@@ -10,14 +11,13 @@ import {
   type CreditNoteRow,
 } from "@/lib/creditNote";
 import { sendEmail } from "@/lib/email";
-import { isOffline } from "@/lib/paymentMethods";
 import { orderRef } from "@/lib/orders";
 import {
   orderCancelledHtml,
   orderCancelledSubject,
   orderCancelledText,
 } from "@/lib/emails/orderCancelled";
-import type { OrderEmailItem } from "@/lib/emails/orderConfirmation";
+import type { CancelledEmailItem } from "@/lib/emails/orderCancelled";
 
 /**
  * Cancel an order, and tell the customer.
@@ -47,6 +47,11 @@ export const runtime = "nodejs";
 export async function POST(request: NextRequest) {
   const ended = await adminApiGate(request);
   if (ended) return ended;
+
+  // Only our own admin pages send this: a cross-site form or a request with no
+  // (or a malformed) Origin is refused before anything is read, written or
+  // emailed. Same order as the other admin POST routes (WP-EMAIL-E5).
+  if (!isSameOrigin(request)) return NextResponse.json({ ok: false, error: "Not allowed." }, { status: 403 });
 
   const supabase = createRSCClient();
   const { data: isAdmin } = await supabase.rpc("is_admin");
@@ -97,7 +102,7 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     const order = orderRow as unknown as
-      | (CreditNoteOrderRow & { items: OrderEmailItem[] | null })
+      | (CreditNoteOrderRow & { items: CancelledEmailItem[] | null })
       | null;
 
     if (!note) {
@@ -107,18 +112,31 @@ export async function POST(request: NextRequest) {
       // number, and an anonymised order (0033) has no address by design.
       emailProblem = "That order has no email address, so nobody was told.";
     } else {
+      // The PDF is rendered on its own, so a rendering failure still lets the
+      // customer hear about the cancellation, and the email says the PDF is
+      // attached only when it really is.
       const data = buildCreditNote(note, order);
-      const pdf = data ? await renderToBuffer(CreditNoteDocument({ data })) : null;
+      let pdf: Uint8Array | null = null;
+      if (data) {
+        try {
+          pdf = await renderToBuffer(CreditNoteDocument({ data }));
+        } catch (e) {
+          console.error(`Cancel ${orderId}: credit note PDF did not render — sending without it`, e);
+          pdf = null;
+        }
+      }
 
       const payload = {
         orderRef: orderRef(orderId),
-        customerName: order.customer_name || "there",
+        customerName: order.customer_name,
         items: Array.isArray(order.items) ? order.items : [],
         amount: Number(note.amount_inr ?? 0),
         creditNoteNumber: note.credit_note_number,
         invoiceNumber: note.invoice_number,
+        // What the admin typed, which is also what the credit note records.
+        // The email shows at most 500 characters of it; the record keeps all.
         reason: trimmedReason,
-        paidInPerson: isOffline(order.payment_method),
+        creditNoteAttached: pdf !== null,
       };
 
       const sent = await sendEmail({
@@ -139,6 +157,11 @@ export async function POST(request: NextRequest) {
       emailed = sent.ok;
       if (!sent.ok) {
         emailProblem = sent.error ?? "The email provider refused that message.";
+      } else if (!pdf) {
+        // The screen only shows emailProblem when nothing was sent, so this is
+        // for the response and the log: the email went without its PDF.
+        emailProblem = "The email was accepted without the credit-note PDF, which could not be prepared. Download it from Invoices if the customer needs it.";
+        console.error(`Cancel ${orderId}: emailed without the credit note PDF`);
       }
     }
   } catch (e) {

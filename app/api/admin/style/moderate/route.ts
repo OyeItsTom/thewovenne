@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { adminApiGate } from "@/lib/adminApiGate";
+import { isSameOrigin } from "@/lib/sameOrigin";
 import { NextRequest, NextResponse } from "next/server";
 import { createRSCClient } from "@/lib/supabaseRSC";
 import { createServiceClient } from "@/lib/supabase";
@@ -38,6 +39,11 @@ type Action = "approve" | "pending" | "rejected";
 export async function POST(request: NextRequest) {
   const ended = await adminApiGate(request);
   if (ended) return ended;
+
+  // Only our own admin pages send this: a cross-site form or a request with no
+  // (or a malformed) Origin is refused before anything is read, written or
+  // emailed. Same order as the other admin POST routes (WP-EMAIL-E5).
+  if (!isSameOrigin(request)) return NextResponse.json({ ok: false, error: "Not allowed." }, { status: 403 });
 
   const supabase = createRSCClient();
   const { data: isAdmin } = await supabase.rpc("is_admin");

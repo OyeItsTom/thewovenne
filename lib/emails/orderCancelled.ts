@@ -1,175 +1,162 @@
-import { formatINR } from "../utils";
-import type { OrderEmailItem } from "./orderConfirmation";
-
 /**
- * The email a customer gets when their order is cancelled.
+ * The email a customer gets when their order is cancelled (rebuilt on the E1
+ * layout in WP-EMAIL-E5).
  *
- * IT DID NOT EXIST. Cancelling issued a credit note, put the stock back and
- * marked the order — and told the customer nothing at all. They had been sent a
- * confirmation and an invoice; the next thing they would have known about it is
- * a parcel that never came, or a refund appearing with no explanation.
+ * WHAT IT RECORDS, AND WHAT IT DOES NOT CLAIM. Cancelling issues a credit
+ * note: a document saying what is credited against the invoice. Nothing in the
+ * application issues or records the refund itself, so this email never says a
+ * refund was made, started, or will land anywhere by any date. It says what
+ * the credit note is and that it is not itself a refund.
  *
- * WHAT IT DOES NOT SAY IS THAT THE MONEY IS BACK. The credit note records what
- * is owed; the refund itself is made in Razorpay or in cash and nothing here can
- * see it land. So this says a refund is on its way and roughly when, which is
- * true, rather than "you have been refunded", which would not be.
+ * IT DOES NOT SAY THE PARCEL WAS NEVER SENT. cancel_order() accepts orders
+ * that are already shipped or delivered, and this email does not know which.
  *
- * Same construction as the confirmation: table layout, inline styles, a text
- * part alongside.
+ * THE ATTACHMENT IS MENTIONED ONLY WHEN IT IS ATTACHED. The caller says
+ * whether the credit-note PDF was rendered and attached.
+ *
+ * THE REASON is whatever the admin typed, shown escaped and capped at 500
+ * characters here. The credit note keeps the full text.
+ *
+ * Every value is escaped by the layout (lib/emails/layout.ts). No links beyond
+ * the footer's own, no reply-to promise.
  */
+import {
+  CLOSING_TEXT,
+  closing,
+  footerText,
+  greeting,
+  greetingText,
+  heading,
+  html,
+  infoBox,
+  paragraph,
+  renderEmail,
+  strong,
+  type EmailFooter,
+  type SafeHtml,
+} from "./layout";
+import { customerVisibleText, greetingName } from "./greetingName";
+import { inr } from "../invoice";
+
+/** One line of the cancelled order, as stored on it. */
+export interface CancelledEmailItem {
+  name: string;
+  size?: string | null;
+  quantity: number;
+}
 
 export interface CancelledEmailData {
   orderRef: string;
-  customerName: string;
-  items: OrderEmailItem[];
-  /** What is being credited — the credit note's amount, not the order total. */
+  customerName: string | null;
+  items: readonly CancelledEmailItem[];
+  /** The credit note's own amount (amount_inr), not the order total. */
   amount: number;
   creditNoteNumber: string;
   invoiceNumber: string | null;
   /** As typed by whoever cancelled it. Shown only when there is one. */
   reason: string | null;
-  /** True when the money arrived in person, so no gateway will send it back. */
-  paidInPerson: boolean;
+  /** True only when the credit-note PDF is attached to this very email. */
+  creditNoteAttached: boolean;
 }
 
-const INK = "#1C1F3B";
-const TERRACOTTA = "#C2714F";
-const MUTED = "#6b6b76";
+/** Characters of the reason shown to the customer. The record keeps it all. */
+export const CANCELLATION_REASON_MAX = 500;
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-/**
- * How the money comes back.
- *
- * An in-person sale has no gateway to reverse, so promising an automatic refund
- * to the original payment method would be a promise nobody can keep. It says the
- * shop will be in touch instead, which is what actually happens.
- */
-function refundLine(d: CancelledEmailData): string {
-  return d.paidInPerson
-    ? "We'll be in touch to arrange your refund — this order was paid in person, so there's no card or UPI payment for us to reverse."
-    : "Your refund goes back to the way you paid, and usually reaches you within 5 to 7 working days.";
-}
+const FOOTER: EmailFooter = { kind: "transactional" };
 
 export function orderCancelledSubject(orderRef: string): string {
-  return `Your THE WOVENNE order ${orderRef} has been cancelled`;
+  return `Your THE WOVENNE order ${oneLine(orderRef)} has been cancelled`;
 }
 
-export function orderCancelledText(d: CancelledEmailData): string {
-  const lines = d.items.map(
-    (i) =>
-      `- ${i.name}${i.size && i.size !== "One Size" ? ` (${i.size})` : ""} x${i.quantity}`
-  );
-  return [
-    `Hello ${d.customerName},`,
-    "",
-    `Your order ${d.orderRef} has been cancelled.`,
-    ...(d.reason ? ["", `Reason: ${d.reason}`] : []),
-    "",
-    "What was cancelled:",
-    ...lines,
-    "",
-    `Credited: ${formatINR(d.amount)}`,
-    `Credit note: ${d.creditNoteNumber}${
-      d.invoiceNumber ? ` (against invoice ${d.invoiceNumber})` : ""
-    }`,
-    "The credit note is attached.",
-    "",
-    refundLine(d),
-    "",
-    "If this is a surprise, reply to this email and we'll sort it out.",
-    "",
-    "THE WOVENNE",
-  ].join("\n");
+function oneLine(s: string): string {
+  return String(s ?? "").replace(/[\r\n\t]+/g, " ").trim();
+}
+
+function check(d: CancelledEmailData): void {
+  if (!oneLine(d.orderRef)) throw new TypeError("Cancellation email needs an order reference.");
+  if (!oneLine(d.creditNoteNumber)) throw new TypeError("Cancellation email needs a credit note number.");
+  if (!Number.isFinite(d.amount) || d.amount < 0) throw new TypeError("Cancellation email needs a valid credited amount.");
+}
+
+function itemLine(i: CancelledEmailItem): string {
+  const size = i.size && i.size !== "One Size" ? ` · ${oneLine(i.size)}` : "";
+  return `${oneLine(i.name) || "Item"}${size} × ${Number(i.quantity) || 0}`;
+}
+
+function cleanItems(items: readonly CancelledEmailItem[]): CancelledEmailItem[] {
+  return (Array.isArray(items) ? items : []).filter((i) => i && (i.name || i.quantity));
+}
+
+/** Shared by HTML and text, in order, so the two cannot drift. */
+function parts(d: CancelledEmailData) {
+  const ref = oneLine(d.orderRef);
+  const cn = oneLine(d.creditNoteNumber);
+  const reason = customerVisibleText(d.reason, CANCELLATION_REASON_MAX);
+  const facts: [string, string][] = [
+    ["Order", ref],
+    ...(d.invoiceNumber && oneLine(d.invoiceNumber) ? ([["Invoice", oneLine(d.invoiceNumber)]] as [string, string][]) : []),
+    ["Credit note", cn],
+    ["Amount credited", inr(d.amount)],
+  ];
+  return {
+    preheader: d.creditNoteAttached
+      ? `Order ${ref} has been cancelled. Credit note ${cn} is attached.`
+      : `Order ${ref} has been cancelled. Credit note ${cn} has been issued.`,
+    lead: `Your order ${ref} has been cancelled.`,
+    reason: reason ? `Reason: ${reason}` : null,
+    facts,
+    creditNote: d.invoiceNumber && oneLine(d.invoiceNumber)
+      ? `We have issued credit note ${cn} against invoice ${oneLine(d.invoiceNumber)}. It records the amount credited to you; it is not confirmation that a refund has been paid.`
+      : `We have issued credit note ${cn}. It records the amount credited to you; it is not confirmation that a refund has been paid.`,
+    attachment: d.creditNoteAttached ? "The credit note is attached to this email as a PDF." : null,
+    itemsHeading: "What was cancelled:",
+    items: cleanItems(d.items).map(itemLine),
+  };
 }
 
 export function orderCancelledHtml(d: CancelledEmailData): string {
-  const rows = d.items
-    .map(
-      (i) => `
-        <tr>
-          <td style="padding:12px 0;border-bottom:1px solid #eee;color:${INK};">
-            ${escapeHtml(i.name)}${
-              i.size && i.size !== "One Size"
-                ? `<span style="color:${MUTED};"> · ${escapeHtml(i.size)}</span>`
-                : ""
-            }
-            <span style="color:${MUTED};"> × ${i.quantity}</span>
-          </td>
-        </tr>`
-    )
-    .join("");
+  check(d);
+  const p = parts(d);
+  const rows = p.facts.map(([label, value], i) => html`${i ? html`<br>` : ""}${label}: ${strong(value)}`);
+  const body: SafeHtml[] = [
+    heading("Your order has been cancelled"),
+    greeting(greetingName(d.customerName)),
+    paragraph(p.lead, { spaceAfter: p.reason ? 12 : 24 }),
+    ...(p.reason ? [paragraph(p.reason)] : []),
+    infoBox(html`${rows}`),
+    paragraph(p.creditNote, { spaceAfter: p.attachment ? 12 : 24 }),
+    ...(p.attachment ? [paragraph(p.attachment)] : []),
+    ...(p.items.length
+      ? [
+          paragraph(p.itemsHeading, { tone: "small", spaceAfter: 6 }),
+          paragraph(html`${p.items.map((l, i) => html`${i ? html`<br>` : ""}${l}`)}`, { tone: "small" }),
+        ]
+      : []),
+    closing(),
+  ];
+  return renderEmail({ title: orderCancelledSubject(d.orderRef), preheader: p.preheader, body, footer: FOOTER });
+}
 
-  return `<!doctype html>
-<html>
-  <body style="margin:0;padding:0;background:#ffffff;font-family:Helvetica,Arial,sans-serif;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;">
-      <tr>
-        <td align="center" style="padding:40px 20px;">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;">
-            <tr>
-              <td style="padding-bottom:28px;">
-                <div style="font-size:22px;letter-spacing:2px;color:${INK};">THE WOVENNE</div>
-                <div style="font-size:12px;color:${MUTED};margin-top:4px;">Chosen piece by piece.</div>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding-bottom:8px;font-size:24px;color:${INK};">
-                Your order has been cancelled.
-              </td>
-            </tr>
-            <tr>
-              <td style="padding-bottom:24px;font-size:15px;line-height:1.6;color:${MUTED};">
-                Hello ${escapeHtml(d.customerName)} — order
-                <strong style="color:${INK};">${escapeHtml(d.orderRef)}</strong>
-                has been cancelled${
-                  d.reason ? `: ${escapeHtml(d.reason)}` : ""
-                }. Nothing will be sent to you.
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:14px 16px;background:#F0EAD6;border-radius:8px;font-size:13px;line-height:1.7;color:${INK};">
-                Credited <strong>${formatINR(d.amount)}</strong><br>
-                Credit note <strong>${escapeHtml(d.creditNoteNumber)}</strong>${
-                  d.invoiceNumber
-                    ? ` against invoice ${escapeHtml(d.invoiceNumber)}`
-                    : ""
-                }<br>
-                <span style="color:${MUTED};">Attached to this email, for your records.</span>
-              </td>
-            </tr>
-            <tr><td style="height:28px;"></td></tr>
-            <tr>
-              <td>
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:15px;">
-                  ${rows}
-                </table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding-top:20px;font-size:14px;line-height:1.6;color:${MUTED};">
-                ${escapeHtml(refundLine(d))}
-              </td>
-            </tr>
-            <tr><td style="height:32px;"></td></tr>
-            <tr>
-              <td style="border-top:1px solid #eee;padding-top:20px;font-size:12px;line-height:1.6;color:${MUTED};">
-                If this is a surprise, just reply to this email — it reaches us
-                directly and we'll sort it out.
-                <br><br>
-                <span style="color:${TERRACOTTA};">THE WOVENNE</span>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>`;
+export function orderCancelledText(d: CancelledEmailData): string {
+  check(d);
+  const p = parts(d);
+  return [
+    "Your order has been cancelled",
+    "",
+    greetingText(greetingName(d.customerName)),
+    "",
+    p.lead,
+    ...(p.reason ? ["", p.reason] : []),
+    "",
+    ...p.facts.map(([label, value]) => `${label}: ${value}`),
+    "",
+    p.creditNote,
+    ...(p.attachment ? ["", p.attachment] : []),
+    ...(p.items.length ? ["", p.itemsHeading, ...p.items.map((l) => `- ${l}`)] : []),
+    "",
+    CLOSING_TEXT,
+    "",
+    "--",
+    footerText(FOOTER),
+  ].join("\n");
 }

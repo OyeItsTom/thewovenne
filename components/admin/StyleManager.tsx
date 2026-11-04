@@ -49,6 +49,43 @@ interface Submission {
   customer_email: string | null;
   customer_name: string | null;
   admin_notified_at: string | null;
+  /** The current rejection round's notice (0076), or null when there is none. */
+  rejection_notice_status?: "pending" | "claimed" | "sending" | "skipped" | "accepted" | "failed" | "uncertain" | null;
+  rejection_notice_claimed_at?: string | null;
+}
+
+/**
+ * What the queue says about the customer email for a rejection with a reason.
+ * Each state says only what the database knows:
+ *   claimed    a claim exists; the send was never begun (nothing went out)
+ *   sending    the send was authorised; it may or may not have reached the
+ *              provider (an interruption can stop it before the call), and no
+ *              outcome was recorded
+ *   uncertain  the provider was called and its response was unclear
+ *   accepted   the provider confirmed it accepted the email (not delivery)
+ *   skipped    deliberately not sent: no longer eligible at the last check
+ * None of these is ever resent automatically.
+ */
+function rejectionEmailLabel(row: Submission): { text: string; alert: boolean } {
+  if (row.rejection_emailed_at || row.rejection_notice_status === "accepted") {
+    return { text: " · email accepted by the provider (acceptance confirmed; not proof of delivery)", alert: false };
+  }
+  switch (row.rejection_notice_status) {
+    case "claimed":
+      return { text: " · SEND NOT BEGUN — a claim was created but the email was never started (or is starting now). It will not be resent automatically.", alert: true };
+    case "sending":
+      return { text: " · SEND AUTHORISED, OUTCOME NOT RECORDED — the attempt may have been interrupted before or after reaching the email provider. Check before contacting the customer; it will not be resent automatically.", alert: true };
+    case "skipped":
+      return { text: " · DELIBERATELY SKIPPED — no longer eligible at the final check (withdrawn, resubmitted or moved); nothing was sent", alert: false };
+    case "uncertain":
+      return { text: " · PROVIDER RESPONSE UNCERTAIN — the email provider was called but gave no clear answer. Check before contacting the customer; it will not be resent automatically.", alert: true };
+    case "failed":
+      return { text: " · EMAIL FAILED — the provider refused it; nothing was sent", alert: true };
+    case "pending":
+      return { text: " · CUSTOMER NOT TOLD yet", alert: true };
+    default:
+      return { text: " · CUSTOMER NOT TOLD (turned down before notification records)", alert: true };
+  }
 }
 
 type Tab = "pending" | "approved" | "rejected";
@@ -149,10 +186,14 @@ export default function StyleManager() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Could not turn that down.");
+      // The route's own message (0076) says which of: accepted by the
+      // provider, refused, unknown, already told, or no address. "Accepted" is
+      // never presented as delivered.
       setNotice(
-        data.emailed
-          ? "Turned down, and the customer has been told why."
-          : `Turned down. THE CUSTOMER WAS NOT EMAILED — ${data.problem ?? "no reason given"}`
+        data.message ??
+          (data.emailed
+            ? "Turned down. The email was accepted by the email provider."
+            : `Turned down. THE CUSTOMER WAS NOT EMAILED — ${data.problem ?? "no reason given"}`)
       );
       setRejecting(null);
       setReason("");
@@ -306,10 +347,8 @@ export default function StyleManager() {
                   <p className="mt-2 text-xs text-ink/60">
                     Reason: {row.reject_reason ?? "none — turned down silently"}
                     {row.reject_reason && (
-                      <span className={row.rejection_emailed_at ? "" : "text-terracotta-dark"}>
-                        {row.rejection_emailed_at
-                          ? " · customer told"
-                          : " · CUSTOMER NOT TOLD"}
+                      <span className={rejectionEmailLabel(row).alert ? "text-terracotta-dark" : ""}>
+                        {rejectionEmailLabel(row).text}
                       </span>
                     )}
                   </p>

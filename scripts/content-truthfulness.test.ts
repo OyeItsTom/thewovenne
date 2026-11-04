@@ -123,7 +123,11 @@ for (const f of [
 ]) {
   const src = read(f);
   check(`${f}: old strapline gone`, /Woven in India|Worn for life/.test(src), false);
-  check(`${f}: new strapline present, with its full stop`, src.includes(STRAPLINE), true);
+  // WP-EMAIL-E5: a template built on the shared E1 layout carries the tagline
+  // through the layout's header, so the strapline is checked there instead.
+  const viaLayout = /from "\.\/layout"/.test(src) && /renderEmail\(/.test(src)
+    && read("lib/emails/layout.ts").includes(`tagline: "${STRAPLINE}"`);
+  check(`${f}: new strapline present, with its full stop`, src.includes(STRAPLINE) || viaLayout, true);
 }
 check("the draft spec's strapline is the approved one", STRAPLINE, "Chosen piece by piece.");
 check("the hero eyebrow is the strapline, full stop included", DEFAULT_CONTENT.home_hero.eyebrow, STRAPLINE);
