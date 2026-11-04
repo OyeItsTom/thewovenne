@@ -237,19 +237,23 @@ export async function settleOrder(
     .maybeSingle();
   const pending = (pendingRow as PendingRow | null) ?? null;
 
-  // The amount captured must be the amount the server asked for. Razorpay
-  // enforces this for a standard order, so a difference means the row or the
-  // request is not what it seems — and settling a basket for money that does
-  // not match it is exactly the thing this file exists to refuse.
+  // The amount captured must be the amount the server asked for — for a SALE.
+  // Razorpay enforces this for a standard order, so a difference means the row
+  // or the request is not what it seems, and settling a basket for money that
+  // does not match it is exactly the thing this file exists to refuse.
+  //
+  // The check is made by settle_razorpay_payment (0077), under the order's row
+  // lock, rather than here: if the order is cancelled, the payment is owed back
+  // WHATEVER its amount, and refusing it here would leave captured money
+  // unrecorded. For an open order the database returns "mismatch" and nothing
+  // is touched, exactly as before. Logged here so the numbers are on record.
   if (pending && pending.total_inr !== null && pending.total_inr !== undefined) {
-    // Same helper the checkout route used to ask for the amount, so the two
-    // sides cannot disagree by rounding.
+    // Same helper the checkout route used to ask for the amount.
     const askedPaise = toPaise(Number(pending.total_inr));
     if (askedPaise !== paidPaise) {
       console.error(
-        `Razorpay payment ${razorpayPaymentId} captured ${paidPaise} paise but order ${pending.id} asked for ${askedPaise} — not settling.`
+        `Razorpay payment ${razorpayPaymentId} captured ${paidPaise} paise but order ${pending.id} asked for ${askedPaise}.`
       );
-      return nothing("mismatch", status);
     }
   }
 
@@ -406,8 +410,8 @@ export async function settleOrder(
             flaggedForReview: r.path === "refund_owed" && r.first === true,
           };
         case "mismatch":
-          // The row changed between the read above and the lock.
-          console.error(`Payment ${razorpayPaymentId} no longer matches order ${razorpayOrderId} — not settling.`);
+          // The amount does not match the open order (checked under the lock).
+          console.error(`Payment ${razorpayPaymentId} does not match order ${razorpayOrderId} — not settling.`);
           return nothing("mismatch", status);
         default:
           console.error(`Paid order ${razorpayOrderId}: the pending row vanished before it could be marked paid.`);

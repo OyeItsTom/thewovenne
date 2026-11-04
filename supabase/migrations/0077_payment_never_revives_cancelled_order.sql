@@ -45,7 +45,8 @@
 --   4. reserve_stock refuses a cancelled order (ORDER_CANCELLED). Every caller,
 --      not only settlement: the guard is at the shared boundary.
 --
---   5. orders_cancelled_order_guard — a cancelled order cannot be marked paid,
+--   5. orders_cancelled_order_guard — the settling payment id, once recorded,
+--      cannot be changed or cleared; and a cancelled order cannot be marked paid,
 --      be given an invoice number, or have its order confirmation claimed, by
 --      any path: old application code during a deploy window, the admin's
 --      table UPDATE, 0074's enqueue. A paid order cancelled through
@@ -113,6 +114,9 @@ create table public.payment_refund_obligations (
   -- was not fulfilled.
   order_status_at_capture         text not null,
   order_payment_status_at_capture text not null,
+  -- What the order asked for, beside what was captured: a difference is
+  -- visible in the record, not only in a log.
+  order_total_paise_at_capture    bigint,
   -- 'owed' only. Recording that a refund was made, and with what provider
   -- evidence, is OS-3; until then nothing can claim it.
   state                  text not null default 'owed' check (state in ('owed')),
@@ -259,6 +263,13 @@ language plpgsql
 set search_path = public, pg_temp
 as $fn$
 begin
+  -- Evidence of which payment settled the order: set once (by
+  -- settle_razorpay_payment), never changed or cleared, by any role.
+  if old.razorpay_payment_id is not null
+     and new.razorpay_payment_id is distinct from old.razorpay_payment_id then
+    raise exception 'The Razorpay payment that settled an order is evidence and cannot be changed.'
+      using errcode = '55000';
+  end if;
   if new.status = 'cancelled' then
     if new.payment_status = 'paid' and old.payment_status is distinct from 'paid' then
       raise exception 'A cancelled order cannot be marked paid. A payment captured after cancellation is recorded as a refund owed (settle_razorpay_payment, 0077).'
@@ -280,7 +291,7 @@ $fn$;
 revoke execute on function public.orders_cancelled_order_guard() from public, anon, authenticated;
 
 create trigger orders_cancelled_order_guard
-  before update of status, payment_status, invoice_number, confirmation_sent_at on public.orders
+  before update of status, payment_status, invoice_number, confirmation_sent_at, razorpay_payment_id on public.orders
   for each row execute function public.orders_cancelled_order_guard();
 
 -- ══ 5. Applying a captured payment ══
@@ -339,10 +350,6 @@ begin
     return jsonb_build_object('path', 'no_order');
   end if;
 
-  if o.total_inr is not null and round(o.total_inr * 100)::bigint <> p_amount_paise then
-    return jsonb_build_object('path', 'mismatch', 'order_id', o.id);
-  end if;
-
   -- Which path. A payment already recorded as owed stays owed, whatever the
   -- order looks like now.
   select reason into v_reason
@@ -372,15 +379,25 @@ begin
     insert into payment_refund_obligations as ob
       (order_id, razorpay_order_id, razorpay_payment_id, amount_paise, currency,
        gateway_fee_paise, gateway_tax_paise, provider_status, reason,
-       order_status_at_capture, order_payment_status_at_capture)
+       order_status_at_capture, order_payment_status_at_capture, order_total_paise_at_capture)
     values
       (o.id, p_razorpay_order_id, p_razorpay_payment_id, p_amount_paise, p_currency,
        p_fee_paise, p_tax_paise, p_provider_status, v_reason,
-       o.status, o.payment_status)
+       o.status, o.payment_status, round(o.total_inr * 100)::bigint)
     on conflict (razorpay_payment_id) do update
       set last_seen_at = now(),
           times_seen   = ob.times_seen + 1
+      -- A repeat must describe the same payment. Different evidence for the
+      -- same payment id is a contradiction: refuse, change nothing.
+      where ob.razorpay_order_id = excluded.razorpay_order_id
+        and ob.amount_paise      = excluded.amount_paise
+        and ob.currency          = excluded.currency
     returning ob.id, (ob.xmax = 0) into v_obligation, v_first;
+
+    if v_obligation is null then
+      raise exception 'settle_razorpay_payment: payment % was recorded as owed with different evidence; refusing', p_razorpay_payment_id
+        using errcode = '55000';
+    end if;
 
     update orders set needs_review = true where id = o.id and not needs_review;
 
@@ -394,6 +411,13 @@ begin
   end if;
 
   -- ── Normal settlement: stock, paid, invoice — one transaction ──
+  -- The amount is checked HERE, for the sale only. A payment owed back is
+  -- recorded above whatever its amount: the money arrived and is not ours to
+  -- keep, and a mismatch is one more reason a human must look at it.
+  if o.total_inr is not null and round(o.total_inr * 100)::bigint <> p_amount_paise then
+    return jsonb_build_object('path', 'mismatch', 'order_id', o.id);
+  end if;
+
   v_lines := case when jsonb_typeof(o.items) = 'array' then o.items else '[]'::jsonb end;
   v_has_lines := jsonb_array_length(v_lines) > 0;
 

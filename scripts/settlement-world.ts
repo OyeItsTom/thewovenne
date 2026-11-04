@@ -215,9 +215,6 @@ export function makeWorld(opts: {
         }
         const o = [...world.orders.values()].find((r) => r.razorpay_order_id === args.p_razorpay_order_id);
         if (!o) return { data: { path: "no_order" }, error: null };
-        if (o.total_inr !== null && Math.round(Number(o.total_inr) * 100) !== Number(args.p_amount_paise)) {
-          return { data: { path: "mismatch", order_id: o.id }, error: null };
-        }
         const payId = String(args.p_razorpay_payment_id);
         const status = o.status ?? "placed";
         let reason = world.obligations.get(payId)?.reason ?? null;
@@ -233,6 +230,9 @@ export function makeWorld(opts: {
         }
         if (reason) {
           const existing = world.obligations.get(payId);
+          if (existing && existing.amount_paise !== Number(args.p_amount_paise)) {
+            return { data: null, error: { code: "55000", message: `payment ${payId} was recorded as owed with different evidence; refusing` } };
+          }
           if (existing) existing.times_seen += 1;
           else
             world.obligations.set(payId, {
@@ -248,6 +248,10 @@ export function makeWorld(opts: {
             });
           o.needs_review = true;
           return { data: { path: "refund_owed", reason, order_id: o.id, first: !existing }, error: null };
+        }
+        // Amount checked for the sale only (0077): an owed payment is recorded above.
+        if (o.total_inr !== null && Math.round(Number(o.total_inr) * 100) !== Number(args.p_amount_paise)) {
+          return { data: { path: "mismatch", order_id: o.id }, error: null };
         }
         const lines = Array.isArray(o.items) ? o.items : [];
         let stock = "none";
