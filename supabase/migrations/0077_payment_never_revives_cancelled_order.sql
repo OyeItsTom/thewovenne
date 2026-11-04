@@ -52,8 +52,11 @@
 --      table UPDATE, 0074's enqueue. A paid order cancelled through
 --      cancel_order keeps everything it already had.
 --
+--   6. redeem_loyalty_points / award_loyalty_points move points only for an
+--      order that is paid and not cancelled (same functions as 0029 otherwise).
+--
 -- WHAT IT DOES NOT DO (later work packages): refund anything, record refunds,
--- reverse loyalty or coupons, restrict admin UPDATE on orders (OS-2), or
+-- reverse loyalty already moved or coupons, restrict admin UPDATE on orders (OS-2), or
 -- change cancel_order.
 --
 -- ROLLBACK. See reports/order-safety/wp-order-safety-02-*/ROLLBACK-0077.sql:
@@ -479,6 +482,117 @@ comment on function public.settle_razorpay_payment(text, text, bigint, text, big
   'Applies a captured Razorpay payment to its order under the order row lock (0077):
    settles an open order (stock, paid, invoice) or records a refund owed for a
    cancelled order or a second payment. Never revives a cancelled order.';
+
+-- ══ 6. Loyalty moves only for a settled, uncancelled order ══
+-- Points are the one settlement effect a later step cannot quietly undo: a
+-- redemption spends a customer's balance, an award pays one out. Before 0077
+-- neither function looked at the order, and settlement called them even when
+-- the payment had not been recorded (a database failure, or — during a deploy
+-- window — old code against a cancelled order: rehearsed, 1000 → 600 points).
+-- Now both refuse unless the order is paid and not cancelled, whoever calls.
+-- The refusal is an answer, not an error: settleLoyalty flags the order.
+create or replace function public.redeem_loyalty_points(
+  p_user_id  uuid,
+  p_points   integer,
+  p_order_id uuid default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  s       jsonb := public.loyalty_settings();
+  balance integer;
+  ord     record;
+begin
+  if not (s ->> 'enabled')::boolean then
+    return jsonb_build_object('ok', false, 'reason', 'Loyalty points are not enabled.');
+  end if;
+  if p_points <= 0 then
+    return jsonb_build_object('ok', false, 'reason', 'Nothing to redeem.');
+  end if;
+  if p_points < (s ->> 'min_redeem')::integer then
+    return jsonb_build_object('ok', false, 'reason',
+      format('You need at least %s points to redeem.', s ->> 'min_redeem'));
+  end if;
+
+  -- 0077: only against an order whose payment is recorded and which stands.
+  if p_order_id is not null then
+    select payment_status, status into ord from orders where id = p_order_id;
+    if not found or ord.payment_status is distinct from 'paid' or ord.status = 'cancelled' then
+      return jsonb_build_object('ok', false, 'reason', 'The order is not settled, so no points were spent.');
+    end if;
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext(p_user_id::text));
+
+  balance := public.loyalty_balance(p_user_id);
+  if balance < p_points then
+    return jsonb_build_object('ok', false, 'reason', 'Not enough points.',
+                              'balance', balance);
+  end if;
+
+  insert into loyalty_ledger (user_id, order_id, points, reason)
+  values (p_user_id, p_order_id, -p_points, 'Redeemed against an order');
+
+  return jsonb_build_object(
+    'ok', true,
+    'points', p_points,
+    'value_inr', round(p_points * (s ->> 'inr_per_point')::numeric, 2),
+    'balance', balance - p_points
+  );
+end;
+$fn$;
+
+create or replace function public.award_loyalty_points(p_order_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  s        jsonb := public.loyalty_settings();
+  ord      record;
+  target   uuid;
+  earned   integer;
+begin
+  if not (s ->> 'enabled')::boolean then
+    return 0;
+  end if;
+
+  select id, customer_email, total_inr, shipping_cost_inr, payment_status, status
+    into ord from orders where id = p_order_id;
+  -- 0077: a cancelled order earns nothing, paid or not.
+  if not found or ord.payment_status <> 'paid' or ord.status = 'cancelled' then
+    return 0;
+  end if;
+
+  select p.id into target
+    from profiles p
+   where lower(p.email) = lower(ord.customer_email)
+     and not p.is_admin
+   limit 1;
+  if target is null then
+    return 0;
+  end if;
+
+  earned := floor(
+    greatest(ord.total_inr - coalesce(ord.shipping_cost_inr, 0), 0)
+    * (s ->> 'points_per_inr')::numeric
+  )::integer;
+
+  if earned <= 0 then
+    return 0;
+  end if;
+
+  insert into loyalty_ledger (user_id, order_id, points, reason)
+  values (target, p_order_id, earned, 'Earned on order')
+  on conflict (order_id) where points > 0 and order_id is not null do nothing;
+
+  return earned;
+end;
+$fn$;
 
 -- ── Verify ────────────────────────────────────
 select
