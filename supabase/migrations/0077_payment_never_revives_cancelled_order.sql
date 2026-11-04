@@ -75,22 +75,19 @@ begin
      or to_regprocedure('public.settle_razorpay_payment(text, text, bigint, text, bigint, bigint, text)') is not null then
     raise exception '0077: already applied; refusing to replace it';
   end if;
-  if exists (select 1 from information_schema.columns
-              where table_schema = 'public' and table_name = 'orders'
-                and column_name = 'razorpay_payment_id') then
-    raise exception '0077: orders.razorpay_payment_id already exists';
-  end if;
 end $$;
 
 -- ══ 1. The settling payment, on the order ══
-alter table public.orders add column razorpay_payment_id text;
+-- IF NOT EXISTS: the rollback keeps this column (it is evidence), so 0077 must
+-- be able to apply again over it.
+alter table public.orders add column if not exists razorpay_payment_id text;
 
 comment on column public.orders.razorpay_payment_id is
   'The Razorpay payment that settled this order (0077). Null for orders settled
    before 0077 until a replay fills it, and for orders not paid through Razorpay.';
 
 -- A payment settles one order. Partial: every historical row is null.
-create unique index orders_razorpay_payment_id_key
+create unique index if not exists orders_razorpay_payment_id_key
   on public.orders (razorpay_payment_id)
   where razorpay_payment_id is not null;
 
