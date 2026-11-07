@@ -513,6 +513,8 @@ async function os2(engine: Engine) {
   truthy("…nor any value outside pending | paid (CHECK)", refused(chk, "orders_payment_status_check"));
   truthy("service_role cannot change a paid total", refused(await svc("update orders set total_inr = 1 where id = $1"), "cannot be changed"));
   truthy("…or the delivery charge on the invoice", refused(await svc("update orders set shipping_cost_inr = 0 where id = $1"), "cannot be changed"));
+  check("…but the gateway's fee on a paid order can still be corrected server-side (a cost, not the charge)",
+    (await svc("update orders set gateway_fee_inr = 61 where id = $1")).error ?? null, null);
   truthy("…or change status outside an order function", refused(await svc("update orders set status = 'confirmed' where id = $1"), "only through the order functions"));
   const inv = (await orderRow(root, by.id)).invoice_number as string;
   truthy("an issued invoice number is permanent", refused(await svc("update orders set invoice_number = 'WOV-OTHER' where id = $1"), "permanent"));

@@ -242,7 +242,9 @@ begin
   end if;
 
   -- What was charged is history once it was paid: the invoice and the P&L are
-  -- built from these columns.
+  -- built from these columns. Not the gateway's fee and tax: they are
+  -- Razorpay's cost to us, not the customer's charge, and settlement-side code
+  -- may correct them later (admins cannot write them at all).
   if old.payment_status = 'paid' and (
        new.total_inr               is distinct from old.total_inr
     or new.items                   is distinct from old.items
@@ -255,9 +257,7 @@ begin
     or new.loyalty_discount_inr    is distinct from old.loyalty_discount_inr
     or new.payment_method          is distinct from old.payment_method
     or new.payment_provider        is distinct from old.payment_provider
-    or new.razorpay_order_id       is distinct from old.razorpay_order_id
-    or new.gateway_fee_inr         is distinct from old.gateway_fee_inr
-    or new.gateway_tax_inr         is distinct from old.gateway_tax_inr) then
+    or new.razorpay_order_id       is distinct from old.razorpay_order_id) then
     raise exception 'The amounts, items and payment details of a paid order cannot be changed.'
       using errcode = '55000';
   end if;
