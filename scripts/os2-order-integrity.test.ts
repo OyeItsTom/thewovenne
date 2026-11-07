@@ -162,6 +162,23 @@ const cancelUnpaid = (c: Client, id: string, reason: string | null = "Abandoned 
 const setStatus = (c: Client, id: string, status: string, reason: string | null = null) =>
   rpc(c, "select public.admin_set_order_status($1, $2, $3) r", [id, status, reason]);
 
+/**
+ * True when the database has 0075's dispatch_order (the post-Step-F release
+ * order: 0074–0077 then 0078). Shipping is then dispatch_order and 0075's guard
+ * owns the courier fields; before it, the courier and tracking number are saved
+ * and admin_set_order_status marks the order shipped. The suite runs on both.
+ */
+async function hasDispatch(c: Client) {
+  return (await c.query("select to_regprocedure('public.dispatch_order(uuid, text, text, boolean, boolean)') is not null as v")).rows[0].v === true;
+}
+let DISPATCH = false;
+/** Ship as the admin the connection already is. */
+async function ship(c: Client, id: string, reason: string | null = null) {
+  if (DISPATCH) return rpc(c, "select public.dispatch_order($1, 'india_post_speed_post', 'EE123456785IN', true, false) r", [id]);
+  await c.query("update orders set courier_name = 'Speed Post', awb_number = 'EE123456785IN' where id = $1", [id]);
+  return setStatus(c, id, "shipped", reason);
+}
+
 async function orderRow(c: Client, id: string) {
   await asRoot(c);
   return (await c.query(
@@ -202,7 +219,10 @@ async function control(engine: Engine) {
 
   // D1 — cancel a shipped order: the stock goes back on the shelf.
   const d1 = await paidOrder(root, [{ id: p.productId }]);
-  await as(root, "admin", w, () => root.query("update orders set status = 'shipped', awb_number = 'AWB1', shipped_at = now() where id = $1", [d1.id]));
+  DISPATCH = await hasDispatch(root);
+  await as(root, "admin", w, () => DISPATCH
+    ? root.query("select public.dispatch_order($1, 'india_post_speed_post', 'EE123456785IN', true, false)", [d1.id])
+    : root.query("update orders set status = 'shipped', awb_number = 'AWB1', shipped_at = now() where id = $1", [d1.id]));
   const d1Before = await shelf(root, p.productId);
   const d1Cancel = await as(root, "admin", w, () => outcome(cancelOrder(root, d1.id)));
   check("D1 REPRODUCES: a shipped order can be cancelled", d1Cancel.error ?? null, null);
@@ -258,6 +278,8 @@ async function os2(engine: Engine) {
   await engine.database("os2_new");
   const w = await world(engine, "os2_new");
   const { root, a, b, obs } = w;
+  DISPATCH = await hasDispatch(root);
+  console.log(DISPATCH ? "  (0075 present: shipping is dispatch_order)" : "  (no 0075: shipping through admin_set_order_status)");
   const p = await liveProduct(root, w.admin, { stock: 20 });
 
   // ── 1. Unpaid cancellation ──
@@ -340,9 +362,10 @@ async function os2(engine: Engine) {
   console.log("\n 4. shipped / delivered cancellation attempts");
   const sh = await paidOrder(root, [{ id: p.productId }]);
   const noAwb = await as(root, "admin", w, () => outcome(setStatus(root, sh.id, "shipped")));
-  truthy("shipping without a saved tracking number is refused", refused(noAwb, "tracking number"));
-  await as(root, "admin", w, () => root.query("update orders set courier_name = 'Speed Post', awb_number = 'EE123456785IN' where id = $1", [sh.id]));
-  check("then it ships", (await as(root, "admin", w, () => setStatus(root, sh.id, "shipped", "Handed to the post office"))).status, "shipped");
+  if (DISPATCH) truthy("with 0075, admin_set_order_status sends shipping to dispatch_order", refused(noAwb, "dispatching it"));
+  else truthy("shipping without a saved tracking number is refused", refused(noAwb, "tracking number"));
+  await as(root, "admin", w, () => ship(root, sh.id, "Handed to the post office"));
+  check("then it ships", (await orderRow(root, sh.id)).status, "shipped");
   const shBefore = await shelf(root, p.productId);
   const shc = await as(root, "admin", w, () => outcome(cancelOrder(root, sh.id)));
   truthy("D1 FIXED: cancel_order refuses a shipped order", refused(shc, "dispatched or delivered"));
@@ -516,10 +539,10 @@ async function os2(engine: Engine) {
   truthy("an online order is not delivered before it ships", refused(await as(root, "admin", w, () => outcome(setStatus(root, life.id, "delivered"))), "after it has been dispatched"));
   truthy("'cancelled' is not a status this function sets", refused(await as(root, "admin", w, () => outcome(setStatus(root, life.id, "cancelled"))), "cancel_unpaid_order or cancel_order"));
   await as(root, "admin", w, () => root.query("update orders set needs_review = true where id = $1", [life.id]));
-  await as(root, "admin", w, () => root.query("update orders set awb_number = 'EE123456785IN', courier_name = 'Speed Post' where id = $1", [life.id]));
-  truthy("a flagged order does not ship", refused(await as(root, "admin", w, () => outcome(setStatus(root, life.id, "shipped"))), "flagged for review"));
+  if (!DISPATCH) await as(root, "admin", w, () => root.query("update orders set awb_number = 'EE123456785IN', courier_name = 'Speed Post' where id = $1", [life.id]));
+  truthy("a flagged order does not ship", refused(await as(root, "admin", w, () => outcome(ship(root, life.id))), "flagged for review"));
   await as(root, "admin", w, () => root.query("update orders set needs_review = false where id = $1", [life.id]));
-  await as(root, "admin", w, () => setStatus(root, life.id, "shipped"));
+  await as(root, "admin", w, () => ship(root, life.id));
   await as(root, "admin", w, () => setStatus(root, life.id, "delivered", "Signed for"));
   const lr = await orderRow(root, life.id);
   check("shipped and delivered are stamped once", [lr.status, lr.shipped_stamped, lr.delivered_stamped], ["delivered", true, true]);
@@ -531,10 +554,14 @@ async function os2(engine: Engine) {
       ["update", "update", "service_role", "placed", "paid"],
       ["update", "update", "service_role", "placed", "paid"],
       ["update", "admin_set_order_status", "authenticated", "confirmed", "paid"],
-      ["update", "update", "authenticated", "confirmed", "paid"],
-      ["update", "update", "authenticated", "confirmed", "paid"],
-      ["update", "update", "authenticated", "confirmed", "paid"],
-      ["update", "admin_set_order_status", "authenticated", "shipped", "paid"],
+      ...(DISPATCH
+        ? [["update", "update", "authenticated", "confirmed", "paid"],
+           ["update", "update", "authenticated", "confirmed", "paid"],
+           ["update", "dispatch_order", "authenticated", "shipped", "paid"]]
+        : [["update", "update", "authenticated", "confirmed", "paid"],
+           ["update", "update", "authenticated", "confirmed", "paid"],
+           ["update", "update", "authenticated", "confirmed", "paid"],
+           ["update", "admin_set_order_status", "authenticated", "shipped", "paid"]]),
       ["update", "admin_set_order_status", "authenticated", "delivered", "paid"],
     ]);
   check("settlement's events have no human actor", le.filter((e) => e.actor_role === "service_role").map((e) => e.actor_id), [null, null]);
@@ -550,8 +577,7 @@ async function os2(engine: Engine) {
   // Their order must be delivered first (0033).
   const delBlocked = await as(root, { user: leaving, aal: "aal1" }, w, () => root.query("select public.delete_my_account() r"));
   check("account deletion still waits for an undelivered order", delBlocked.rows[0].r.ok, false);
-  await as(root, "admin", w, () => root.query("update orders set awb_number = 'EE123456785IN' where id = $1", [del.id]));
-  await as(root, "admin", w, () => setStatus(root, del.id, "shipped"));
+  await as(root, "admin", w, () => ship(root, del.id));
   await as(root, "admin", w, () => setStatus(root, del.id, "delivered"));
   const gone = await as(root, { user: leaving, aal: "aal1" }, w, () => root.query("select public.delete_my_account() r"));
   check("then the customer's account deletion anonymises the paid order", [gone.rows[0].r.ok, gone.rows[0].r.orders_anonymised], [true, 1]);
@@ -575,24 +601,23 @@ async function os2(engine: Engine) {
   // ── 12. Cancellation during dispatch (forced overlap) ──
   console.log("\n 12. cancellation racing dispatch");
   const r1 = await paidOrder(root, [{ id: p.productId }]);
-  await as(root, "admin", w, () => root.query("update orders set awb_number = 'EE123456785IN' where id = $1", [r1.id]));
   await asAdmin(a, w.admin);
   await asAdmin(b, w.admin2);
   await a.query("begin");
-  await setStatus(a, r1.id, "shipped");
+  await ship(a, r1.id);
   const lateCancel = outcome(cancelOrder(b, r1.id));
   check("the cancel waited on the shipment", await waitsOn(obs, w.pb, w.pa), true);
   await a.query("commit");
   truthy("ship first → the cancel is refused (dispatched)", refused(await lateCancel, "dispatched or delivered"));
   check("…no credit note, no stock movement back", [(await notes(root, r1.id)).length, (await orderMoves(root, r1.id)).map((m) => m.reason)], [0, ["sale"]]);
   const r2 = await paidOrder(root, [{ id: p.productId }]);
-  await as(root, "admin", w, () => root.query("update orders set awb_number = 'EE123456785IN' where id = $1", [r2.id]));
   await a.query("begin");
   await cancelOrder(a, r2.id);
-  const lateShip = outcome(setStatus(b, r2.id, "shipped"));
+  const lateShip = outcome(ship(b, r2.id));
   check("the shipment waited on the cancel", await waitsOn(obs, w.pb, w.pa), true);
   await a.query("commit");
-  truthy("cancel first → the shipment is refused", refused(await lateShip, "cannot be reopened"));
+  const ls2 = await lateShip;
+  truthy("cancel first → the shipment is refused", refused(ls2, "cannot be reopened") || refused(ls2, "cancelled order cannot be dispatched"));
   check("…the order stays cancelled", (await orderRow(root, r2.id)).status, "cancelled");
   await asRoot(a);
   await asRoot(b);
@@ -689,6 +714,10 @@ async function os2(engine: Engine) {
     "update orders set courier_name = 'X', awb_number = 'Y', shipping_cost_inr = 0, admin_note = 'n' where id = $1", [mv.id])));
   check("old 'Save dispatch details' (sends the delivery charge) fails loudly", oldSave.code, "42501");
   check("…and changed nothing", [(await orderRow(root, mv.id)).status, (await orderRow(root, mv.id)).admin_note], ["placed", null]);
+  const oldNote = await as(root, "admin", w, () => outcome(root.query("update orders set shipping_cost_inr = 0, admin_note = 'n' where id = $1", [mv.id])));
+  check("post-Step-F 'Save cost and note' (sends the delivery charge) fails loudly", oldNote.code, "42501");
+  const oldDeliver = await as(root, "admin", w, () => outcome(root.query("update orders set status = 'delivered', delivered_at = now() where id = $1", [mv.id])));
+  check("post-Step-F 'Mark delivered' (plain UPDATE) fails loudly", oldDeliver.code, "42501");
   const oldReview = await as(root, "admin", w, () => outcome(root.query("update orders set needs_review = false where id = $1 returning id", [mv.id])));
   check("old 'Clear the review flag' still works", oldReview.value?.rowCount, 1);
   const oldCancel = await as(root, "admin", w, () => outcome(cancelOrder(root, mv.id)));
