@@ -130,10 +130,35 @@ async function settleOld(c: Client, orderId: string, productId: string) {
   }
 }
 
+/**
+ * Set once the new database is built: true when 0078 (OS-2) is in it. From
+ * 0078 an admin cancels an unpaid order through cancel_unpaid_order — the
+ * plain UPDATE this suite used is refused — and the "possible until OS-2"
+ * edits below (re-open, un-pay) are refused too. Where a scenario needs that
+ * old state, it is built as root with triggers off (forceAsRoot), i.e. as a
+ * pre-OS-2 history, and the OS-1 assertion that follows is unchanged.
+ */
+let has0078 = false;
+/** Per database: the control database (0073) never has the 0078 function. */
+async function unpaidCancelSql(c: Client) {
+  const fn = (await c.query("select to_regprocedure('public.cancel_unpaid_order(uuid, text)') is not null as v")).rows[0].v === true;
+  return fn ? "select public.cancel_unpaid_order($1, null)" : "update orders set status = 'cancelled' where id = $1";
+}
+
+async function forceAsRoot(c: Client, sql: string, args: unknown[]) {
+  await asRoot(c);
+  await c.query("set session_replication_role = replica");
+  try {
+    await c.query(sql, args);
+  } finally {
+    await c.query("set session_replication_role = origin");
+  }
+}
+
 async function adminCancelUnpaid(c: Client, admin: string, orderId: string) {
   await asAdmin(c, admin);
   try {
-    return (await outcome(c.query("update orders set status = 'cancelled' where id = $1", [orderId]))).error ?? null;
+    return (await outcome(c.query(await unpaidCancelSql(c), [orderId]))).error ?? null;
   } finally {
     await asRoot(c);
   }
@@ -194,6 +219,8 @@ async function main() {
     await engine.database("os1_new");
     const old = await world(engine, "os1_old");
     const w = await world(engine, "os1_new");
+    has0078 = (await w.root.query("select to_regclass('public.order_events') is not null as v")).rows[0].v === true;
+    console.log(has0078 ? "  (0078 present: unpaid cancels through cancel_unpaid_order; re-open / un-pay are refused and built as history)" : "  (no 0078)");
 
     // ════ CONTROL: the defects reproduce before 0077 ════
     console.log("\nCONTROL (through 0073, pre-OS-1 settlement sequence)");
@@ -240,9 +267,17 @@ async function main() {
       check("…and still nothing else changed", await state(w.root, o.id, p.productId),
         { status: "cancelled", payment: "pending", invoiced: false, review: true, confirmed: false, paymentId: null, sales: 0, returns: 0, shelf: 3 });
       // The admin re-opens the order by hand (possible until OS-2) — the owed payment must not become a sale.
-      await asAdmin(w.root, w.admin);
-      await w.root.query("update orders set status = 'placed', needs_review = false where id = $1", [o.id]);
-      await asRoot(w.root);
+      if (has0078) {
+        await asAdmin(w.root, w.admin);
+        const reopen = await outcome(w.root.query("select public.admin_set_order_status($1, 'confirmed', null)", [o.id]));
+        await asRoot(w.root);
+        check("0078: the admin can no longer re-open it", (reopen.error ?? "").includes("cannot be reopened"), true);
+        await forceAsRoot(w.root, "update orders set status = 'placed', needs_review = false where id = $1", [o.id]);
+      } else {
+        await asAdmin(w.root, w.admin);
+        await w.root.query("update orders set status = 'placed', needs_review = false where id = $1", [o.id]);
+        await asRoot(w.root);
+      }
       const r4 = await settleNew(w.root, o.rzp, "pay_late_1");
       const s4 = await state(w.root, o.id, p.productId);
       check("re-opened by hand, a replay of the owed payment is still owed: no stock, not paid, re-flagged", [r4.path, s4.payment, s4.sales, s4.invoiced, s4.review], ["refund_owed", "pending", 0, false, true]);
@@ -417,7 +452,7 @@ async function main() {
       const o = await pendingOrder(w.root, p.productId);
       await asAdmin(w.a, w.admin);
       await w.a.query("begin");
-      await w.a.query("update orders set status = 'cancelled' where id = $1", [o.id]);
+      await w.a.query(await unpaidCancelSql(w.a), [o.id]);
       const pending = outcome(settleNew(w.b, o.rzp, "pay_race_1"));
       check("settlement blocked on the cancelling transaction", await waitsOn(w.obs, w.pb, w.pa), true);
       await w.a.query("commit");
@@ -434,13 +469,15 @@ async function main() {
       await w.a.query("begin");
       await w.a.query("select public.settle_razorpay_payment($1, 'pay_race_2', 250000, 'INR', 5900, 900, 'captured')", [o.rzp]);
       await asAdmin(w.b, w.admin);
-      const pending = outcome(w.b.query("update orders set status = 'cancelled' where id = $1", [o.id]));
+      const cancelSql = await unpaidCancelSql(w.b);
+      const pending = outcome(w.b.query(cancelSql, [o.id]));
       check("plain cancel blocked on the settling transaction", await waitsOn(w.obs, w.pb, w.pa), true);
       await w.a.query("commit");
       await asRoot(w.a);
       const r = await pending;
       await asRoot(w.b);
-      check("capture committed first → plain cancel refused (0049: needs a credit note)", (r.error ?? "").startsWith("A paid order cannot be cancelled directly"), true);
+      check(has0078 ? "capture committed first → the unpaid cancel is refused (0078: the order is paid)" : "capture committed first → plain cancel refused (0049: needs a credit note)",
+        has0078 ? (r.error ?? "").includes("is paid") : (r.error ?? "").startsWith("A paid order cannot be cancelled directly"), true);
       const s = await state(w.root, o.id, p.productId);
       check("…and the order is a normal paid order", [s.status, s.payment, s.sales, s.invoiced], ["placed", "paid", 1, true]);
     }
@@ -520,11 +557,14 @@ async function main() {
       const both = await outcome(w.root.query("update orders set status = 'cancelled', payment_status = 'paid' where id = $1", [o.id]));
       await asRoot(w.root);
       // 0049's guard fires first (triggers run in name order) and refuses it as
-      // "paid without a credit note"; 0077's guard would refuse it next.
-      check("cancelled-and-paid in one admin UPDATE is refused", [both.code, (both.error ?? "").startsWith("A paid order cannot be cancelled directly")], ["P0001", true]);
+      // "paid without a credit note"; 0077's guard would refuse it next. From
+      // 0078 the admin has no UPDATE on either column at all.
+      if (has0078) check("cancelled-and-paid in one admin UPDATE is refused (0078: permission denied)", both.code, "42501");
+      else check("cancelled-and-paid in one admin UPDATE is refused", [both.code, (both.error ?? "").startsWith("A paid order cannot be cancelled directly")], ["P0001", true]);
       await asRoot(w.root);
       await w.root.query("alter table orders disable trigger orders_cancel_guard");
-      await asAdmin(w.root, w.admin);
+      // From 0078 only the owner can even attempt the write; 0077's guard still fires first.
+      if (!has0078) await asAdmin(w.root, w.admin);
       const only0077 = await outcome(w.root.query("update orders set status = 'cancelled', payment_status = 'paid' where id = $1", [o.id]));
       await asRoot(w.root);
       await w.root.query("alter table orders enable trigger orders_cancel_guard");
@@ -561,7 +601,9 @@ async function main() {
 
       // Ordinary order edits cannot make an obligation disappear.
       await asAdmin(w.root, w.admin);
-      await w.root.query("update orders set needs_review = false, admin_note = 'checked', status = 'placed' where id = $1", [o.id]);
+      await w.root.query(has0078
+        ? "update orders set needs_review = false, admin_note = 'checked' where id = $1"
+        : "update orders set needs_review = false, admin_note = 'checked', status = 'placed' where id = $1", [o.id]);
       const del = await outcome(w.root.query("delete from orders where id = $1", [o.id]));
       await asRoot(w.root);
       check("admin clears the flag and edits the order: obligations still listed", (await w.root.query(RECON_OWED, [o.rzp])).rows.length, 2);
@@ -586,13 +628,23 @@ async function main() {
       await asService(w.root);
       const bySvc = (await outcome(w.root.query("update orders set razorpay_payment_id = null where id = $1", [o.id]))).code;
       await asRoot(w.root);
-      check("payment id cannot be changed or cleared by an admin or service_role", [byAdmin, bySvc, (await state(w.root, o.id, p.productId)).paymentId], [["55000", "55000"], "55000", "pay_fixed"]);
+      // From 0078 an admin has no UPDATE on the column at all (42501) before 0077's guard (55000) is reached.
+      check("payment id cannot be changed or cleared by an admin or service_role", [byAdmin, bySvc, (await state(w.root, o.id, p.productId)).paymentId],
+        [has0078 ? ["42501", "42501"] : ["55000", "55000"], "55000", "pay_fixed"]);
 
       // Marking the order unpaid (still possible for an admin until OS-2, D4)
       // must not hide the captured money from reconciliation.
-      await asAdmin(w.root, w.admin);
-      await w.root.query("update orders set payment_status = 'pending' where id = $1", [o.id]);
-      await asRoot(w.root);
+      if (has0078) {
+        await asAdmin(w.root, w.admin);
+        const unpay = await outcome(w.root.query("update orders set payment_status = 'pending' where id = $1", [o.id]));
+        await asRoot(w.root);
+        check("0078: an admin can no longer un-pay it (permission denied)", unpay.code, "42501");
+        await forceAsRoot(w.root, "update orders set payment_status = 'pending' where id = $1", [o.id]);
+      } else {
+        await asAdmin(w.root, w.admin);
+        await w.root.query("update orders set payment_status = 'pending' where id = $1", [o.id]);
+        await asRoot(w.root);
+      }
       check("an order un-paid by hand still shows its captured payment in the reconciliation query",
         (await w.root.query(RECON_UNCOUNTED, [o.rzp])).rows, [{ razorpay_payment_id: "pay_fixed", status: "placed", payment_status: "pending" }]);
     }
