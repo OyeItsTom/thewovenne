@@ -24,7 +24,7 @@
 /**
  * A state in which the customer must not be offered payment again.
  *
- * Five map one-to-one onto settlement outcomes. `unverified` does not: it is
+ * Seven map one-to-one onto settlement outcomes. `unverified` does not: it is
  * the response whose SIGNATURE did not check out, which used to be treated as
  * "no payment was taken". It is not that, and the difference matters —
  * see resolvePaymentOutcome.
@@ -35,7 +35,9 @@ export type PaymentHoldState =
   | "mismatch"
   | "refunded"
   | "unknown_status"
-  | "unverified";
+  | "unverified"
+  | "order_cancelled"
+  | "unrecorded";
 
 export type PaymentDestination =
   | { action: "success" }
@@ -51,6 +53,8 @@ const HOLD_STATES: readonly PaymentHoldState[] = [
   "refunded",
   "unknown_status",
   "unverified",
+  "order_cancelled",
+  "unrecorded",
 ];
 
 /**
@@ -188,6 +192,27 @@ export const HOLD_COPY: Record<PaymentHoldState, HoldCopy> = {
     body:
       "Razorpay returned a status we cannot read, so we do not know whether this payment went through. Please do not pay again until we have checked.",
     next: "Message us with the reference below and we will confirm whether anything was taken.",
+  },
+  // A payment that reached us after the order had been cancelled (0077). The
+  // payment is recorded as owed back in full. Owner-approved wording (4 Nov
+  // 2026): it names no refund date and never says a refund has been made.
+  order_cancelled: {
+    tone: "uncertain",
+    title: "Your order was already cancelled when we received your payment.",
+    body:
+      "Your order will not be dispatched, and a full refund is due. Our team will review the payment and arrange the refund. Please do not make another payment for this order.",
+    next: "If you need assistance, please contact Wovenne.",
+  },
+  // Razorpay confirmed the payment but we could not record it (0077 / OS-1).
+  // Never "success" (nothing is recorded, and the order may be cancelled) and
+  // never "failed" (the money may have moved). PROVISIONAL WORDING — awaiting
+  // owner approval; no promise of a date or of dispatch.
+  unrecorded: {
+    tone: "uncertain",
+    title: "We are still recording your payment",
+    body:
+      "Razorpay has confirmed a payment for this order, but we could not finish recording it just now. Please do not make another payment for this order.",
+    next: "We will check the payment and contact you. If you need assistance, please contact Wovenne.",
   },
   unverified: {
     tone: "uncertain",

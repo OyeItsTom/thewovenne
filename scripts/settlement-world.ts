@@ -25,6 +25,23 @@ export interface OrderRow extends Row {
   coupon_discount_inr: number | null;
   loyalty_points_spent: number | null;
   total_inr: number | null;
+  /** orders.status (0024). Absent in older fixtures = 'placed'. */
+  status?: string;
+  /** The payment that settled the row (0077). */
+  razorpay_payment_id?: string | null;
+}
+
+/** A payment_refund_obligations row (0077), as the fake keeps it. */
+export interface ObligationRow {
+  order_id: string;
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  amount_paise: number;
+  reason: "captured_after_cancellation" | "second_payment";
+  order_status_at_capture: string;
+  order_payment_status_at_capture: string;
+  state: "owed";
+  times_seen: number;
 }
 
 export interface World {
@@ -47,6 +64,10 @@ export interface World {
   webhookEvents: Map<string, string | null>;
   /** Every payment id the code asked the gateway about. */
   paymentFetches: string[];
+  /** payment_refund_obligations, keyed by razorpay_payment_id (0077's unique key). */
+  obligations: Map<string, ObligationRow>;
+  /** settle_razorpay_payment calls, in order. */
+  settleCalls: Row[];
 }
 
 /**
@@ -88,6 +109,8 @@ export function makeWorld(opts: {
     gatewayDown: Boolean(opts.gatewayDown),
     webhookEvents: new Map(),
     paymentFetches: [],
+    obligations: new Map(),
+    settleCalls: [],
   };
   if (opts.order !== null) {
     world.orders.set("ord-1", {
@@ -176,8 +199,90 @@ export function makeWorld(opts: {
     };
   };
 
-  const rpc = async (fn: string, args: Row) => {
+  // Invoice numbers issued inside settle_razorpay_payment — kept apart from
+  // invoiceCalls, which counts the application's own assign_invoice_number calls.
+  let issuedInside = 0;
+
+  const rpc = async (fn: string, args: Row): Promise<{ data: unknown; error: { code: string; message: string } | null }> => {
     switch (fn) {
+      // 0077, MODELLED: the order row lock is implied (this fake is single
+      // threaded); the decision and its effects are the real function's.
+      // scripts/os1-settlement.test.ts proves the real one in PostgreSQL.
+      case "settle_razorpay_payment": {
+        world.settleCalls.push(args);
+        if (args.p_provider_status !== "captured" || args.p_currency !== "INR" || !(Number(args.p_amount_paise) > 0)) {
+          return { data: null, error: { code: "22023", message: "settle_razorpay_payment: refused evidence" } };
+        }
+        const o = [...world.orders.values()].find((r) => r.razorpay_order_id === args.p_razorpay_order_id);
+        if (!o) return { data: { path: "no_order" }, error: null };
+        const payId = String(args.p_razorpay_payment_id);
+        const status = o.status ?? "placed";
+        let reason = world.obligations.get(payId)?.reason ?? null;
+        if (!reason) {
+          if (status === "cancelled") {
+            if (o.payment_status === "paid" && (!o.razorpay_payment_id || o.razorpay_payment_id === payId)) {
+              return { data: { path: "already_settled_cancelled", order_id: o.id }, error: null };
+            }
+            reason = o.payment_status === "paid" ? "second_payment" : "captured_after_cancellation";
+          } else if (o.payment_status === "paid" && o.razorpay_payment_id && o.razorpay_payment_id !== payId) {
+            reason = "second_payment";
+          }
+        }
+        if (reason) {
+          const existing = world.obligations.get(payId);
+          if (existing && existing.amount_paise !== Number(args.p_amount_paise)) {
+            return { data: null, error: { code: "55000", message: `payment ${payId} was recorded as owed with different evidence; refusing` } };
+          }
+          if (existing) existing.times_seen += 1;
+          else
+            world.obligations.set(payId, {
+              order_id: o.id,
+              razorpay_order_id: String(args.p_razorpay_order_id),
+              razorpay_payment_id: payId,
+              amount_paise: Number(args.p_amount_paise),
+              reason,
+              order_status_at_capture: status,
+              order_payment_status_at_capture: o.payment_status,
+              state: "owed",
+              times_seen: 1,
+            });
+          o.needs_review = true;
+          return { data: { path: "refund_owed", reason, order_id: o.id, first: !existing }, error: null };
+        }
+        // Amount checked for the sale only (0077): an owed payment is recorded above.
+        if (o.total_inr !== null && Math.round(Number(o.total_inr) * 100) !== Number(args.p_amount_paise)) {
+          return { data: { path: "mismatch", order_id: o.id }, error: null };
+        }
+        const lines = Array.isArray(o.items) ? o.items : [];
+        let stock = "none";
+        let stockError: string | null = null;
+        if (lines.length > 0) {
+          const r = await rpc("reserve_stock", {
+            p_items: lines.map((i) => ({ id: i.id, size: i.size, quantity: i.quantity })),
+            p_order_id: o.id,
+          });
+          if (r.error) {
+            stock = "failed";
+            stockError = r.error.message;
+          } else {
+            const d = r.data as { reserved: number };
+            stock = d.reserved > 0 ? "reserved" : "already_reserved";
+          }
+        }
+        const flagged = stock === "failed" || stock === "none";
+        const patch: Row = {
+          payment_status: "paid",
+          total_inr: Number(args.p_amount_paise) / 100,
+          gateway_fee_inr: args.p_fee_paise === null || args.p_fee_paise === undefined ? null : Number(args.p_fee_paise) / 100,
+          gateway_tax_inr: args.p_tax_paise === null || args.p_tax_paise === undefined ? null : Number(args.p_tax_paise) / 100,
+        };
+        if (flagged) patch.needs_review = true;
+        world.updates.push({ patch, filters: `id eq ${o.id}` });
+        Object.assign(o, patch);
+        if (!o.razorpay_payment_id) o.razorpay_payment_id = payId;
+        if (lines.length > 0 && !o.invoice_number) o.invoice_number = `WOV-2026-000${++issuedInside}`;
+        return { data: { path: "settled", order_id: o.id, stock, stock_error: stockError, flagged }, error: null };
+      }
       case "reserve_stock": {
         const orderId = args.p_order_id as string;
         const items = args.p_items as { id: string; size: string; quantity: number }[];
@@ -209,6 +314,11 @@ export function makeWorld(opts: {
       }
       case "redeem_loyalty_points": {
         const orderId = args.p_order_id as string;
+        // 0077: only against a paid, uncancelled order.
+        const target = world.orders.get(orderId);
+        if (orderId && (!target || target.payment_status !== "paid" || target.status === "cancelled")) {
+          return { data: { ok: false, reason: "The order is not settled, so no points were spent." }, error: null };
+        }
         if (world.redemptions.has(orderId)) {
           return { data: null, error: { code: "23505", message: "loyalty_ledger_one_redemption_per_order" } };
         }

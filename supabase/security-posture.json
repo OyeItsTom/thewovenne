@@ -412,6 +412,21 @@
       },
       "columns": {}
     },
+    "payment_refund_obligations": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
     "product_images": {
       "kind": "r",
       "rls": true,
@@ -1321,6 +1336,13 @@
         "service_role"
       ]
     },
+    "orders_cancelled_order_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "pending_changes()": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -1550,6 +1572,13 @@
       "searchPath": "public, pg_temp",
       "execute": [
         "authenticated",
+        "service_role"
+      ]
+    },
+    "settle_razorpay_payment(text,text,bigint,text,bigint,bigint,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
         "service_role"
       ]
     },
@@ -1918,6 +1947,15 @@
         "authenticated"
       ],
       "using": "(lower(customer_email) = lower(auth.email()))",
+      "check": null
+    },
+    "public.payment_refund_obligations.Admins read refund obligations": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
       "check": null
     },
     "public.product_images.Admins can delete product images": {

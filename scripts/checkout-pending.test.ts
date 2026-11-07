@@ -67,6 +67,8 @@ const HOLD_STATES: PaymentHoldState[] = [
   "refunded",
   "unknown_status",
   "unverified",
+  "order_cancelled",
+  "unrecorded",
 ];
 
 const src = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
@@ -236,7 +238,8 @@ ok("titles are not all identical", new Set(titles).size > 1);
 for (const state of HOLD_STATES) {
   ok(
     `${state} tells them not to pay again`,
-    /do(?: no|n'?)t pay again/i.test(HOLD_COPY[state].body)
+    // order_cancelled (0077) uses the owner-approved "do not make another payment".
+    /do(?: no|n'?)t (?:pay again|make another payment)/i.test(HOLD_COPY[state].body)
   );
 }
 

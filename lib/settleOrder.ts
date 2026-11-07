@@ -106,7 +106,21 @@ export type SettlementOutcome =
   /** A status this code does not know. Nothing touched. */
   | "unknown_status"
   /** Razorpay could not be asked. Nothing touched; ask again later. */
-  | "indeterminate";
+  | "indeterminate"
+  /**
+   * The order is cancelled. A payment captured after the cancellation is
+   * recorded as a refund owed (0077) and nothing is fulfilled; a replay for an
+   * order that was paid and then cancelled changes nothing.
+   */
+  | "order_cancelled"
+  /**
+   * Razorpay says captured, but nothing was committed here: the database
+   * refused or could not be reached (or the pending row vanished). NOT a
+   * success and NOT a failure — the money may well have moved. Nothing was
+   * written, so a retry (the webhook's) records it; the customer is told not
+   * to pay again.
+   */
+  | "unrecorded";
 
 export type StockOutcome =
   /** Stock came out on this call. */
@@ -231,19 +245,23 @@ export async function settleOrder(
     .maybeSingle();
   const pending = (pendingRow as PendingRow | null) ?? null;
 
-  // The amount captured must be the amount the server asked for. Razorpay
-  // enforces this for a standard order, so a difference means the row or the
-  // request is not what it seems — and settling a basket for money that does
-  // not match it is exactly the thing this file exists to refuse.
+  // The amount captured must be the amount the server asked for — for a SALE.
+  // Razorpay enforces this for a standard order, so a difference means the row
+  // or the request is not what it seems, and settling a basket for money that
+  // does not match it is exactly the thing this file exists to refuse.
+  //
+  // The check is made by settle_razorpay_payment (0077), under the order's row
+  // lock, rather than here: if the order is cancelled, the payment is owed back
+  // WHATEVER its amount, and refusing it here would leave captured money
+  // unrecorded. For an open order the database returns "mismatch" and nothing
+  // is touched, exactly as before. Logged here so the numbers are on record.
   if (pending && pending.total_inr !== null && pending.total_inr !== undefined) {
-    // Same helper the checkout route used to ask for the amount, so the two
-    // sides cannot disagree by rounding.
+    // Same helper the checkout route used to ask for the amount.
     const askedPaise = toPaise(Number(pending.total_inr));
     if (askedPaise !== paidPaise) {
       console.error(
-        `Razorpay payment ${razorpayPaymentId} captured ${paidPaise} paise but order ${pending.id} asked for ${askedPaise} — not settling.`
+        `Razorpay payment ${razorpayPaymentId} captured ${paidPaise} paise but order ${pending.id} asked for ${askedPaise}.`
       );
-      return nothing("mismatch", status);
     }
   }
 
@@ -295,7 +313,7 @@ export async function settleOrder(
     if (orderId) await recordPurchase(supabase, orderId);
 
     return {
-      outcome: "settled",
+      outcome: orderId !== null ? "settled" : "unrecorded",
       paymentStatus: status,
       ok: orderId !== null,
       orderId,
@@ -309,78 +327,125 @@ export async function settleOrder(
   const orderId = pending.id;
   const lines = Array.isArray(pending.items) ? pending.items : [];
 
-  // ── Stock ──
-  // After payment, never before: decrementing at checkout-start would let an
-  // abandoned modal hold stock nobody bought.
+  // ── Stock, the order row and the invoice: ONE database transaction ──
+  // settle_razorpay_payment (0077) locks the order row and decides under that
+  // lock, so a cancellation cannot slip in between the stock coming out and
+  // the order being marked paid. It is the same work this file used to do in
+  // three calls:
   //
-  // reserve_stock (0058) merges the lines, claims one movement per line and
-  // decrements — or, on a repeat, finds the claims taken and moves nothing,
-  // reporting already_reserved. Only an ERROR means stock could not be taken
-  // for a first settlement: the customer has paid, so the order is flagged
-  // rather than refused. A pending row with no lines is flagged the same way;
-  // it cannot be fulfilled from.
-  let stock: StockOutcome = "none";
-  if (lines.length === 0) {
-    console.error(`Paid order ${razorpayOrderId} has no stored lines — flagging for review.`);
-  } else {
-    try {
-      const { data, error: stockError } = await supabase.rpc("reserve_stock", {
-        p_items: lines.map((i) => ({ id: i.id, size: i.size, quantity: i.quantity })),
-        p_order_id: orderId,
-      });
-      if (stockError) {
-        stock = "failed";
-        console.error(
-          `Stock could not be reserved for paid order ${razorpayOrderId}: ${stockError.message}`
-        );
-      } else {
-        const r = (data ?? {}) as { reserved?: number; already_reserved?: number };
-        stock = Number(r.reserved ?? 0) > 0 ? "reserved" : "already_reserved";
-      }
-    } catch (e) {
-      stock = "failed";
-      console.error("reserve_stock threw:", e);
-    }
-  }
-  const stockShort = stock === "failed" || stock === "none";
+  //   stock    reserve_stock from the STORED lines (0058's one-sale-per-line
+  //            claim; a repeat reports already_reserved). A refusal does not
+  //            stop the payment being recorded: the order is flagged instead.
+  //   row      payment_status paid, the captured total, Razorpay's fee and
+  //            tax, and the payment id. `items` is never rewritten.
+  //            needs_review is only ever SET, never cleared.
+  //   invoice  assign_invoice_number, for an order that has lines — inside the
+  //            same transaction, so a credit note issued a moment later always
+  //            has the invoice to point at.
+  //
+  // A CANCELLED ORDER IS NEVER REVIVED (WP-ORDER-SAFETY-02). If the order was
+  // cancelled before this payment was captured, the function records the
+  // payment as a refund owed (payment_refund_obligations), flags the order and
+  // changes nothing else: no stock, no "paid", no invoice — and this file then
+  // returns before points, coupon, confirmation email and analytics. Repeats
+  // of the same payment only count another sighting of the same obligation.
+  // A paid order that was cancelled afterwards (cancel_order issued the credit
+  // note) is old news for a replay and is left exactly as it is.
+  //
   // A row with no lines — a thin orphan row being replayed, or a pending row
   // that somehow lost its items — gets marked paid and flagged, and nothing
   // else: no invoice number, no coupon use and no confirmation for an order
   // that cannot say what it contains. Those follow once a human has repaired
   // the row.
   const hasLines = lines.length > 0;
-
-  // ── The order row ──
-  // UPDATE, not insert: handleCreate wrote the customer's contact, address
-  // and lines. `items` is not rewritten — nothing since creation has better
-  // information about what was sold.
-  //
-  // needs_review is only ever SET here, never cleared. A flag a human has not
-  // looked at yet must survive a later settlement that happened to go
-  // smoothly — a replay that reserves nothing is exactly such a settlement.
-  const paidPatch: Record<string, unknown> = {
-    payment_status: "paid",
-    // What Razorpay captured — checked above to equal what the server asked.
-    total_inr: capturedInr,
-    gateway_fee_inr: gatewayFeeInr,
-    gateway_tax_inr: gatewayTaxInr,
-  };
-  if (stockShort) paidPatch.needs_review = true;
-
-  const { data: updated, error: updateError } = await supabase
-    .from("orders")
-    .update(paidPatch)
-    .eq("id", orderId)
-    .select("id");
-
-  const markedPaid = !updateError && Boolean(updated?.length);
-  if (updateError) {
-    // The customer has paid — never fail their confirmation over a recording
-    // problem. Sentry picks this up from the console error.
-    console.error(`Failed to mark order ${razorpayOrderId} paid:`, updateError.message);
-  } else if (!markedPaid) {
-    console.error(`Paid order ${razorpayOrderId}: the pending row vanished before it could be marked paid.`);
+  if (!hasLines) {
+    console.error(`Paid order ${razorpayOrderId} has no stored lines — flagging for review.`);
   }
+
+  let stock: StockOutcome = "none";
+  let markedPaid = false;
+  try {
+    const { data, error: settleError } = await supabase.rpc("settle_razorpay_payment", {
+      p_razorpay_order_id: razorpayOrderId,
+      p_razorpay_payment_id: razorpayPaymentId,
+      p_amount_paise: paidPaise,
+      p_currency: payment.currency,
+      p_fee_paise: gatewayFeeInr === null ? null : Number(payment.fee),
+      p_tax_paise: gatewayTaxInr === null ? null : Number(payment.tax),
+      p_provider_status: status,
+    });
+    if (settleError) {
+      // The customer has paid — never fail their confirmation over a recording
+      // problem. Nothing was written (one transaction), so the webhook's retry
+      // settles it later. Sentry picks this up from the console error.
+      console.error(`Failed to record payment for order ${razorpayOrderId}:`, settleError.message);
+    } else {
+      const r = (data ?? {}) as {
+        path?: string;
+        stock?: StockOutcome;
+        stock_error?: string | null;
+        invoice_error?: string | null;
+        reason?: string;
+        first?: boolean;
+      };
+      switch (r.path) {
+        case "settled":
+          markedPaid = true;
+          stock = r.stock ?? "none";
+          if (r.stock_error) {
+            console.error(`Stock could not be reserved for paid order ${razorpayOrderId}: ${r.stock_error}`);
+          }
+          if (r.invoice_error) {
+            console.error(`Could not assign an invoice number to paid order ${razorpayOrderId}: ${r.invoice_error}`);
+          }
+          break;
+        case "refund_owed":
+        case "already_settled_cancelled":
+          if (r.path === "refund_owed") {
+            console.error(
+              `Payment ${razorpayPaymentId} was captured for order ${razorpayOrderId}, which is cancelled ` +
+                `(${r.reason ?? "refund owed"}): recorded as a refund owed and flagged; nothing fulfilled.`
+            );
+          }
+          return {
+            outcome: "order_cancelled",
+            paymentStatus: status,
+            ok: false,
+            orderId,
+            orphan: false,
+            stock: "none",
+            emailClaimed: false,
+            flaggedForReview: r.path === "refund_owed" && r.first === true,
+          };
+        case "mismatch":
+          // The amount does not match the open order (checked under the lock).
+          console.error(`Payment ${razorpayPaymentId} does not match order ${razorpayOrderId} — not settling.`);
+          return nothing("mismatch", status);
+        default:
+          console.error(`Paid order ${razorpayOrderId}: the pending row vanished before it could be marked paid.`);
+      }
+    }
+  } catch (e) {
+    console.error(`settle_razorpay_payment threw for ${razorpayOrderId}:`, e);
+  }
+
+  // NOTHING COMMITTED. Say so, and do nothing else: no points (a redemption is
+  // irreversible), no coupon, no email, no analytics. The transaction above is
+  // all-or-nothing, so a retry starts from a clean slate. "settled" is only
+  // ever returned for a payment that is recorded.
+  if (!markedPaid) {
+    return {
+      outcome: "unrecorded",
+      paymentStatus: status,
+      ok: false,
+      orderId,
+      orphan: false,
+      stock: "none",
+      emailClaimed: false,
+      flaggedForReview: false,
+    };
+  }
+  const stockShort = stock === "failed" || stock === "none";
 
   // ── Points ──
   // Guarded per order in the database on both sides — the award since 0029,
