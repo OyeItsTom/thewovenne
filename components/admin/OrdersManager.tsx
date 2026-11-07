@@ -13,6 +13,7 @@ import {
   type OrderStatus,
 } from "@/lib/orders";
 import InvoiceLink from "@/components/order/InvoiceLink";
+import OrderCorrections from "@/components/admin/OrderCorrections";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
 
 /**
@@ -93,8 +94,14 @@ export default function OrdersManager() {
    * cancellation email goes out where the cancellation happens.
    */
   async function cancel(order: Order) {
+    // In person, the database does not put the stock back on cancelling: it
+    // cannot tell whether the piece was handed over (0078, O-6).
+    const stockLine =
+      order.payment_provider === "offline"
+        ? "It does NOT return the stock (an in-person sale may already have been handed over): if the piece is back on the shelf, use \"Back on the shelf\" afterwards."
+        : "It returns the stock.";
     const reason = window.prompt(
-      `Cancel order ${orderRef(order.id)}?\n\nThis issues a CREDIT NOTE against invoice ${order.invoice_number ?? "(none)"}, returns the stock, and emails the customer with the credit note attached. The invoice itself is never changed or deleted.\n\nReason (shown to the customer, optional):`
+      `Cancel order ${orderRef(order.id)}?\n\nThis issues a CREDIT NOTE against invoice ${order.invoice_number ?? "(none)"} and emails the customer with the credit note attached. ${stockLine} The invoice itself is never changed or deleted.\n\nReason (shown to the customer, optional):`
     );
     if (reason === null) return;
 
@@ -433,6 +440,17 @@ export default function OrdersManager() {
                   onPatch={(c) => patch(order, c)}
                 />
 
+                <OrderCorrections
+                  key={`${order.id}:${order.status}:${order.customer_phone ?? ""}:${JSON.stringify(order.shipping_address ?? null)}`}
+                  order={order}
+                  busy={working}
+                  onDone={async (message, problem) => {
+                    setNotice(message);
+                    setError(problem);
+                    await load();
+                  }}
+                />
+
                 {/* Paid and not yet dispatched. An unpaid order has nothing to
                     credit — it is cancelled in the controls above — a cancelled
                     one is already done, and a dispatched or delivered one is not
@@ -449,9 +467,11 @@ export default function OrdersManager() {
                     </button>
                     <p className="mt-1.5 text-xs text-ink/50">
                       Issues a credit note against{" "}
-                      {order.invoice_number ?? "this order"}, returns the stock,
-                      and emails the customer with the credit note attached. The
-                      invoice itself is never changed or deleted.
+                      {order.invoice_number ?? "this order"}
+                      {order.payment_provider === "offline"
+                        ? " and emails the customer with the credit note attached. Taken in person, so the stock is not returned automatically — use “Back on the shelf” once the piece is there."
+                        : ", returns the stock, and emails the customer with the credit note attached."}{" "}
+                      The invoice itself is never changed or deleted.
                       {" "}Paid by {paymentMethodLabel(order.payment_method)}.
                     </p>
                   </div>
@@ -546,6 +566,7 @@ function StatusControls({
       : null;
   const cancelled = order.status === "cancelled";
   const dispatched = order.status === "shipped" || order.status === "delivered";
+  const inPerson = order.payment_provider === "offline";
 
   return (
     <div className="space-y-5 rounded-xl bg-linen/40 p-4">
@@ -607,6 +628,24 @@ function StatusControls({
                 <PackageCheck className="h-3.5 w-3.5" />
               )}
               Mark {STATUS_LABEL[next].toLowerCase()}
+            </button>
+          )}
+
+          {/* In person: the customer may take the piece at the counter. That
+              handover is recorded as delivered (0078 allows it only for an
+              order taken in person), and from then on the order is not
+              cancellable with a restock. */}
+          {inPerson && order.payment_status === "paid" && (order.status === "placed" || order.status === "confirmed") && (
+            <button
+              onClick={() => {
+                if (window.confirm(`Record that the customer has taken order ${orderRef(order.id)} with them? It is then marked delivered and can no longer be cancelled with a restock.`)) {
+                  onAdvance("delivered");
+                }
+              }}
+              disabled={busy}
+              className="rounded-full border border-ink/20 px-4 py-2 text-xs text-ink hover:border-ink disabled:opacity-40"
+            >
+              Handed over in person
             </button>
           )}
 
