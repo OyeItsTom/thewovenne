@@ -393,6 +393,21 @@
       },
       "columns": {}
     },
+    "order_contact_corrections": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
     "order_events": {
       "kind": "r",
       "rls": true,
@@ -857,6 +872,11 @@
         "USAGE"
       ]
     },
+    "order_contact_corrections_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
     "order_events_id_seq": {
       "anon": [],
       "authenticated": [],
@@ -872,12 +892,33 @@
         "service_role"
       ]
     },
+    "admin_correct_order_contact(uuid,text,text,jsonb,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
+    "admin_correct_order_status(uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
     "admin_customers()": {
       "securityDefiner": true,
       "searchPath": "public",
       "execute": [
         "authenticated",
         "service_role"
+      ]
+    },
+    "admin_return_in_person_stock(uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
       ]
     },
     "admin_reviews(boolean)": {
@@ -1372,7 +1413,17 @@
         "service_role"
       ]
     },
-    "order_return_unreturned_stock(uuid)": {
+    "order_contact_corrections_redact()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_correction_reason(text)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_return_unreturned_stock(uuid,text)": {
       "securityDefiner": false,
       "searchPath": "public, pg_temp",
       "execute": []
@@ -1994,6 +2045,15 @@
       "check": null
     },
     "public.marketing_sends.Admins read marketing sends": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.order_contact_corrections.Admins read contact corrections": {
       "cmd": "SELECT",
       "permissive": "PERMISSIVE",
       "roles": [

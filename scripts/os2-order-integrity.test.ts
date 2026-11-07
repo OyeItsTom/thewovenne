@@ -424,13 +424,26 @@ async function os2(engine: Engine) {
     [JSON.stringify([{ id: p.productId, size: "One Size", quantity: 1 }]), cc.id])));
   truthy("a second 'cancellation' release for the same line is refused", Boolean(svcAgain.error));
   const open = await paidOrder(root, [{ id: p.productId, quantity: 1 }]);
+  const openShelf = await shelf(root, p.productId);
+  const live = await as(root, "service", w, () => outcome(root.query("select public.release_stock($1::jsonb, $2, 'cancellation')",
+    [JSON.stringify([{ id: p.productId, size: "One Size", quantity: 1 }]), open.id])));
+  truthy("a LIVE order's stock cannot be put back by service_role (only a cancellation restocks)", refused(live, "only when it is cancelled"));
+  const liveIns = await as(root, "service", w, () => outcome(root.query(
+    "insert into stock_movements (product_id, size_label, delta, reason, order_id) values ($1, 'One Size', 1, 'cancellation', $2)", [p.productId, open.id])));
+  truthy("…nor by a direct movement insert", refused(liveIns, "only when it is cancelled"));
+  check("…and the shelf did not move", (await shelf(root, p.productId)) - openShelf, 0);
+  // More than the sale took, on a cancelled order that has not had it back yet
+  // (an in-person cancellation waits for the admin, O-6).
+  const ipOver = await inPersonOrder(root, p.productId);
+  await as(root, "admin", w, () => cancelOrder(root, ipOver, "Customer changed their mind at the counter"));
   const tooMuch = await as(root, "service", w, () => outcome(root.query("select public.release_stock($1::jsonb, $2, 'cancellation')",
-    [JSON.stringify([{ id: p.productId, size: "One Size", quantity: 3 }]), open.id])));
+    [JSON.stringify([{ id: p.productId, size: "One Size", quantity: 3 }]), ipOver])));
   truthy("more than the sale took is refused", refused(tooMuch, "Only stock this order took"));
   const ret = await as(root, "service", w, () => outcome(root.query("select public.release_stock($1::jsonb, $2, 'return')",
     [JSON.stringify([{ id: p.productId, size: "One Size", quantity: 1 }]), open.id])));
   truthy("an order-linked 'return' needs a verified receipt (OS-6) and is refused", refused(ret, "received and checked"));
   const never = await pendingOrder(root, [{ id: p.productId }]);
+  await as(root, "admin", w, () => cancelUnpaid(root, never.id, "Abandoned checkout"));
   const nv = await as(root, "service", w, () => outcome(root.query("select public.release_stock($1::jsonb, $2, 'cancellation')",
     [JSON.stringify([{ id: p.productId, size: "One Size", quantity: 1 }]), never.id])));
   truthy("an order that never took stock cannot be given any", refused(nv, "Only stock this order took"));
@@ -595,10 +608,45 @@ async function os2(engine: Engine) {
   const ip = await inPersonOrder(root, p.productId);
   const ipBefore = await shelf(root, p.productId);
   const ipc = await as(root, "admin", w, () => cancelOrder(root, ip, "Returned at the counter before collection"));
-  check("a confirmed in-person order cancels: credit note, stock back", [ipc.credit_note?.amount_inr, (await shelf(root, p.productId)) - ipBefore], [2500, 1]);
+  check("O-6: a confirmed in-person order cancels with its credit note but NO automatic restock",
+    [ipc.credit_note?.amount_inr, ipc.stock_returned, (await shelf(root, p.productId)) - ipBefore], [2500, false, 0]);
+  truthy("…and the result says why (handover is not recorded)", String(ipc.stock_note).includes("NOT put back"));
+  const ipShort = await as(root, "admin", w, () => outcome(rpc(root, "select public.admin_return_in_person_stock($1, $2) r", [ip, "ok"])));
+  truthy("returning it needs a reason of at least 10 characters", refused(ipShort, "at least 10 characters"));
+  for (const [label, who] of [["service_role", "service"], ["a password-only (aal1) staff session", { staff: w.admin }], ["a customer", { user: w.customer, aal: "aal1" as const }]] as const) {
+    const r = await as(root, who as never, w, () => outcome(rpc(root, "select public.admin_return_in_person_stock($1, $2) r", [ip, "It is on the shelf again"])));
+    truthy(`${label} cannot return in-person stock`, Boolean(r.error));
+  }
+  const ipBack = await as(root, "admin", w, () => rpc(root, "select public.admin_return_in_person_stock($1, $2) r", [ip, "Piece checked and back on the rail"]));
+  check("the admin states it is back on the shelf: stock +1, once", [ipBack.outcome, ipBack.stock_returned, (await shelf(root, p.productId)) - ipBefore], ["returned", true, 1]);
+  await asRoot(root);
+  const ipMove = (await root.query("select actor_id, note from stock_movements where order_id = $1 and reason = 'cancellation'", [ip])).rows;
+  check("…the stock movement carries the admin and the statement",
+    [ipMove.length, ipMove[0]?.actor_id, String(ipMove[0]?.note).includes("Piece checked and back on the rail")], [1, w.admin, true]);
+  const ipAgain = await as(root, "admin", w, () => rpc(root, "select public.admin_return_in_person_stock($1, $2) r", [ip, "Piece checked and back on the rail"]));
+  check("a second statement returns nothing more", [ipAgain.outcome, (await shelf(root, p.productId)) - ipBefore], ["nothing_to_return", 1]);
+  const ipLive = await inPersonOrder(root, p.productId);
+  truthy("a live in-person order is not restocked this way (cancel first)",
+    refused(await as(root, "admin", w, () => outcome(rpc(root, "select public.admin_return_in_person_stock($1, $2) r", [ipLive, "Piece is on the shelf"]))), "Cancel the order first"));
+  const onl = await paidOrder(root, [{ id: p.productId }]);
+  await as(root, "admin", w, () => cancelOrder(root, onl.id));
+  truthy("an online order is never restocked this way (its cancellation already did)",
+    refused(await as(root, "admin", w, () => outcome(rpc(root, "select public.admin_return_in_person_stock($1, $2) r", [onl.id, "Piece is on the shelf"]))), "Only an in-person order"));
+  await asRoot(root);
+  const onlMove = (await root.query("select actor_id, note from stock_movements where order_id = $1 and reason = 'cancellation'", [onl.id])).rows[0];
+  check("an online cancellation's restock now carries the admin and the reason too",
+    [onlMove?.actor_id, String(onlMove?.note).startsWith("cancel_order: ")], [w.admin, true]);
   const ip2 = await inPersonOrder(root, p.productId);
   check("handed over in person: confirmed → delivered", (await as(root, "admin", w, () => setStatus(root, ip2, "delivered"))).status, "delivered");
   truthy("…and then it is not cancellable", refused(await as(root, "admin", w, () => outcome(cancelOrder(root, ip2))), "dispatched or delivered"));
+  truthy("…nor restockable by statement", refused(await as(root, "admin", w, () => outcome(rpc(root, "select public.admin_return_in_person_stock($1, $2) r", [ip2, "Piece is on the shelf"]))), "Cancel the order first"));
+  // A legacy paid order with no payment_provider is online (0044 reads it so):
+  // it is not "handed over in person" without being dispatched.
+  await asRoot(root);
+  const legacy = (await root.query(
+    "insert into orders (items, total_inr, payment_status, status, customer_email) values ('[]'::jsonb, 2500, 'paid', 'confirmed', 'legacy@example.test') returning id")).rows[0].id as string;
+  truthy("a legacy order with no provider cannot be marked delivered without dispatch",
+    refused(await as(root, "admin", w, () => outcome(setStatus(root, legacy, "delivered"))), "only after it has been dispatched"));
 
   // ── 12. Cancellation during dispatch (forced overlap) ──
   console.log("\n 12. cancellation racing dispatch");
@@ -669,7 +717,9 @@ async function os2(engine: Engine) {
   const hc = await as(root, "admin", w, () => cancelOrder(root, hist, "Repair: cancelled without a credit note"));
   check("cancel_order completes it in place: credit note, stock back, still cancelled",
     [hc.completed_existing_cancellation, hc.credit_note?.amount_inr, (await shelf(root, p.productId)) - hBefore, (await orderRow(root, hist)).status],
-    [true, 2500, 1, "cancelled"]);
+    [true, 2500, 0, "cancelled"]);
+  const hBack = await as(root, "admin", w, () => rpc(root, "select public.admin_return_in_person_stock($1, $2) r", [hist, "Repair: the piece never left the shop"]));
+  check("…it was in person, so its stock comes back when the admin states it is on the shelf", [hBack.outcome, (await shelf(root, p.productId)) - hBefore], ["returned", 1]);
   check("…the status and cancelled_at were not touched (no update event)", (await events(root, hist)).filter((e) => e.operation === "update").length, 0);
   truthy("a second repair is refused", refused(await as(root, "admin", w, () => outcome(cancelOrder(root, hist))), "already cancelled"));
   // Without a sale movement (exactly 9 Aug): a note, and no stock invented.
@@ -725,6 +775,135 @@ async function os2(engine: Engine) {
   const oldCancel = await as(root, "admin", w, () => outcome(cancelOrder(root, mv.id)));
   check("the old cancel route's RPC still works", oldCancel.value?.credit_note?.amount_inr, 2500);
 
+  // ── 18. A mistaken "delivered" (O-2) ──
+  console.log("\n 18. correcting a mistaken delivered");
+  const md = await paidOrder(root, [{ id: p.productId }]);
+  await as(root, "admin", w, () => setStatus(root, md.id, "confirmed"));
+  await as(root, "admin", w, () => ship(root, md.id));
+  await as(root, "admin", w, () => setStatus(root, md.id, "delivered", "Clicked the wrong order"));
+  await asRoot(root);
+  const mdDelivered = (await root.query("select delivered_at from orders where id = $1", [md.id])).rows[0].delivered_at as Date;
+  const correct = (id: string, reason: string | null) => rpc(root, "select public.admin_correct_order_status($1, $2) r", [id, reason]);
+  truthy("a correction needs a reason", refused(await as(root, "admin", w, () => outcome(correct(md.id, null))), "at least 10 characters"));
+  for (const [label, who] of [["service_role", "service"], ["a password-only (aal1) staff session", { staff: w.admin }], ["a customer", { user: w.customer, aal: "aal1" as const }]] as const) {
+    const r = await as(root, who as never, w, () => outcome(correct(md.id, "Parcel is still with the courier")));
+    truthy(`${label} cannot correct a status`, Boolean(r.error));
+  }
+  const fixed = await as(root, "admin", w, () => correct(md.id, "Parcel is still with the courier"));
+  const mdRow = await orderRow(root, md.id);
+  check("delivered → shipped; delivered time cleared; shipped time kept; still paid",
+    [fixed.outcome, mdRow.status, mdRow.delivered_stamped, mdRow.shipped_stamped, mdRow.payment_status], ["corrected", "shipped", false, true, "paid"]);
+  const mdEv = (await events(root, md.id)).at(-1)!;
+  check("audited: action, actor, reason, delivered → shipped, the old delivery time kept",
+    [mdEv.action, mdEv.actor_id, mdEv.reason, mdEv.from_status, mdEv.to_status, mdEv.changes.delivered_at?.to, new Date(mdEv.changes.delivered_at?.from).getTime()],
+    ["admin_correct_order_status", w.admin, "Parcel is still with the courier", "delivered", "shipped", null, mdDelivered.getTime()]);
+  check("no credit note and no stock movement from a correction", [(await notes(root, md.id)).length, (await orderMoves(root, md.id)).filter((m) => m.reason !== "sale").length], [0, 0]);
+  truthy("a shipped order is still not cancellable", refused(await as(root, "admin", w, () => outcome(cancelOrder(root, md.id))), "dispatched or delivered"));
+  truthy("a second correction is refused (it is not delivered)", refused(await as(root, "admin", w, () => outcome(correct(md.id, "Parcel is still with the courier"))), "Only an order marked delivered"));
+  check("it can be marked delivered again when it really arrives", (await as(root, "admin", w, () => setStatus(root, md.id, "delivered"))).status, "delivered");
+  const ipd = await inPersonOrder(root, p.productId);
+  await as(root, "admin", w, () => setStatus(root, ipd, "delivered"));
+  truthy("an in-person handover is not undone this way (O-6)", refused(await as(root, "admin", w, () => outcome(correct(ipd, "Handed over by mistake"))), "handed over in person"));
+  const mdc = await paidOrder(root, [{ id: p.productId }]);
+  await as(root, "admin", w, () => cancelOrder(root, mdc.id));
+  truthy("a cancelled order is never moved by a correction", refused(await as(root, "admin", w, () => outcome(correct(mdc.id, "Trying to reopen this one"))), "Only an order marked delivered"));
+  // The correction flag alone, forged by server code without the function:
+  await asService(root);
+  await root.query("begin");
+  await root.query("select set_config('wovenne.order_correction', 'undeliver', true)");
+  const forged = await outcome(root.query("update orders set status = 'shipped', delivered_at = null where id = $1", [md.id]));
+  await root.query("rollback");
+  await asRoot(root);
+  truthy("the correction setting alone does not move an order back (service_role)", forged.code === "42501");
+  check("…and a delivered order's time still cannot be rewritten otherwise", (await as(root, "service", w, () => outcome(root.query("update orders set delivered_at = now() - interval '1 day' where id = $1", [md.id])))).code, "55000");
+
+  // ── 19. Correcting contact details before dispatch (O-7) ──
+  console.log("\n 19. correcting contact details before dispatch");
+  const cc2 = await paidOrder(root, [{ id: p.productId }], 2500, { email: "fixme@example.test" });
+  await asRoot(root);
+  await root.query(`update orders set customer_phone = '+91 90000 00001',
+                      shipping_address = '{"line1":"1 Loom Street","line2":"","city":"Kochi","state":"Kerala","postal_code":"682001","country":"India"}'::jsonb
+                    where id = $1`, [cc2.id]);
+  const before2 = (await root.query("select invoice_number, total_inr::text t, items, shipping_cost_inr::text s from orders where id = $1", [cc2.id])).rows[0];
+  const fixContact = (id: string, name: string | null, phone: string | null, addr: unknown, reason: string | null) =>
+    rpc(root, "select public.admin_correct_order_contact($1, $2, $3, $4::jsonb, $5) r", [id, name, phone, addr === null ? null : JSON.stringify(addr), reason]);
+  const plainAddr = await as(root, "admin", w, () => outcome(root.query("update orders set shipping_address = '{}'::jsonb where id = $1", [cc2.id])));
+  check("a plain UPDATE of the address is still permission denied", plainAddr.code, "42501");
+  truthy("a correction needs a reason", refused(await as(root, "admin", w, () => outcome(fixContact(cc2.id, null, "+91 90000 00002", null, "typo"))), "at least 10 characters"));
+  truthy("the state cannot change (charge and tax were worked out for it)",
+    refused(await as(root, "admin", w, () => outcome(fixContact(cc2.id, null, null, { state: "Tamil Nadu" }, "Customer moved house"))), "state and country cannot be corrected"));
+  truthy("the country cannot change",
+    refused(await as(root, "admin", w, () => outcome(fixContact(cc2.id, null, null, { country: "UK" }, "Customer moved house"))), "state and country cannot be corrected"));
+  truthy("an unexpected address field is refused",
+    refused(await as(root, "admin", w, () => outcome(fixContact(cc2.id, null, null, { email: "evil@example.test" }, "Customer emailed a fix"))), "Unexpected address field"));
+  truthy("a malformed PIN code is refused",
+    refused(await as(root, "admin", w, () => outcome(fixContact(cc2.id, null, null, { postal_code: "6820" }, "Customer emailed a fix"))), "six digits"));
+  truthy("a malformed phone number is refused",
+    refused(await as(root, "admin", w, () => outcome(fixContact(cc2.id, null, "call me", null, "Customer emailed a fix"))), "phone number"));
+  for (const [label, who] of [["service_role", "service"], ["a password-only (aal1) staff session", { staff: w.admin }], ["the customer", { user: w.customer, aal: "aal1" as const }]] as const) {
+    const r = await as(root, who as never, w, () => outcome(fixContact(cc2.id, null, "+91 90000 00002", null, "Customer emailed a fix")));
+    truthy(`${label} cannot correct contact details`, Boolean(r.error));
+  }
+  await asRoot(root);
+  check("nothing was recorded by the refusals", (await root.query("select count(*)::int n from order_contact_corrections where order_id = $1", [cc2.id])).rows[0].n, 0);
+  const fx = await as(root, "admin", w, () => fixContact(cc2.id, "A. Buyer", "+91 90000 00002", { line1: "11 Loom Street", postal_code: "682011" }, "Customer emailed: flat number and PIN were wrong"));
+  check("name, phone and address corrected", [fx.outcome, fx.fields], ["corrected", ["customer_name", "customer_phone", "shipping_address"]]);
+  await asRoot(root);
+  const after2 = (await root.query("select customer_email, customer_name, customer_phone, shipping_address, invoice_number, total_inr::text t, items, shipping_cost_inr::text s from orders where id = $1", [cc2.id])).rows[0];
+  check("the new values are on the order; the state, city and email are as they were",
+    [after2.customer_name, after2.customer_phone, after2.shipping_address.line1, after2.shipping_address.postal_code, after2.shipping_address.state, after2.shipping_address.city, after2.customer_email],
+    ["A. Buyer", "+91 90000 00002", "11 Loom Street", "682011", "Kerala", "Kochi", "fixme@example.test"]);
+  check("the invoice number, total, items and delivery charge are untouched",
+    [after2.invoice_number, after2.t, after2.items, after2.s], [before2.invoice_number, before2.t, before2.items, before2.s]);
+  const led = (await root.query("select actor_id, actor_email, reason, before, after from order_contact_corrections where order_id = $1", [cc2.id])).rows;
+  check("the ledger keeps who, why, and the values replaced",
+    [led.length, led[0].actor_id, led[0].actor_email, led[0].reason, led[0].before.customer_name, led[0].before.customer_phone, led[0].before.shipping_address.line1, led[0].after.shipping_address.postal_code],
+    [1, w.admin, "owner@example.test", "Customer emailed: flat number and PIN were wrong", "A Buyer", "+91 90000 00001", "1 Loom Street", "682011"]);
+  const ccEv = (await events(root, cc2.id)).at(-1)!;
+  check("order_events: action and reason; contact details marked changed, never copied",
+    [ccEv.action, ccEv.reason, ccEv.changes.shipping_address, ccEv.changes.customer_phone, JSON.stringify(ccEv.changes).includes("Loom")],
+    ["admin_correct_order_contact", "Customer emailed: flat number and PIN were wrong", { changed: true }, { changed: true }, false]);
+  check("the same values again change nothing and record nothing",
+    [(await as(root, "admin", w, () => fixContact(cc2.id, "A. Buyer", null, { line1: "11 Loom Street" }, "Customer emailed again"))).outcome,
+     (await root.query("select count(*)::int n from order_contact_corrections where order_id = $1", [cc2.id])).rows[0].n], ["unchanged", 1]);
+  // Who can see and write the ledger.
+  const custRead = await as(root, { user: w.customer, aal: "aal1" }, w, () => root.query("select count(*)::int n from order_contact_corrections"));
+  check("customers see no corrections", custRead.rows[0].n, 0);
+  const adminRead = await as(root, "admin", w, () => root.query("select count(*)::int n from order_contact_corrections where order_id = $1", [cc2.id]));
+  check("a two-factor admin reads the correction", adminRead.rows[0].n, 1);
+  const aal1Read = await as(root, { staff: w.admin }, w, () => root.query("select count(*)::int n from order_contact_corrections"));
+  check("a password-only staff session sees none", aal1Read.rows[0].n, 0);
+  for (const sql of ["insert into order_contact_corrections (order_id, reason, before, after) values ($1, 'forged entry here', '{}', '{}')",
+                     "update order_contact_corrections set reason = 'rewritten reason' where order_id = $1",
+                     "delete from order_contact_corrections where order_id = $1"]) {
+    for (const who of ["admin", "service"] as const) {
+      const r = await as(root, who, w, () => outcome(root.query(sql, [cc2.id])));
+      check(`${who}: ${sql.split(" ")[0]} on the ledger is permission denied`, r.code, "42501");
+    }
+  }
+  // After dispatch, and for a cancelled order: refused.
+  await as(root, "admin", w, () => setStatus(root, cc2.id, "confirmed"));
+  await as(root, "admin", w, () => ship(root, cc2.id));
+  truthy("after dispatch, details are not corrected",
+    refused(await as(root, "admin", w, () => outcome(fixContact(cc2.id, null, "+91 90000 00003", null, "Customer emailed a fix"))), "only before dispatch"));
+  const ccx = await paidOrder(root, [{ id: p.productId }]);
+  await as(root, "admin", w, () => cancelOrder(root, ccx.id));
+  truthy("a cancelled order's details are not corrected",
+    refused(await as(root, "admin", w, () => outcome(fixContact(ccx.id, null, "+91 90000 00003", null, "Customer emailed a fix"))), "cancelled order"));
+  // The customer erases their account: the ledger forgets the values, keeps the fact.
+  await as(root, "admin", w, () => setStatus(root, cc2.id, "delivered"));
+  await asRoot(root);
+  const fixer = (await root.query("insert into auth.users (email) values ('fixme@example.test') returning id")).rows[0].id as string;
+  await root.query("insert into profiles (id, email) values ($1, 'fixme@example.test') on conflict (id) do update set email = excluded.email", [fixer]);
+  const erased = await as(root, { user: fixer, aal: "aal1" }, w, () => root.query("select public.delete_my_account() r"));
+  check("account deletion anonymises the order", erased.rows[0].r.ok, true);
+  await asRoot(root);
+  const red = (await root.query("select reason, before, after, redacted_at is not null r from order_contact_corrections where order_id = $1", [cc2.id])).rows[0];
+  check("…and redacts the correction's values, keeping who, when and why",
+    [red.reason, red.before, red.after, red.r], ["Customer emailed: flat number and PIN were wrong", { redacted: true }, { redacted: true }, true]);
+  check("no correction anywhere still holds a redacted order's street",
+    (await root.query("select count(*)::int n from order_contact_corrections c join orders o on o.id = c.order_id where o.customer_email is null and (c.before::text ilike '%Loom%' or c.after::text ilike '%Loom%')")).rows[0].n, 0);
+
   // ── 17. Posture of the new objects ──
   console.log("\n 17. privileges");
   await asRoot(root);
@@ -739,6 +918,19 @@ async function os2(engine: Engine) {
     [priv.t_upd, priv.cols], [false, ["admin_note", "awb_number", "courier_actual_cost_inr", "courier_name", "needs_review"]]);
   check("issue_credit_note not executable by authenticated", priv.icn, false);
   check("service_role keeps its UPDATE (settlement), gains nothing on order_events", [priv.svc_upd, priv.ev_ins], [true, false]);
+  const fnPriv = (await root.query(`
+    select f, has_function_privilege('authenticated', f, 'EXECUTE') auth, has_function_privilege('service_role', f, 'EXECUTE') svc,
+           has_function_privilege('anon', f, 'EXECUTE') anon
+      from unnest(array['public.admin_correct_order_status(uuid, text)', 'public.admin_correct_order_contact(uuid, text, text, jsonb, text)',
+                        'public.admin_return_in_person_stock(uuid, text)']) f`)).rows;
+  check("the three corrections: two-factor admins through authenticated only",
+    fnPriv.map((r) => [r.auth, r.svc, r.anon]), [[true, false, false], [true, false, false], [true, false, false]]);
+  const ledPriv = (await root.query(`
+    select has_table_privilege('authenticated', 'public.order_contact_corrections', 'INSERT') ai,
+           has_table_privilege('service_role', 'public.order_contact_corrections', 'INSERT') si,
+           has_table_privilege('anon', 'public.order_contact_corrections', 'SELECT') an,
+           (select relrowsecurity from pg_class where oid = 'public.order_contact_corrections'::regclass) rls`)).rows[0];
+  check("the corrections ledger: RLS on, no API writes, nothing for anon", [ledPriv.ai, ledPriv.si, ledPriv.an, ledPriv.rls], [false, false, false, true]);
 
   for (const c of [w.root, w.a, w.b, w.obs]) await c.end();
 }

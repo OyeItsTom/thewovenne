@@ -34,6 +34,24 @@
 --   5. order_events: one row per insert / update / delete of an order, with
 --      the actor, the action, from → to, the changed columns and the reason.
 --      Contact details are recorded as changed, never copied.
+--   6. Three narrow, audited corrections, each with a mandatory reason
+--      (WP-ORDER-SAFETY-06, decisions O-2, O-6, O-7):
+--        admin_correct_order_status    delivered → shipped, only for an order
+--                                      that was dispatched (a mis-click). No
+--                                      money, stock or credit note moves.
+--        admin_correct_order_contact   name / phone / delivery address before
+--                                      dispatch; never the email, state or
+--                                      country. The values replaced are kept
+--                                      in order_contact_corrections (admins
+--                                      read; redacted when the customer's
+--                                      details are erased).
+--        admin_return_in_person_stock  an IN-PERSON order (payment_provider
+--                                      'offline') is cancelled WITHOUT a
+--                                      restock, because nothing records whether
+--                                      the piece was handed over at the counter.
+--                                      The admin states it is back on the shelf
+--                                      and this returns it, once, with their
+--                                      name on the stock movement.
 --
 -- WHAT THIS DOES NOT DO
 --   No new order or payment status; no historical row is rewritten; refunds
@@ -70,7 +88,11 @@ begin
     raise exception '0078: cancel_order / issue_credit_note / release_stock / is_admin are not where they are expected';
   end if;
   if to_regclass('public.order_events') is not null
+     or to_regclass('public.order_contact_corrections') is not null
      or to_regprocedure('public.admin_set_order_status(uuid, text, text)') is not null
+     or to_regprocedure('public.admin_correct_order_status(uuid, text)') is not null
+     or to_regprocedure('public.admin_correct_order_contact(uuid, text, text, jsonb, text)') is not null
+     or to_regprocedure('public.admin_return_in_person_stock(uuid, text)') is not null
      or to_regprocedure('public.cancel_unpaid_order(uuid, text)') is not null then
     raise exception '0078: already applied (order_events or the order functions exist); refusing to replace them';
   end if;
@@ -208,6 +230,13 @@ as $fn$
 declare
   v_in_function boolean := coalesce(current_setting('wovenne.order_transition', true), '') = 'on';
   v_dispatching boolean := coalesce(current_setting('wovenne.dispatching', true), '') = 'on';
+  -- Only admin_correct_order_status sets this, and only for delivered → shipped
+  -- on a dispatched order; the one backward step there is (O-2).
+  v_undeliver   boolean := coalesce(current_setting('wovenne.order_correction', true), '') = 'undeliver'
+                           and v_in_function
+                           and old.status = 'delivered' and new.status = 'shipped'
+                           and old.shipped_at is not null and new.shipped_at is not distinct from old.shipped_at
+                           and new.delivered_at is null;
   v_rank_old int;
   v_rank_new int;
 begin
@@ -230,6 +259,8 @@ begin
         raise exception 'A dispatched or delivered order cannot be cancelled. A return is a separate step.'
           using errcode = '55000';
       end if;
+    elsif v_undeliver then
+      null; -- the audited mis-click correction, checked above
     elsif v_rank_old is null or v_rank_new is null or v_rank_new < v_rank_old then
       raise exception 'An order does not move back from % to %.', old.status, new.status
         using errcode = '55000';
@@ -266,8 +297,9 @@ begin
      or old.invoice_issued_at is not null and new.invoice_issued_at is distinct from old.invoice_issued_at then
     raise exception 'An issued invoice number is permanent.' using errcode = '55000';
   end if;
+  -- (The corrected delivery time is not lost: order_events keeps from → to.)
   if old.cancelled_at is not null and new.cancelled_at is distinct from old.cancelled_at
-     or old.delivered_at is not null and new.delivered_at is distinct from old.delivered_at then
+     or old.delivered_at is not null and new.delivered_at is distinct from old.delivered_at and not v_undeliver then
     raise exception 'When an order was cancelled or delivered is recorded once.' using errcode = '55000';
   end if;
   return new;
@@ -319,6 +351,14 @@ begin
      and (o.status in ('shipped', 'delivered') or o.shipped_at is not null or o.delivered_at is not null) then
     raise exception 'Stock is not returned automatically for an order that has been dispatched.'
       using errcode = '55000';
+  end if;
+  -- A cancellation restock belongs to a cancellation: the order is cancelled
+  -- already, or an order function is cancelling it in this transaction. Not a
+  -- live order's stock put back while it is still going out (service_role can
+  -- call release_stock and insert movements directly).
+  if new.reason = 'cancellation' and o.status is distinct from 'cancelled'
+     and coalesce(current_setting('wovenne.order_transition', true), '') <> 'on' then
+    raise exception 'Stock comes back for an order only when it is cancelled.' using errcode = '55000';
   end if;
 
   select coalesce(-sum(delta) filter (where reason = 'sale'), 0),
@@ -495,8 +535,10 @@ $fn$;
 revoke execute on function public.order_transition_begin(text, text) from public, anon, authenticated, service_role;
 revoke execute on function public.order_transition_end() from public, anon, authenticated, service_role;
 
--- Stock an order took and has not had back, returned once. Internal.
-create function public.order_return_unreturned_stock(p_order_id uuid)
+-- Stock an order took and has not had back, returned once. Internal. The
+-- movements it writes carry who returned them and why (release_stock leaves
+-- actor and note empty).
+create function public.order_return_unreturned_stock(p_order_id uuid, p_note text)
 returns jsonb
 language plpgsql
 set search_path = public, pg_temp
@@ -511,6 +553,12 @@ begin
   if jsonb_array_length(v_lines) > 0 then
     v_released := public.release_stock(v_lines, p_order_id, 'cancellation');
     v_missing := coalesce(v_released -> 'unreturned', '[]'::jsonb);
+    -- At most one cancellation movement per line ever exists (unique index),
+    -- so the untagged ones written in this transaction are these.
+    update stock_movements
+       set actor_id = auth.uid(), note = p_note
+     where order_id = p_order_id and reason = 'cancellation'
+       and created_at = now() and actor_id is null and note is null;
   end if;
   return jsonb_build_object(
     'stock_taken', v_taken,
@@ -533,7 +581,7 @@ begin
     end);
 end
 $fn$;
-revoke execute on function public.order_return_unreturned_stock(uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.order_return_unreturned_stock(uuid, text) from public, anon, authenticated, service_role;
 
 -- Confirm, mark shipped (only before 0075 exists) or mark delivered.
 create function public.admin_set_order_status(p_order_id uuid, p_status text, p_reason text default null)
@@ -592,8 +640,9 @@ begin
   else -- delivered
     if o.status = 'shipped' then
       null;
-    elsif o.status in ('placed', 'confirmed') and coalesce(o.payment_provider, '') <> 'razorpay' then
-      null; -- handed over in person
+    elsif o.status in ('placed', 'confirmed') and o.payment_provider = 'offline' then
+      null; -- handed over in person (only an order recorded in person: a legacy
+            -- row with no provider is online, as 0044 reads it)
     else
       raise exception 'An online order is marked delivered only after it has been dispatched.' using errcode = '55000';
     end if;
@@ -643,8 +692,8 @@ begin
       using errcode = '55000';
   end if;
 
-  v_stock := public.order_return_unreturned_stock(o.id);
   perform public.order_transition_begin('cancel_unpaid_order', p_reason);
+  v_stock := public.order_return_unreturned_stock(o.id, 'cancel_unpaid_order: ' || coalesce(nullif(btrim(p_reason), ''), 'no reason given'));
   update orders set status = 'cancelled', cancelled_at = coalesce(cancelled_at, now()) where id = o.id;
   perform public.order_transition_end();
   return jsonb_build_object('outcome', 'cancelled') || v_stock;
@@ -700,7 +749,21 @@ begin
     raise exception 'That order was never paid, so there is nothing to cancel';
   end if;
 
-  v_stock := public.order_return_unreturned_stock(p_order_id);
+  perform public.order_transition_begin('cancel_order', p_reason);
+  if target.payment_provider = 'offline' then
+    -- In person, "confirmed" can mean the customer walked out with the piece:
+    -- nothing records a handover at the counter. Putting stock back on that
+    -- assumption could invent inventory, so it waits for an admin to say the
+    -- piece is on the shelf (admin_return_in_person_stock) — O-6.
+    v_stock := jsonb_build_object(
+      'stock_returned', false,
+      'stock_unreturned', '[]'::jsonb,
+      'stock_note', case when exists (select 1 from stock_movements where order_id = p_order_id and reason = 'sale')
+        then 'In-person order: the stock was NOT put back, because nothing records whether the piece was handed over. If it is back on the shelf, use "Back on the shelf" on this cancelled order.'
+        else null end);
+  else
+    v_stock := public.order_return_unreturned_stock(p_order_id, 'cancel_order: ' || coalesce(nullif(btrim(p_reason), ''), 'no reason given'));
+  end if;
 
   select coalesce(sum(amount_inr), 0) into v_credited from credit_notes where order_id = p_order_id;
   if target.total_inr - v_credited > 0 then
@@ -714,13 +777,12 @@ begin
   end if;
 
   if not v_completing then
-    perform public.order_transition_begin('cancel_order', p_reason);
     update orders
        set status = 'cancelled',
            cancelled_at = coalesce(cancelled_at, now())
      where id = p_order_id;
-    perform public.order_transition_end();
   end if;
+  perform public.order_transition_end();
 
   return jsonb_build_object(
     'credit_note', note,
@@ -734,6 +796,296 @@ $fn$;
 revoke execute on function public.cancel_order(uuid, text) from public, anon;
 grant execute on function public.cancel_order(uuid, text) to authenticated, service_role;
 
+-- ── Corrections: narrow, audited, a reason every time (O-2, O-6, O-7) ───────
+-- None of them touches an amount, a payment, an invoice number or a credit
+-- note, and none re-opens a cancelled order.
+
+create function public.order_correction_reason(p_reason text)
+returns text
+language plpgsql
+immutable
+set search_path = public, pg_temp
+as $fn$
+begin
+  if p_reason is null or length(btrim(p_reason)) < 10 then
+    raise exception 'Say why, in a few words (at least 10 characters): a correction is kept with its reason.'
+      using errcode = '22023';
+  end if;
+  return left(btrim(p_reason), 500);
+end
+$fn$;
+revoke execute on function public.order_correction_reason(text) from public, anon, authenticated, service_role;
+
+-- O-2: "Mark delivered" pressed by mistake on a dispatched order. It moves back
+-- to shipped and its delivery time is cleared (order_events keeps the old one).
+-- Nothing else: no stock, no credit note, no payment. An order handed over in
+-- person (never dispatched) is not undone here — that would make it look
+-- cancellable with the goods possibly gone (O-6).
+create function public.admin_correct_order_status(p_order_id uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+declare
+  o        orders%rowtype;
+  v_reason text;
+begin
+  if not public.is_admin() then
+    raise exception 'Not authorised.' using errcode = '42501';
+  end if;
+  v_reason := public.order_correction_reason(p_reason);
+  select * into o from orders where id = p_order_id for update;
+  if not found then
+    raise exception 'That order does not exist.' using errcode = 'P0002';
+  end if;
+  if o.status <> 'delivered' then
+    raise exception 'Only an order marked delivered can be corrected back to dispatched.' using errcode = '55000';
+  end if;
+  if o.shipped_at is null then
+    raise exception 'This order was handed over in person, not dispatched, so there is no dispatched state to go back to.'
+      using errcode = '55000';
+  end if;
+
+  perform public.order_transition_begin('admin_correct_order_status', v_reason);
+  perform set_config('wovenne.order_correction', 'undeliver', true);
+  update orders set status = 'shipped', delivered_at = null where id = o.id;
+  perform set_config('wovenne.order_correction', '', true);
+  perform public.order_transition_end();
+  return jsonb_build_object('outcome', 'corrected', 'from', 'delivered', 'status', 'shipped',
+                            'delivered_at_was', o.delivered_at);
+end
+$fn$;
+revoke execute on function public.admin_correct_order_status(uuid, text) from public, anon, service_role;
+grant execute on function public.admin_correct_order_status(uuid, text) to authenticated;
+
+-- O-7: what an admin corrected in a customer's contact details, and what it
+-- replaced. Admins read it; nothing writes it but admin_correct_order_contact,
+-- and when the customer's details are erased from the order (account
+-- deletion) the values here are erased too.
+create table public.order_contact_corrections (
+  id            bigint generated always as identity primary key,
+  order_id      uuid not null references public.orders(id) on delete cascade,
+  corrected_at  timestamptz not null default now(),
+  actor_id      uuid,
+  actor_email   text,
+  reason        text not null,
+  before        jsonb not null,
+  after         jsonb not null,
+  redacted_at   timestamptz
+);
+comment on table public.order_contact_corrections is
+  'Pre-dispatch corrections of an order''s name, phone or delivery address
+   (0078): who, when, why, and the values before and after. The invoice
+   number, amounts and items are never touched; the as-issued contact details
+   are kept here. Redacted when the order''s contact details are erased.';
+create index order_contact_corrections_order_idx on public.order_contact_corrections (order_id, corrected_at);
+alter table public.order_contact_corrections enable row level security;
+create policy "Admins read contact corrections"
+  on public.order_contact_corrections for select to authenticated using (public.is_admin());
+revoke all on table public.order_contact_corrections from public, anon, authenticated, service_role;
+grant select on table public.order_contact_corrections to authenticated, service_role;
+revoke all on sequence public.order_contact_corrections_id_seq from public, anon, authenticated, service_role;
+
+-- Name, phone and delivery address, before dispatch. Null = leave as is.
+--   * never the email: it is who the order belongs to and where its invoice
+--     and emails go (and how account deletion finds it);
+--   * never the state or country: the delivery charge was quoted for them and
+--     is frozen once paid, and the state will decide the GST place of supply;
+--   * the PIN code may change within the same state; the delivery charge is
+--     NOT re-quoted (it is history once paid, O-3).
+create function public.admin_correct_order_contact(
+  p_order_id uuid,
+  p_name     text,
+  p_phone    text,
+  p_address  jsonb,
+  p_reason   text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+declare
+  o         orders%rowtype;
+  v_reason  text;
+  v_name    text;
+  v_phone   text;
+  v_addr    jsonb;
+  v_before  jsonb := '{}'::jsonb;
+  v_after   jsonb := '{}'::jsonb;
+  v_email   text;
+  k         text;
+  v_allowed constant text[] := array['line1', 'line2', 'city', 'state', 'postal_code', 'country'];
+begin
+  if not public.is_admin() then
+    raise exception 'Not authorised.' using errcode = '42501';
+  end if;
+  v_reason := public.order_correction_reason(p_reason);
+  select * into o from orders where id = p_order_id for update;
+  if not found then
+    raise exception 'That order does not exist.' using errcode = 'P0002';
+  end if;
+  if o.status = 'cancelled' then
+    raise exception 'A cancelled order''s details are not corrected.' using errcode = '55000';
+  end if;
+  if o.status in ('shipped', 'delivered') or o.shipped_at is not null or o.delivered_at is not null then
+    raise exception 'Delivery details are corrected only before dispatch. After that, the consignment already carries the address.'
+      using errcode = '55000';
+  end if;
+
+  if p_name is not null then
+    v_name := btrim(p_name);
+    if v_name = '' or length(v_name) > 120 then
+      raise exception 'A name is 1 to 120 characters.' using errcode = '22023';
+    end if;
+    if v_name is distinct from o.customer_name then
+      v_before := v_before || jsonb_build_object('customer_name', o.customer_name);
+      v_after  := v_after  || jsonb_build_object('customer_name', v_name);
+    end if;
+  end if;
+
+  if p_phone is not null then
+    v_phone := btrim(p_phone);
+    if v_phone !~ '^\+?[0-9][0-9 -]{6,30}$' then
+      raise exception 'A phone number is digits, spaces or dashes, with an optional leading +.' using errcode = '22023';
+    end if;
+    if v_phone is distinct from o.customer_phone then
+      v_before := v_before || jsonb_build_object('customer_phone', o.customer_phone);
+      v_after  := v_after  || jsonb_build_object('customer_phone', v_phone);
+    end if;
+  end if;
+
+  if p_address is not null then
+    if jsonb_typeof(p_address) <> 'object' then
+      raise exception 'The address is an object of line1, line2, city, state, postal_code, country.' using errcode = '22023';
+    end if;
+    for k in select jsonb_object_keys(p_address) loop
+      if not (k = any (v_allowed)) or jsonb_typeof(p_address -> k) <> 'string' then
+        raise exception 'Unexpected address field: %', k using errcode = '22023';
+      end if;
+    end loop;
+    -- The stored address with the given fields replaced, each trimmed.
+    v_addr := coalesce(o.shipping_address, '{}'::jsonb);
+    for k in select jsonb_object_keys(p_address) loop
+      v_addr := v_addr || jsonb_build_object(k, btrim(p_address ->> k));
+    end loop;
+    if lower(btrim(coalesce(v_addr ->> 'state', ''))) is distinct from lower(btrim(coalesce(o.shipping_address ->> 'state', '')))
+       or lower(btrim(coalesce(v_addr ->> 'country', ''))) is distinct from lower(btrim(coalesce(o.shipping_address ->> 'country', ''))) then
+      raise exception 'The state and country cannot be corrected here: the delivery charge and tax were worked out for them. Cancel and record a new order instead.'
+        using errcode = '55000';
+    end if;
+    if coalesce(v_addr ->> 'line1', '') = '' or coalesce(v_addr ->> 'city', '') = ''
+       or length(coalesce(v_addr ->> 'line1', '')) > 200 or length(coalesce(v_addr ->> 'line2', '')) > 200
+       or length(coalesce(v_addr ->> 'city', '')) > 100 then
+      raise exception 'An address needs a first line and a city (lines up to 200 characters, city up to 100).' using errcode = '22023';
+    end if;
+    if p_address ? 'postal_code'
+       and lower(btrim(coalesce(v_addr ->> 'country', 'india'))) in ('india', '')
+       and regexp_replace(coalesce(v_addr ->> 'postal_code', ''), '\D', '', 'g') !~ '^[1-9][0-9]{5}$' then
+      raise exception 'An Indian PIN code is six digits.' using errcode = '22023';
+    end if;
+    if v_addr is distinct from o.shipping_address then
+      v_before := v_before || jsonb_build_object('shipping_address', o.shipping_address);
+      v_after  := v_after  || jsonb_build_object('shipping_address', v_addr);
+    end if;
+  end if;
+
+  if v_after = '{}'::jsonb then
+    return jsonb_build_object('outcome', 'unchanged');
+  end if;
+
+  if auth.uid() is not null then
+    select p.email into v_email from profiles p where p.id = auth.uid();
+  end if;
+  insert into order_contact_corrections (order_id, actor_id, actor_email, reason, before, after)
+  values (o.id, auth.uid(), v_email, v_reason, v_before, v_after);
+
+  perform public.order_transition_begin('admin_correct_order_contact', v_reason);
+  update orders
+     set customer_name    = case when v_after ? 'customer_name' then v_after ->> 'customer_name' else customer_name end,
+         customer_phone   = case when v_after ? 'customer_phone' then v_after ->> 'customer_phone' else customer_phone end,
+         shipping_address = case when v_after ? 'shipping_address' then v_after -> 'shipping_address' else shipping_address end
+   where id = o.id;
+  perform public.order_transition_end();
+  return jsonb_build_object('outcome', 'corrected', 'fields', (select jsonb_agg(x order by x) from jsonb_object_keys(v_after) x));
+end
+$fn$;
+revoke execute on function public.admin_correct_order_contact(uuid, text, text, jsonb, text) from public, anon, service_role;
+grant execute on function public.admin_correct_order_contact(uuid, text, text, jsonb, text) to authenticated;
+
+-- When an order's contact details are erased (delete_my_account nulls all
+-- four), the corrections ledger forgets them too. The fact of the correction,
+-- who made it and why stay.
+create function public.order_contact_corrections_redact()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+begin
+  update order_contact_corrections
+     set before = jsonb_build_object('redacted', true),
+         after  = jsonb_build_object('redacted', true),
+         redacted_at = now()
+   where order_id = new.id and redacted_at is null;
+  return new;
+end
+$fn$;
+revoke execute on function public.order_contact_corrections_redact() from public, anon, authenticated, service_role;
+
+create trigger orders_contact_redaction
+  after update of customer_email, customer_name, customer_phone, shipping_address on public.orders
+  for each row
+  when (new.customer_email is null and new.customer_name is null and new.customer_phone is null
+        and new.shipping_address is null)
+  execute function public.order_contact_corrections_redact();
+
+-- O-6: an in-person order was cancelled without a restock (cancel_order above).
+-- The admin states the piece is physically back on the shelf; this returns what
+-- the sale took and has not had back, once per line, with the admin and the
+-- statement on each stock movement.
+create function public.admin_return_in_person_stock(p_order_id uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+declare
+  o        orders%rowtype;
+  v_reason text;
+  v_stock  jsonb;
+begin
+  if not public.is_admin() then
+    raise exception 'Not authorised.' using errcode = '42501';
+  end if;
+  v_reason := public.order_correction_reason(p_reason);
+  select * into o from orders where id = p_order_id for update;
+  if not found then
+    raise exception 'That order does not exist.' using errcode = 'P0002';
+  end if;
+  if o.payment_provider is distinct from 'offline' then
+    raise exception 'Only an in-person order is restocked this way; an online order''s stock comes back when it is cancelled.'
+      using errcode = '55000';
+  end if;
+  if o.status <> 'cancelled' then
+    raise exception 'Cancel the order first (with its credit note); then put the piece back on the shelf here.'
+      using errcode = '55000';
+  end if;
+  if o.shipped_at is not null or o.delivered_at is not null then
+    raise exception 'This order was dispatched or handed over; stock comes back only through a checked return (not available yet).'
+      using errcode = '55000';
+  end if;
+
+  perform public.order_transition_begin('admin_return_in_person_stock', v_reason);
+  v_stock := public.order_return_unreturned_stock(o.id, 'In-person cancellation, piece confirmed back on the shelf: ' || v_reason);
+  perform public.order_transition_end();
+  return jsonb_build_object('outcome', case when (v_stock ->> 'lines')::int = 0 then 'nothing_to_return' else 'returned' end) || v_stock;
+end
+$fn$;
+revoke execute on function public.admin_return_in_person_stock(uuid, text) from public, anon, service_role;
+grant execute on function public.admin_return_in_person_stock(uuid, text) to authenticated;
+
 comment on function public.admin_set_order_status(uuid, text, text) is
   'Confirm (placed → confirmed), mark shipped (only where dispatch_order does
    not exist), or mark delivered (after shipping, or in person for an order not
@@ -745,7 +1097,18 @@ comment on function public.cancel_order(uuid, text) is
   'Cancel a paid order before dispatch: the stock its sale took comes back
    once, a credit note for what is still creditable, status cancelled. Refuses
    dispatched and delivered orders. Completes an already-cancelled paid order
-   that has no cancellation credit note, without re-opening it (0078).';
+   that has no cancellation credit note, without re-opening it. An in-person
+   order is not restocked here (admin_return_in_person_stock) (0078).';
+comment on function public.admin_correct_order_status(uuid, text) is
+  'Correct a mistaken "delivered" on a dispatched order back to shipped, with
+   a reason. No stock, credit note or payment moves. Two-factor admins (0078).';
+comment on function public.admin_correct_order_contact(uuid, text, text, jsonb, text) is
+  'Correct the name, phone or delivery address before dispatch, with a reason;
+   never the email, state or country. The values replaced are kept in
+   order_contact_corrections. Two-factor admins (0078).';
+comment on function public.admin_return_in_person_stock(uuid, text) is
+  'Return the stock of a cancelled in-person order once an admin states the
+   piece is back on the shelf; once per line, signed. Two-factor admins (0078).';
 
 -- ── Self-check ──────────────────────────────────────────────────────────────
 do $$
@@ -771,6 +1134,9 @@ begin
     problems := problems || 'issue_credit_note is still directly callable'::text;
   end if;
   foreach f in array array['public.admin_set_order_status(uuid, text, text)'::regprocedure,
+                           'public.admin_correct_order_status(uuid, text)'::regprocedure,
+                           'public.admin_correct_order_contact(uuid, text, text, jsonb, text)'::regprocedure,
+                           'public.admin_return_in_person_stock(uuid, text)'::regprocedure,
                            'public.cancel_unpaid_order(uuid, text)'::regprocedure,
                            'public.cancel_order(uuid, text)'::regprocedure] loop
     if has_function_privilege('anon', f, 'EXECUTE') then
@@ -787,7 +1153,9 @@ begin
                            'public.stock_movements_order_return_guard()'::regprocedure,
                            'public.credit_notes_integrity()'::regprocedure,
                            'public.order_unreturned_stock(uuid)'::regprocedure,
-                           'public.order_return_unreturned_stock(uuid)'::regprocedure,
+                           'public.order_return_unreturned_stock(uuid, text)'::regprocedure,
+                           'public.order_correction_reason(text)'::regprocedure,
+                           'public.order_contact_corrections_redact()'::regprocedure,
                            'public.order_transition_begin(text, text)'::regprocedure,
                            'public.order_transition_end()'::regprocedure] loop
     if has_function_privilege('anon', f, 'EXECUTE') or has_function_privilege('authenticated', f, 'EXECUTE')
@@ -801,12 +1169,22 @@ begin
      or has_table_privilege('service_role', 'public.order_events', 'DELETE') then
     problems := problems || 'order_events is writable by an API role'::text;
   end if;
+  if has_table_privilege('anon', 'public.order_contact_corrections', 'SELECT')
+     or has_table_privilege('authenticated', 'public.order_contact_corrections', 'INSERT')
+     or has_table_privilege('authenticated', 'public.order_contact_corrections', 'UPDATE')
+     or has_table_privilege('authenticated', 'public.order_contact_corrections', 'DELETE')
+     or has_table_privilege('service_role', 'public.order_contact_corrections', 'INSERT')
+     or has_table_privilege('service_role', 'public.order_contact_corrections', 'UPDATE')
+     or has_table_privilege('service_role', 'public.order_contact_corrections', 'DELETE') then
+    problems := problems || 'order_contact_corrections is writable or public'::text;
+  end if;
   if (select count(*) from pg_trigger
        where not tgisinternal and tgenabled = 'O'
          and (tgrelid, tgname) in (('public.orders'::regclass, 'orders_audit'),
                                    ('public.orders'::regclass, 'orders_integrity_guard'),
                                    ('public.stock_movements'::regclass, 'stock_movements_order_return_guard'),
-                                   ('public.credit_notes'::regclass, 'credit_notes_integrity'))) <> 4 then
+                                   ('public.credit_notes'::regclass, 'credit_notes_integrity'),
+                                   ('public.orders'::regclass, 'orders_contact_redaction'))) <> 5 then
     problems := problems || 'a 0078 trigger is missing or disabled'::text;
   end if;
   if array_length(problems, 1) > 0 then
@@ -817,4 +1195,4 @@ end $$;
 select
   (select count(*) from order_events) as order_events,
   (select count(*) from pg_trigger where tgname in ('orders_audit', 'orders_integrity_guard',
-     'stock_movements_order_return_guard', 'credit_notes_integrity')) as triggers;
+     'stock_movements_order_return_guard', 'credit_notes_integrity', 'orders_contact_redaction')) as triggers;
