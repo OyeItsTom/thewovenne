@@ -72,10 +72,17 @@
 --     financial_record_retention_rules; then an owner-only purge removes them
 --     once expired and logs it. Owner reads go through an owner-only function
 --     that logs the purpose. No API role can do either.
---   * Delivery review: approval also needs the order's State to be one the
---     new PIN's postal circle (first two digits) covers. A cross-State
---     correction is never approvable: refuse, then cancel and record a new
---     order. Not a serviceability source — a typo/cross-State tripwire.
+--   * Delivery review (WP-09B): approval needs the State of the FULL six-digit
+--     PIN, as looked up (verified_pin must equal the order's PIN, with the
+--     lookup's source). The customer's typed State is what it is compared
+--     with, never proof of where the PIN is. A looked-up State different from
+--     the order's is never approved here: refuse and escalate (cancel and
+--     re-order, or a separately approved correction). The two-digit postal
+--     circle table is ADVISORY only — circles span several States/UTs and
+--     have exceptions — so it never decides a State and never forces a
+--     cancellation: when it does not cover the order's State (or knows no
+--     circle for the prefix) the order stays held until a documented manual
+--     verification note is recorded. Not a serviceability source.
 --
 -- WHAT THIS DOES NOT DO
 --   No new invoice number or document on a correction. No change to the
@@ -449,7 +456,8 @@ begin
   end if;
   perform set_config('wovenne.delivery_review', 'on', true);
   update order_delivery_reviews
-     set previous_pin = null, new_pin = null, verified_city = null, redacted_at = now()
+     set previous_pin = null, new_pin = null, verified_city = null, verified_pin = null,
+         circle_conflict_note = null, redacted_at = now()
    where order_id = new.id and redacted_at is null;
   perform set_config('wovenne.delivery_review', '', true);
   return new;
@@ -639,7 +647,7 @@ create table public.order_delivery_reviews (
   charged_delivery_inr       numeric,
   listed_unserviceable_prefix text,
   -- The States/UTs the new PIN's postal circle (first two digits) can belong
-  -- to (WP-09). Empty: no Indian postal circle uses the prefix.
+  -- to (WP-09). ADVISORY: empty = the table knows no circle for the prefix.
   pin_circle_states          text[],
   status                     text not null default 'pending'
                              check (status in ('pending', 'approved', 'refused', 'superseded')),
@@ -650,6 +658,14 @@ create table public.order_delivery_reviews (
   state_city_verified        boolean,
   verified_state             text,
   verified_city              text,
+  -- WP-09B: the exact six-digit PIN that was looked up, and where.
+  verified_pin               text,
+  pin_lookup_source          text,
+  -- The advisory postal-circle table vs the order's State, at decision time:
+  -- consistent | not_covered (table disagrees) | no_circle (table has none).
+  circle_check               text check (circle_check in ('consistent', 'not_covered', 'no_circle')),
+  -- Required to approve when circle_check is not 'consistent'.
+  circle_conflict_note       text,
   serviceable                boolean,
   serviceability_source      text,
   serviceability_reference   text,
@@ -694,10 +710,11 @@ begin
        or new.charged_delivery_inr is distinct from old.charged_delivery_inr then
       raise exception 'A delivery review''s opening record does not change.' using errcode = '55000';
     end if;
-    -- Redaction only touches the PINs and city.
+    -- Redaction only touches the PINs, city and the manual-verification note.
     if new.redacted_at is distinct from old.redacted_at then
       if old.redacted_at is not null or new.previous_pin is not null or new.new_pin is not null
-         or new.verified_city is not null or new.status is distinct from old.status then
+         or new.verified_city is not null or new.verified_pin is not null or new.circle_conflict_note is not null
+         or new.status is distinct from old.status then
         raise exception 'A delivery review is redacted once, and only its PINs and city.' using errcode = '55000';
       end if;
     elsif old.status <> 'pending' then
@@ -740,10 +757,14 @@ $fn$;
 revoke execute on function public.indian_state_key(text) from public, anon, authenticated, service_role;
 
 -- The States/UTs an Indian PIN's postal circle (its first two digits) can
--- belong to. Deliberately permissive (border circles list every State they
--- serve) and coarse: a tripwire for a PIN in another State, NOT evidence that
--- the PIN exists or that a courier serves it. 90–99 (Army Postal Service) and
--- unused prefixes give an empty array.
+-- belong to. ADVISORY ONLY (WP-09B): two digits name a postal region/circle,
+-- not a State. Circles span several States/UTs (Kerala circle: Lakshadweep,
+-- Mahe; Maharashtra: Goa; Punjab: Chandigarh; West Bengal: Sikkim, Andaman)
+-- and have enclaves served by a neighbour's circle (Yanam, Puducherry: 533464).
+-- It never decides a State and never forces a cancellation; a disagreement
+-- only keeps the order held for documented manual verification. It is not
+-- evidence that the PIN exists or that a courier serves it. 90–99 (Army
+-- Postal Service) and unused prefixes give an empty array (= unknown).
 create function public.indian_pin_circle_states(p_pin text)
 returns text[]
 language sql
@@ -762,7 +783,7 @@ as $fn$
     when d between 36 and 39 then array['gujarat', 'dadra and nagar haveli and daman and diu']
     when d between 40 and 44 then array['maharashtra', 'goa']
     when d between 45 and 49 then array['madhya pradesh', 'chhattisgarh']
-    when d between 50 and 53 then array['telangana', 'andhra pradesh']
+    when d between 50 and 53 then array['telangana', 'andhra pradesh', 'puducherry']
     when d between 56 and 59 then array['karnataka']
     when d between 60 and 64 then array['tamil nadu', 'puducherry']
     when d between 67 and 69 then array['kerala', 'lakshadweep', 'puducherry']
@@ -866,7 +887,8 @@ create trigger orders_contact_erasure_followup
 
 -- The review, decided by an admin (aal2, live session — is_admin()).
 --   p_decision  'approve' | 'refuse'
---   p_evidence  { pin_verified, state_city_verified, verified_state, verified_city,
+--   p_evidence  { pin_verified, verified_pin, pin_lookup_source,
+--                 state_city_verified, verified_state, verified_city, circle_conflict_note,
 --                 serviceable, serviceability_source, serviceability_reference,
 --                 published_rate_inr, courier_cost_estimate_inr,
 --                 cost_difference_reviewed, listed_exclusion_overridden }
@@ -897,6 +919,11 @@ declare
   v_hold   text;
   v_pin    text;
   v_circle text[];
+  v_vpin   text;
+  v_lsrc   text;
+  v_note   text;
+  v_okey   text;
+  v_check  text;
   b        text;
 begin
   if not public.is_admin() then
@@ -932,6 +959,18 @@ begin
   v_state  := nullif(btrim(coalesce(e ->> 'verified_state', '')), '');
   v_city   := nullif(btrim(coalesce(e ->> 'verified_city', '')), '');
   v_source := nullif(btrim(coalesce(e ->> 'serviceability_source', '')), '');
+  v_vpin   := nullif(regexp_replace(coalesce(e ->> 'verified_pin', ''), '\s', '', 'g'), '');
+  v_lsrc   := nullif(btrim(coalesce(e ->> 'pin_lookup_source', '')), '');
+  v_note   := nullif(btrim(coalesce(e ->> 'circle_conflict_note', '')), '');
+  v_pin    := regexp_replace(coalesce(o.shipping_address ->> 'postal_code', ''), '\D', '', 'g');
+  v_okey   := public.indian_state_key(o.shipping_address ->> 'state');
+  -- Advisory only: recorded with the decision, never a State by itself.
+  if lower(btrim(coalesce(o.shipping_address ->> 'country', 'india'))) in ('india', 'in', '') then
+    v_circle := public.indian_pin_circle_states(v_pin);
+    v_check  := case when cardinality(v_circle) = 0 then 'no_circle'
+                     when v_okey = any (v_circle) then 'consistent'
+                     else 'not_covered' end;
+  end if;
   if e ? 'published_rate_inr' and jsonb_typeof(e -> 'published_rate_inr') = 'number' then
     v_rate := (e ->> 'published_rate_inr')::numeric::integer;
   end if;
@@ -949,29 +988,37 @@ begin
     if coalesce((e ->> 'pin_verified')::boolean, false) is not true then
       raise exception 'Check the corrected PIN exists (India Post PIN search) before approving.' using errcode = '22023';
     end if;
-    if coalesce((e ->> 'state_city_verified')::boolean, false) is not true or v_state is null or v_city is null then
-      raise exception 'Record the State and city the PIN belongs to, as checked.' using errcode = '22023';
+    -- WP-09B: the State comes from a lookup of the FULL PIN on the order — not
+    -- from its first two digits and not from what the customer typed.
+    if v_vpin is null or v_vpin is distinct from v_pin then
+      raise exception 'Record the full six-digit PIN you looked up (the order''s PIN is %). A lookup of another or a partial PIN does not count.',
+        v_pin using errcode = '22023';
     end if;
-    if lower(v_state) is distinct from lower(btrim(coalesce(o.shipping_address ->> 'state', ''))) then
-      raise exception 'The PIN is in %, but the order is for %. The delivery charge and place of supply were set for %: refuse this review, then cancel and record a new order.',
-        v_state, coalesce(o.shipping_address ->> 'state', 'no State'), coalesce(o.shipping_address ->> 'state', 'no State')
+    if v_lsrc is null or length(v_lsrc) < 3 then
+      raise exception 'Say where the State of PIN % was looked up (for example "India Post PIN search, % → district, State").',
+        v_pin, v_pin using errcode = '22023';
+    end if;
+    if coalesce((e ->> 'state_city_verified')::boolean, false) is not true or v_state is null or v_city is null then
+      raise exception 'Record the State and city the PIN belongs to, as looked up.' using errcode = '22023';
+    end if;
+    if v_okey = '' then
+      raise exception 'The order has no State recorded, so the PIN''s State cannot be compared. Correct the address to include it (a new review opens), then review again.'
         using errcode = '55000';
     end if;
-    -- WP-09: independent of what was typed above, the PIN's postal circle must
-    -- cover the order's State. A cross-State correction has no safe approval
-    -- today (charge, place of supply and any future tax were set for the
-    -- order's State): it is resolved by refusing, then cancel and re-order.
-    if lower(btrim(coalesce(o.shipping_address ->> 'country', 'india'))) in ('india', 'in', '') then
-      v_pin    := regexp_replace(coalesce(o.shipping_address ->> 'postal_code', ''), '\D', '', 'g');
-      v_circle := public.indian_pin_circle_states(v_pin);
-      if cardinality(v_circle) = 0 then
-        raise exception 'PIN % is not in any Indian postal circle this shop delivers through (prefix %). Refuse this review.',
-          v_pin, left(v_pin, 2) using errcode = '55000';
-      end if;
-      if not (public.indian_state_key(o.shipping_address ->> 'state') = any (v_circle)) then
-        raise exception 'PIN % belongs to the postal circle for %, but the order is for %. A delivery in another State cannot be approved: refuse this review, then cancel and record a new order.',
-          v_pin, array_to_string(v_circle, ' / '), coalesce(o.shipping_address ->> 'state', 'no State') using errcode = '55000';
-      end if;
+    if public.indian_state_key(v_state) is distinct from v_okey then
+      raise exception 'The lookup puts PIN % in %, but the order is for %. The delivery charge, invoice and place of supply were set for %: a delivery in another State is not approved here. Refuse this review and escalate: cancel and re-order, or a separately approved correction.',
+        v_pin, v_state, coalesce(o.shipping_address ->> 'state', 'no State'), coalesce(o.shipping_address ->> 'state', 'no State')
+        using errcode = '55000';
+    end if;
+    -- The advisory table disagrees, or knows no circle: not a refusal and not
+    -- a reason to cancel — the order stays held until the manual check of the
+    -- full PIN is written down.
+    if v_check in ('not_covered', 'no_circle') and (v_note is null or length(v_note) < 20) then
+      raise exception 'PIN % could not be confirmed in % from the postal-circle table (%). That table is rough, so this is not a refusal: the order stays held. Verify the full PIN''s State manually (the India Post office record for %, or the courier) and write what you checked as the manual verification note (at least 20 characters). If it is in another State, refuse and escalate instead.',
+        v_pin, coalesce(o.shipping_address ->> 'state', 'no State'),
+        case when v_check = 'no_circle' then 'no circle known for prefix ' || left(v_pin, 2)
+             else 'prefix ' || left(v_pin, 2) || ' is usually ' || array_to_string(v_circle, ' / ') end,
+        v_pin using errcode = '55000';
     end if;
     if coalesce((e ->> 'serviceable')::boolean, false) is not true then
       raise exception 'Approve only when the courier serves this PIN; otherwise refuse the review.' using errcode = '22023';
@@ -1002,6 +1049,8 @@ begin
          pin_verified = (e ->> 'pin_verified')::boolean,
          state_city_verified = (e ->> 'state_city_verified')::boolean,
          verified_state = v_state, verified_city = v_city,
+         verified_pin = left(v_vpin, 12), pin_lookup_source = left(v_lsrc, 300),
+         circle_check = v_check, circle_conflict_note = left(v_note, 1000),
          serviceable = (e ->> 'serviceable')::boolean,
          serviceability_source = left(v_source, 300),
          serviceability_reference = left(nullif(btrim(coalesce(e ->> 'serviceability_reference', '')), ''), 300),

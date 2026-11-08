@@ -24,7 +24,7 @@ interface Review {
   order_state: string | null;
   charged_delivery_inr: number | null;
   listed_unserviceable_prefix: string | null;
-  /** WP-09: States/UTs the new PIN's postal circle can belong to (first two digits). */
+  /** WP-09: States/UTs the new PIN's postal circle can belong to (first two digits). ADVISORY only (WP-09B). */
   pin_circle_states: string[] | null;
   decision_reason: string | null;
   decided_by_email: string | null;
@@ -47,8 +47,13 @@ export default function DeliveryReview({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pinOk, setPinOk] = useState(false);
   const [stateOk, setStateOk] = useState(false);
-  const [state, setState] = useState(order.shipping_address?.state ?? "");
-  const [city, setCity] = useState(order.shipping_address?.city ?? "");
+  // WP-09B: typed from the lookup of the full PIN — never pre-filled with what
+  // the customer typed, which is what it is checked against, not proof.
+  const [verifiedPin, setVerifiedPin] = useState("");
+  const [lookupSource, setLookupSource] = useState("");
+  const [state, setState] = useState("");
+  const [city, setCity] = useState("");
+  const [circleNote, setCircleNote] = useState("");
   const [serviceable, setServiceable] = useState<"" | "yes" | "no">("");
   const [source, setSource] = useState("");
   const [reference, setReference] = useState("");
@@ -91,14 +96,22 @@ export default function DeliveryReview({
   const charged = Number(review?.charged_delivery_inr ?? order.shipping_cost_inr);
   const cost = courierCost.trim() === "" ? null : Number(courierCost);
   const reasonOk = reason.trim().length >= MIN_REASON;
-  // WP-09: the database refuses approval when the order's State is not one the
-  // PIN's postal circle covers. Shown up front so the admin refuses instead.
-  const circle = review?.pin_circle_states ?? null;
+  // WP-09B: the State comes from a lookup of the full six-digit PIN. A looked-up
+  // State that differs from the order's is never approvable (the database
+  // refuses it too): refuse and escalate. The two-digit circle table is only
+  // advisory — when it disagrees or knows no circle, the order stays held
+  // until a manual verification note is written.
+  const pinDigits = String(pin).replace(/\D/g, "");
   const orderStateKey = stateKey(order.shipping_address?.state ?? "");
-  const crossState = circle !== null && (circle.length === 0 || !circle.includes(orderStateKey));
+  const pinMatches = verifiedPin.replace(/\s/g, "") === pinDigits && /^[1-9][0-9]{5}$/.test(pinDigits);
+  const crossState = state.trim() !== "" && orderStateKey !== "" && stateKey(state) !== orderStateKey;
+  const circle = review?.pin_circle_states ?? null;
+  const circleConcern = circle !== null && (circle.length === 0 || !circle.includes(orderStateKey));
+  const noteOk = !circleConcern || circleNote.trim().length >= 20;
   const canApprove =
-    review?.status === "pending" && !crossState &&
-    pinOk && stateOk && state.trim() !== "" && city.trim() !== "" &&
+    review?.status === "pending" && !crossState && orderStateKey !== "" &&
+    pinOk && pinMatches && lookupSource.trim().length >= 3 && noteOk &&
+    stateOk && state.trim() !== "" && city.trim() !== "" &&
     serviceable === "yes" && source.trim().length >= 3 &&
     cost !== null && Number.isInteger(cost) && cost >= 0 && costOk &&
     (!review.listed_unserviceable_prefix || listedOk) && reasonOk;
@@ -113,9 +126,12 @@ export default function DeliveryReview({
         p_decision: decision,
         p_evidence: {
           pin_verified: pinOk,
+          verified_pin: verifiedPin.replace(/\s/g, ""),
+          pin_lookup_source: lookupSource.trim(),
           state_city_verified: stateOk,
           verified_state: state.trim(),
           verified_city: city.trim(),
+          circle_conflict_note: circleNote.trim(),
           // Unanswered is left out, not sent as null: a refusal need not answer it.
           ...(serviceable === "" ? {} : { serviceable: serviceable === "yes" }),
           serviceability_source: source.trim(),
@@ -131,7 +147,7 @@ export default function DeliveryReview({
       await onDone(
         decision === "approve"
           ? "Delivery review approved: the hold is cleared and the order can be dispatched. Your checks and reason are kept with the order."
-          : "Delivery review refused: the order stays held. Correct the address again, or cancel the order.",
+          : "Delivery review refused: the order stays held. Correct the address again, or escalate (cancel and re-order, or a separately approved correction).",
         null
       );
     } catch (e) {
@@ -159,12 +175,19 @@ export default function DeliveryReview({
         </p>
       )}
       {review && circle && (
-        <p className={`mt-1 text-xs ${crossState ? "text-terracotta-dark" : "text-ink/60"}`} data-testid="pin-circle">
+        <p className={`mt-1 text-xs ${circleConcern ? "text-terracotta-dark" : "text-ink/60"}`} data-testid="pin-circle">
           {circle.length === 0
-            ? `No Indian postal circle uses PIN prefix ${String(review.new_pin ?? "").slice(0, 2)}. This review can only be refused.`
-            : crossState
-              ? `PIN ${review.new_pin} is in the postal circle for ${circle.join(" / ")}, but the order is for ${order.shipping_address?.state || "no State"}. A delivery in another State can't be approved here: refuse this review, then cancel and record a new order.`
-              : `PIN ${review.new_pin}'s postal circle covers ${circle.join(" / ")} (a rough check, not proof the courier serves it).`}
+            ? `The postal-circle table knows no circle for prefix ${String(review.new_pin ?? "").slice(0, 2)}. Look up the full PIN; approving needs a manual verification note.`
+            : circleConcern
+              ? `Prefix ${String(review.new_pin ?? "").slice(0, 2)} is usually ${circle.join(" / ")}, not ${order.shipping_address?.state || "no State"}. This is a rough table, not a decision: look up the full PIN. If it is in another State, refuse and escalate; if it is in ${order.shipping_address?.state || "the order's State"}, write what you checked in the manual verification note.`
+              : `Prefix ${String(review.new_pin ?? "").slice(0, 2)} is usually ${circle.join(" / ")} (a rough check: two digits are a postal circle, not a State).`}
+        </p>
+      )}
+      {review?.status === "pending" && crossState && (
+        <p className="mt-1 text-xs text-terracotta-dark" data-testid="cross-state">
+          The lookup puts PIN {pinDigits} in {state.trim()}, but the order is for {order.shipping_address?.state}. A delivery in
+          another State is not approved here: refuse this review and escalate (cancel and re-order, or a separately approved
+          correction). The charge and invoice stay as issued.
         </p>
       )}
       {review?.listed_unserviceable_prefix && (
@@ -182,10 +205,16 @@ export default function DeliveryReview({
         <div className="mt-3 space-y-2">
           <Check label={`I checked PIN ${review.new_pin ?? ""} exists (India Post PIN search)`} value={pinOk} onChange={setPinOk} />
           <div className="grid gap-2 sm:grid-cols-2">
-            <Field label="State the PIN belongs to" value={state} onChange={setState} />
-            <Field label="City / post office" value={city} onChange={setCity} />
+            <Field label="Full PIN you looked up (all six digits)" value={verifiedPin} onChange={setVerifiedPin} />
+            <Field label="Where you looked it up (e.g. India Post PIN search)" value={lookupSource} onChange={setLookupSource} />
+            <Field label="State the lookup gives for that PIN" value={state} onChange={setState} />
+            <Field label="City / post office the lookup gives" value={city} onChange={setCity} />
           </div>
-          <Check label="The State and city above are what the PIN belongs to" value={stateOk} onChange={setStateOk} />
+          <Check label="The State and city above are what the lookup of the full PIN shows" value={stateOk} onChange={setStateOk} />
+          {circleConcern && (
+            <Field label="Manual verification note (required to approve, at least 20 characters: what record showed this PIN is in the order's State)"
+              value={circleNote} onChange={setCircleNote} />
+          )}
           <label className="block">
             <span className="text-xs font-medium text-ink/60">Does the courier deliver there?</span>
             <select value={serviceable} onChange={(e) => setServiceable(e.target.value as "" | "yes" | "no")}

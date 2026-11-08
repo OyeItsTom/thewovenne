@@ -893,10 +893,11 @@ async function os2(engine: Engine) {
   await as(root, "admin", w, () => setStatus(root, cc2.id, "confirmed"));
   // OS-2b (0079): a corrected PIN holds dispatch until a delivery review is recorded.
   if ((await root.query("select to_regclass('public.order_delivery_reviews') is not null v")).rows[0].v) {
-    const rv = (await root.query("select id, order_state from order_delivery_reviews where order_id = $1 and status = 'pending'", [cc2.id])).rows[0];
+    const rv = (await root.query("select id, order_state, new_pin from order_delivery_reviews where order_id = $1 and status = 'pending'", [cc2.id])).rows[0];
     if (rv) await as(root, "admin", w, () => root.query(
       "select public.admin_decide_delivery_review($1, 'approve', $2::jsonb, 'Checked PIN, State and courier coverage')",
-      [rv.id, JSON.stringify({ pin_verified: true, state_city_verified: true, verified_state: rv.order_state, verified_city: "Kochi",
+      [rv.id, JSON.stringify({ pin_verified: true, verified_pin: rv.new_pin, pin_lookup_source: "India Post PIN search",
+        state_city_verified: true, verified_state: rv.order_state, verified_city: "Kochi",
         serviceable: true, serviceability_source: "India Post PIN search", published_rate_inr: 99,
         courier_cost_estimate_inr: 47, cost_difference_reviewed: true })]));
   }

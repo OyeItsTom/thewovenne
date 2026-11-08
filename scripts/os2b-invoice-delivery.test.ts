@@ -8,6 +8,8 @@
  *   PURE     the builders' fallbacks and the delivery rules (TS only).
  *   ISSUER   (WP-09) seller identity and tax treatment frozen per document.
  *   RETAIN   (WP-09) sealed details: logged owner reads, rule-gated purge.
+ *   PIN      (WP-09B) the State comes from a lookup of the FULL PIN; the
+ *            two-digit postal-circle table is advisory only.
  *
  * Works with or without 0074–0076: dispatch is dispatch_order (0075) when it
  * exists, otherwise admin_set_order_status('shipped').
@@ -42,7 +44,7 @@ const refusedWith = (msg: string, part: string) => (msg.includes(part) ? `refuse
 const KOCHI = { line1: "1 Loom Street", line2: "", city: "Kochi", state: "Kerala", postal_code: "682001", country: "India" };
 
 let seq = 0;
-async function paidOrder(c: Client, productId: string, shipping = 99) {
+async function paidOrder(c: Client, productId: string, shipping = 99, addr: object = KOCHI) {
   seq += 1;
   const rzp = `order_os2b_${process.pid}_${seq}`;
   await asRoot(c);
@@ -53,7 +55,7 @@ async function paidOrder(c: Client, productId: string, shipping = 99) {
                          customer_phone, shipping_address, payment_provider, razorpay_order_id)
      values ($1::jsonb, $2, $3, 'pending', 'placed', 'buyer@example.test', 'A Buyer', '+91 90000 00001', $4::jsonb, 'razorpay', $5)
      returning id`,
-    [JSON.stringify(items), total, shipping, JSON.stringify(KOCHI), rzp])).rows[0].id as string;
+    [JSON.stringify(items), total, shipping, JSON.stringify(addr), rzp])).rows[0].id as string;
   await asService(c);
   const r = (await c.query("select public.settle_razorpay_payment($1, $2, $3, 'INR', 5900, 900, 'captured') r",
     [rzp, `pay_${rzp}`, total * 100])).rows[0].r;
@@ -78,8 +80,10 @@ const shipOutcome = async (c: Client, id: string) => {
   return e === "" ? "dispatched" : e.includes("held for review") ? "refused: held" : e.includes("flagged for review") ? "refused: flagged" : e;
 };
 
-const GOOD = (state = "Kerala", city = "Kochi") => ({
-  pin_verified: true, state_city_verified: true, verified_state: state, verified_city: city,
+/** Approval evidence. WP-09B: the State is from a lookup of the full PIN, so the PIN is part of it. */
+const GOOD = (state = "Kerala", city = "Kochi", verifiedPin = "682011") => ({
+  pin_verified: true, verified_pin: verifiedPin, pin_lookup_source: "India Post PIN search (full PIN)",
+  state_city_verified: true, verified_state: state, verified_city: city,
   serviceable: true, serviceability_source: "India Post PIN search + Speed Post counter, Alappuzha HO",
   serviceability_reference: "counter clerk, 8 Nov", published_rate_inr: 99, courier_cost_estimate_inr: 47,
   cost_difference_reviewed: true,
@@ -232,21 +236,26 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
     check("R5 OS2B: …and the PIN's postal-circle States", r5.pin_circle_states, ["kerala", "lakshadweep", "puducherry"]);
     await asAdmin(w.a, w.admin);
     check("R5 OS2B: approval without confirming the list entry refused",
-      refusedWith(await err(decide(w.a, r5.id, "approve", GOOD())), "we don't deliver here"), "refused: we don't deliver here");
-    check("R5 OS2B: approval with the override recorded", (await decide(w.a, r5.id, "approve", { ...GOOD(), listed_exclusion_overridden: true },
+      refusedWith(await err(decide(w.a, r5.id, "approve", GOOD("Kerala", "Kattappana", "685501"))), "we don't deliver here"), "refused: we don't deliver here");
+    check("R5 OS2B: approval with the override recorded", (await decide(w.a, r5.id, "approve", { ...GOOD("Kerala", "Kattappana", "685501"), listed_exclusion_overridden: true },
       "Speed Post counter confirmed Kattappana is served; list entry is stale")).outcome, "approved");
     check("R5 OS2B: dispatch after approval", await shipOutcome(w.a, o5), "dispatched");
 
-    // WP-09: a listed PIN in ANOTHER State (Port Blair) on a Kerala order. Even
-    // with the override and the admin typing "Kerala", it cannot be approved.
+    // WP-09: a listed PIN in ANOTHER State (Port Blair) on a Kerala order.
+    // WP-09B: typing "Kerala" does not approve it — the advisory table
+    // disagrees, so it stays held for a documented manual check; the honest
+    // lookup (Andaman) is a verified cross-State change: refused, escalated.
     const o5x = await paidOrder(w.root, w.productId);
     await asAdmin(w.a, w.admin);
     await correct(w.a, o5x, { postal_code: "744101", city: "Port Blair" });
     const r5x = await latestReview(w.root, o5x);
     await asAdmin(w.a, w.admin);
-    check("X OS2B: cross-State PIN with State typed as the order's → refused by the postal circle",
-      refusedWith(await err(decide(w.a, r5x.id, "approve", { ...GOOD("Kerala", "Port Blair"), listed_exclusion_overridden: true })), "another State"),
-      "refused: another State");
+    check("X OS2B: cross-State PIN with State typed as the order's → held for manual verification (table disagrees)",
+      refusedWith(await err(decide(w.a, r5x.id, "approve", { ...GOOD("Kerala", "Port Blair", "744101"), listed_exclusion_overridden: true })), "this is not a refusal: the order stays held"),
+      "refused: this is not a refusal: the order stays held");
+    check("PIN OS2B: the lookup's real State (Andaman) on a Kerala order → refused, escalate",
+      refusedWith(await err(decide(w.a, r5x.id, "approve", { ...GOOD("Andaman and Nicobar Islands", "Port Blair", "744101"), listed_exclusion_overridden: true })), "Refuse this review and escalate"),
+      "refused: Refuse this review and escalate");
     check("X OS2B: …still held", await shipOutcome(w.a, o5x), "refused: held");
     check("X OS2B: refusing it is the resolution (then cancel and re-order)", (await decide(w.a, r5x.id, "refuse",
       { pin_verified: true, verified_state: "Andaman and Nicobar Islands", serviceability_source: "India Post PIN search" },
@@ -272,11 +281,15 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
     const r5y = await latestReview(w.root, o5y);
     await asAdmin(w.a, w.admin);
     check("X OS2B: same State, different case/spacing → approvable", (await decide(w.a, r5y.id, "approve", GOOD("KERALA ", "Kochi"))).outcome, "approved");
+    check("PIN OS2B: …recorded with the looked-up PIN, its source and the advisory circle result",
+      await (async () => { const r = await latestReview(w.root, o5y); return [r.verified_pin, r.pin_lookup_source, r.circle_check, r.circle_conflict_note]; })(),
+      ["682011", "India Post PIN search (full PIN)", "consistent", null]);
     check("X OS2B: postal-circle map: Delhi/Mumbai/Goa/Port Blair/APS",
       (await w.root.query(`select public.indian_pin_circle_states('110001') a, public.indian_pin_circle_states('400001') b,
                                   public.indian_pin_circle_states('403001') c, public.indian_pin_circle_states('744101') d,
                                   public.indian_pin_circle_states('999999') e, public.indian_pin_circle_states('654321') f`)).rows[0],
       { a: ["delhi"], b: ["maharashtra", "goa"], c: ["maharashtra", "goa"], d: ["west bengal", "sikkim", "andaman and nicobar islands"], e: [], f: [] });
+    await pinScenarios(w);
     check("X OS2B: state key aliases", (await w.root.query(`select public.indian_state_key('New Delhi') a, public.indian_state_key('Jammu & Kashmir') b, public.indian_state_key('Orissa') c`)).rows[0],
       { a: "delhi", b: "jammu and kashmir", c: "odisha" });
   }
@@ -289,8 +302,8 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
     // Valid shape is not proof: the reviewer refuses.
     const r = await latestReview(w.root, o5b);
     await asAdmin(w.a, w.admin);
-    check("X OS2B: 999999 cannot be approved even with every box ticked (no postal circle)",
-      refusedWith(await err(decide(w.a, r.id, "approve", GOOD())), "not in any Indian postal circle"), "refused: not in any Indian postal circle");
+    check("X OS2B: 999999 is not approved on ticked boxes alone (no circle known: held for manual verification)",
+      refusedWith(await err(decide(w.a, r.id, "approve", GOOD("Kerala", "Kochi", "999999"))), "no circle known for prefix 99"), "refused: no circle known for prefix 99");
     check("R5 OS2B: refusing needs only a reason", (await decide(w.a, r.id, "refuse",
       { pin_verified: false, serviceable: false, serviceability_source: "India Post PIN search: no such PIN" }, "PIN does not exist; asked customer")).outcome, "refused");
     await asRoot(w.a);
@@ -338,15 +351,15 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
     check("R6 OS2B: review records charged ₹99, order State Kerala, PINs", [Number(r6.charged_delivery_inr), r6.order_state, r6.previous_pin, r6.new_pin], [99, "Kerala", "682001", "560001"]);
     await asAdmin(w.a, w.admin);
     check("R6 OS2B: approving with the PIN's real State (Karnataka) is refused",
-      refusedWith(await err(decide(w.a, r6.id, "approve", { ...GOOD("Karnataka", "Bengaluru"), published_rate_inr: 129 })), "place of supply"), "refused: place of supply");
+      refusedWith(await err(decide(w.a, r6.id, "approve", { ...GOOD("Karnataka", "Bengaluru", "560001"), published_rate_inr: 129 })), "place of supply"), "refused: place of supply");
     for (const [k, v] of [["pin_verified", false], ["state_city_verified", false], ["serviceable", false],
                           ["serviceability_source", ""], ["courier_cost_estimate_inr", null], ["cost_difference_reviewed", false],
                           ["published_rate_inr", null]] as const) {
-      const e = await err(decide(w.a, r6.id, "approve", { ...GOOD("Karnataka", "Bengaluru"), verified_state: "Kerala", [k]: v }));
+      const e = await err(decide(w.a, r6.id, "approve", { ...GOOD("Karnataka", "Bengaluru", "560001"), verified_state: "Kerala", [k]: v }));
       check(`R6 OS2B: approval without ${k} refused`, e !== "", true);
     }
-    check("X OS2B: Karnataka PIN with State typed as Kerala and every box ticked → refused by the postal circle",
-      refusedWith(await err(decide(w.a, r6.id, "approve", { ...GOOD("Kerala", "Bengaluru"), published_rate_inr: 129 })), "another State"), "refused: another State");
+    check("X OS2B: Karnataka PIN with State typed as Kerala and every box ticked → not approved (held: table disagrees, no manual note)",
+      refusedWith(await err(decide(w.a, r6.id, "approve", { ...GOOD("Kerala", "Bengaluru", "560001"), published_rate_inr: 129 })), "could not be confirmed in Kerala"), "refused: could not be confirmed in Kerala");
     check("R6 OS2B: approval with too short a reason refused", refusedWith(await err(decide(w.a, r6.id, "approve", GOOD(), "ok")), "at least 10"), "refused: at least 10");
     check("R6 OS2B: still held after the refused attempts", await shipOutcome(w.a, o6), "refused: held");
     // Refuse: the PIN is out of State. Next step is cancel and re-order.
@@ -389,7 +402,7 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
       [(await w.root.query("select status from order_delivery_reviews where id = $1", [first.id])).rows[0].status, second.status], ["superseded", "pending"]);
     await asAdmin(w.a, w.admin);
     check("R10 OS2B: approving the superseded review refused", refusedWith(await err(decide(w.a, first.id, "approve", GOOD())), "already superseded"), "refused: already superseded");
-    check("R10 OS2B: approving the current one", (await decide(w.a, second.id, "approve", GOOD())).outcome, "approved");
+    check("R10 OS2B: approving the current one", (await decide(w.a, second.id, "approve", GOOD("Kerala", "Kochi", "682012"))).outcome, "approved");
     // A line-only change AFTER an approval re-holds (the approval was for another address).
     await correct(w.a, o7, { line1: "Different building" }, "Customer moved flat number");
     await asRoot(w.a);
@@ -413,7 +426,7 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
     await asAdmin(w.b, w.admin2);
     await w.a.query("begin");
     await correct(w.a, o8, { postal_code: "682022" }, "Customer phoned with another PIN");
-    const racing = err(decide(w.b, r8.id, "approve", GOOD()));
+    const racing = err(decide(w.b, r8.id, "approve", GOOD("Kerala", "Kochi", "682021")));
     check("R10 OS2B: a decision waits for a concurrent correction (row lock)", await waitsOn(w.obs, w.b, w.a), true);
     await w.a.query("commit");
     check("R10 OS2B: …then refuses the stale review", refusedWith(await racing, "already superseded"), "refused: already superseded");
@@ -425,7 +438,7 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
     await asAdmin(w.a, w.admin);
     await asAdmin(w.b, w.admin2);
     await w.a.query("begin");
-    await decide(w.a, r8b.id, "approve", GOOD());
+    await decide(w.a, r8b.id, "approve", GOOD("Kerala", "Kochi", "682022"));
     const dup = err(decide(w.b, r8b.id, "refuse", { serviceable: false }, "Second admin disagrees here"));
     check("R10 OS2B: the second decision waits", await waitsOn(w.obs, w.b, w.a), true);
     await w.a.query("commit");
@@ -500,14 +513,132 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
       ["A Buyer", "buyer@example.test", "682001"]);
     check("R4 OS2B: every invoiced order of the customer is sealed",
       (await w.a.query("select count(*)::int n from order_invoice_snapshots s join orders o on o.id = s.order_id where o.customer_email is null and s.sealed_at is null")).rows[0].n, 0);
-    check("R4 OS2B: delivery reviews redacted (PINs and city)",
-      (await w.a.query("select count(*)::int n from order_delivery_reviews r join orders o on o.id = r.order_id where o.customer_email is null and (r.new_pin is not null or r.previous_pin is not null or r.verified_city is not null)")).rows[0].n, 0);
+    check("R4 OS2B: delivery reviews redacted (PINs, city, looked-up PIN, manual note)",
+      (await w.a.query("select count(*)::int n from order_delivery_reviews r join orders o on o.id = r.order_id where o.customer_email is null and (r.new_pin is not null or r.previous_pin is not null or r.verified_city is not null or r.verified_pin is not null or r.circle_conflict_note is not null)")).rows[0].n, 0);
+    check("R4 OS2B: …the reviews that had a looked-up PIN and a manual note were among them",
+      (await w.a.query("select count(*) filter (where pin_lookup_source is not null)::int > 0 a, count(*) filter (where circle_check = 'not_covered' or circle_check = 'no_circle')::int > 0 b from order_delivery_reviews where redacted_at is not null")).rows[0], { a: true, b: true });
     check("R4 OS2B: no name or address copied into order_events",
       (await w.a.query("select count(*)::int n from order_events where changes::text ilike '%Loom Street%' or changes::text ilike '%A Buyer%' or changes::text ilike '%682001%'")).rows[0].n, 0);
     check("R4 OS2B: the sealed store cannot be altered", (await err(w.a.query("update order_invoice_sealed_parties set customer_name = 'X' where order_id = $1", [o2]))) !== "", true);
     check("R4 OS2B: or emptied", (await err(w.a.query("delete from order_invoice_sealed_parties where order_id = $1", [o2]))) !== "", true);
   }
   for (const c of [w.root, w.a, w.b, w.obs]) await c.end();
+}
+
+/**
+ * WP-09B. Two PIN digits name a postal circle, not a State: circles cover
+ * several States/UTs and have enclaves served by a neighbour. The State must
+ * come from a lookup of the full PIN on the order; the table only advises,
+ * never decides, and never forces a cancellation.
+ */
+async function pinScenarios(w: W) {
+  const at = (state: string, pinCode: string, city: string) => ({ ...KOCHI, state, postal_code: pinCode, city });
+  /** A paid order in `from`, corrected to `to`: returns the order and its pending review. */
+  const corrected = async (from: object, to: object) => {
+    const o = await paidOrder(w.root, w.productId, 99, from);
+    await asAdmin(w.a, w.admin);
+    await correct(w.a, o, to);
+    const r = await latestReview(w.root, o);
+    await asAdmin(w.a, w.admin);
+    return { o, r };
+  };
+  const held = async (o: string) => (await w.root.query("select status, delivery_hold, shipping_cost_inr::int c from orders where id = $1", [o])).rows[0];
+
+  // ── One circle, several jurisdictions: the prefix is consistent with the order's State, the lookup is not.
+  {
+    const { o, r } = await corrected(KOCHI, { postal_code: "682555", city: "Kavaratti" });
+    check("PIN OS2B: Kavaratti 682555 (Kerala circle) — the table also lists Kerala", r.pin_circle_states.includes("kerala") && r.pin_circle_states.includes("lakshadweep"), true);
+    check("PIN OS2B: …the lookup says Lakshadweep on a Kerala order → refused, escalate (prefix 68 does not make it Kerala)",
+      refusedWith(await err(decide(w.a, r.id, "approve", GOOD("Lakshadweep", "Kavaratti", "682555"))), "a delivery in another State is not approved here"),
+      "refused: a delivery in another State is not approved here");
+    const h = await held(o);
+    check("PIN OS2B: …still held, not cancelled, charge unchanged", [h.status !== "cancelled", h.delivery_hold, h.c], [true, "review_pending", 99]);
+  }
+  {
+    const GOA = at("Goa", "403001", "Panaji");
+    const { r } = await corrected(GOA, { postal_code: "403002", city: "Panaji" });
+    check("PIN OS2B: Goa order, PIN 403002 (Maharashtra circle) — the lookup says Maharashtra → refused, escalate",
+      refusedWith(await err(decide(w.a, r.id, "approve", GOOD("Maharashtra", "Panaji", "403002"))), "place of supply"), "refused: place of supply");
+    check("PIN OS2B: …the lookup says Goa → approved (circle shared, State from the full PIN)",
+      (await decide(w.a, r.id, "approve", GOOD("Goa", "Panaji", "403002"))).outcome, "approved");
+  }
+  {
+    const CHD = at("Chandigarh", "160017", "Chandigarh");
+    const { r } = await corrected(CHD, { postal_code: "160055", city: "Mohali" });
+    check("PIN OS2B: Chandigarh order, PIN 160055 — the lookup says Punjab (Mohali) → refused, escalate",
+      refusedWith(await err(decide(w.a, r.id, "approve", GOOD("Punjab", "Mohali", "160055"))), "another State"), "refused: another State");
+  }
+  // ── Enclaves served by a neighbour's circle (Puducherry): Yanam 533464 (AP circle), Mahe 673310 (Kerala circle).
+  check("PIN OS2B: table — 53 lists Puducherry (Yanam), 67 lists Puducherry (Mahe), 60 lists Puducherry",
+    (await w.root.query(`select 'puducherry' = any (public.indian_pin_circle_states('533464')) y, 'puducherry' = any (public.indian_pin_circle_states('673310')) m,
+                                'puducherry' = any (public.indian_pin_circle_states('605001')) p`)).rows[0], { y: true, m: true, p: true });
+  for (const [label, from, to, city] of [["Yanam", "533463", "533464", "Yanam"], ["Mahe", "673311", "673310", "Mahe"]] as const) {
+    const { o, r } = await corrected(at("Pondicherry", from, city), { postal_code: to, city });
+    check(`PIN OS2B: ${label} — a Puducherry order (typed "Pondicherry") with the lookup "Puducherry" → approved`,
+      (await decide(w.a, r.id, "approve", GOOD("Puducherry", city, to))).outcome, "approved");
+    const snap = (await w.root.query("select delivery_address->>'postal_code' p from order_invoice_snapshots where order_id = $1", [o])).rows[0];
+    const h = await held(o);
+    check(`PIN OS2B: ${label} — issued invoice keeps the issued PIN, charge unchanged`, [snap?.p, h.c, h.delivery_hold], [from, 99, null]);
+  }
+
+  // ── Unknown: the table knows no circle. Not a refusal and not a cancellation — held until a manual note.
+  {
+    const { o, r } = await corrected(KOCHI, { postal_code: "290001", city: "Kochi" });
+    check("PIN OS2B: unknown prefix 29 — the review records an empty circle", r.pin_circle_states, []);
+    check("PIN OS2B: …approval without a manual verification note → held",
+      refusedWith(await err(decide(w.a, r.id, "approve", GOOD("Kerala", "Kochi", "290001"))), "no circle known for prefix 29"), "refused: no circle known for prefix 29");
+    check("PIN OS2B: …a note under 20 characters → still held",
+      refusedWith(await err(decide(w.a, r.id, "approve", { ...GOOD("Kerala", "Kochi", "290001"), circle_conflict_note: "checked it" })), "at least 20 characters"), "refused: at least 20 characters");
+    check("PIN OS2B: …not cancelled, still held", [(await held(o)).status !== "cancelled", (await held(o)).delivery_hold], [true, "review_pending"]);
+    check("PIN OS2B: …dispatch refused while held", await shipOutcome(w.a, o), "refused: held");
+    await asAdmin(w.a, w.admin);
+    check("PIN OS2B: …with a documented manual verification → approved",
+      (await decide(w.a, r.id, "approve", { ...GOOD("Kerala", "Kochi", "290001"),
+        circle_conflict_note: "Head post office Kochi confirmed the PIN record and district by phone, 8 Nov" })).outcome, "approved");
+    const d = await latestReview(w.root, o);
+    check("PIN OS2B: …the manual check is kept with the decision", [d.circle_check, d.circle_conflict_note?.startsWith("Head post office"), d.verified_pin],
+      ["no_circle", true, "290001"]);
+  }
+
+  // ── Conflicting evidence.
+  {
+    const { o, r } = await corrected(KOCHI, { postal_code: "682016", city: "Kochi" });
+    const E = GOOD("Kerala", "Kochi", "682016");
+    for (const [what, ev, part] of [
+      ["no looked-up PIN", { ...E, verified_pin: undefined }, "full six-digit PIN"],
+      ["only the two-digit prefix", { ...E, verified_pin: "68" }, "full six-digit PIN"],
+      ["the previous PIN's lookup", { ...E, verified_pin: "682001" }, "full six-digit PIN"],
+      ["a neighbouring PIN's lookup", { ...E, verified_pin: "682017" }, "full six-digit PIN"],
+      ["no lookup source", { ...E, pin_lookup_source: "" }, "was looked up"],
+      ["no looked-up State (only the customer's)", { ...E, verified_state: "" }, "as looked up"],
+      ["State not confirmed", { ...E, state_city_verified: false }, "as looked up"],
+    ] as const) {
+      check(`PIN OS2B: conflicting/missing evidence — ${what} → refused`, refusedWith(await err(decide(w.a, r.id, "approve", ev)), part), `refused: ${part}`);
+    }
+    check("PIN OS2B: …all those leave the order held", (await held(o)).delivery_hold, "review_pending");
+    check("PIN OS2B: the correct full-PIN lookup → approved", (await decide(w.a, r.id, "approve", E)).outcome, "approved");
+  }
+  {
+    // The table and the lookup disagree: the customer typed Kerala, the PIN is Bengaluru's prefix,
+    // and the admin records Kerala. Held — never approved on the typed State or ticked boxes.
+    const { o, r } = await corrected(KOCHI, { postal_code: "560001", city: "Bengaluru" });
+    check("PIN OS2B: table says Karnataka, lookup recorded as Kerala, no note → held",
+      refusedWith(await err(decide(w.a, r.id, "approve", { ...GOOD("Kerala", "Bengaluru", "560001"), published_rate_inr: 129 })), "prefix 56 is usually karnataka"),
+      "refused: prefix 56 is usually karnataka");
+    const h = await held(o);
+    check("PIN OS2B: …not cancelled by the uncertain table, charge kept at ₹99", [h.status !== "cancelled", h.delivery_hold, h.c], [true, "review_pending", 99]);
+    check("PIN OS2B: refusing it is open (then escalate)", (await decide(w.a, r.id, "refuse",
+      { pin_verified: true, verified_pin: "560001", pin_lookup_source: "India Post PIN search", verified_state: "Karnataka" },
+      "Lookup says Karnataka: escalate to cancel and re-order")).outcome, "refused");
+    const d = await latestReview(w.root, o);
+    check("PIN OS2B: …the refusal keeps the lookup and the table's view", [d.verified_pin, d.verified_state, d.circle_check], ["560001", "Karnataka", "not_covered"]);
+  }
+  {
+    // An order with no State: nothing to compare the lookup with.
+    const { r } = await corrected(at("", "682001", "Kochi"), { postal_code: "682018", city: "Kochi" });
+    check("PIN OS2B: order with no State → not approvable until the address carries one",
+      refusedWith(await err(decide(w.a, r.id, "approve", GOOD("Kerala", "Kochi", "682018"))), "no State recorded"), "refused: no State recorded");
+  }
 }
 
 /** 4. History: a 0078 database with invoiced orders, then 0079 applied on top. */
@@ -835,6 +966,13 @@ function pure() {
   check("PURE: the estimator calls a listed PIN 'unserviceable'", verdict.status, "unserviceable");
   check("PURE: …but checkout charges it anyway (the list is not enforced, so not authoritative)", quoteShipping({ postal_code: "744101", country: "IN" }, 2500, DEFAULT_SHIPPING).cost, 129);
   check("PURE: above ₹3,000 any PIN is free", quoteShipping({ postal_code: "560001", country: "IN" }, 3000, DEFAULT_SHIPPING).cost, 0);
+  // WP-09B (owner-approved wording): no GST is calculated or charged, so the cart does not promise "taxes".
+  const cart = fs.readFileSync(path.join(process.cwd(), "components/cart/CartSummary.tsx"), "utf8");
+  check("PURE: cart says \"Shipping calculated at checkout.\" and no longer mentions taxes",
+    [cart.includes("Shipping calculated at checkout."), /tax/i.test(cart)], [true, false]);
+  const checkoutRoute = fs.readFileSync(path.join(process.cwd(), "app/api/checkout/razorpay/route.ts"), "utf8");
+  check("PURE: checkout's grand total is goods − coupon + shipping − redemption (no tax term)",
+    /const grandTotal = Math\.max\(\s*afterCoupon \+ shipping\.cost - redemption\.discount,/.test(checkoutRoute) && !/\btax/i.test(checkoutRoute), true);
 }
 
 (async () => {
