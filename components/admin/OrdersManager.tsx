@@ -147,6 +147,8 @@ export default function OrdersManager() {
   async function patch(order: Order, changes: OperationalChanges) {
     setBusy(order.id);
     setError(null);
+    // A notice from an earlier action must not read as this one's outcome.
+    setNotice(null);
     const { error: updateError } = await getBrowserSupabase()
       .from("orders")
       .update(changes)
@@ -168,6 +170,8 @@ export default function OrdersManager() {
   async function advanceTo(order: Order, status: AdvanceStatus, dispatch?: { courier: string; awb: string }) {
     setBusy(order.id);
     setError(null);
+    // A notice from an earlier action must not read as this one's outcome.
+    setNotice(null);
     const supabase = getBrowserSupabase();
     try {
       if (status === "shipped" && dispatch) {
