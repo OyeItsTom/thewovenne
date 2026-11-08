@@ -116,7 +116,8 @@ export default function DeliveryReview({
           state_city_verified: stateOk,
           verified_state: state.trim(),
           verified_city: city.trim(),
-          serviceable: serviceable === "" ? null : serviceable === "yes",
+          // Unanswered is left out, not sent as null: a refusal need not answer it.
+          ...(serviceable === "" ? {} : { serviceable: serviceable === "yes" }),
           serviceability_source: source.trim(),
           serviceability_reference: reference.trim(),
           published_rate_inr: published,

@@ -251,6 +251,17 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
     check("X OS2B: refusing it is the resolution (then cancel and re-order)", (await decide(w.a, r5x.id, "refuse",
       { pin_verified: true, verified_state: "Andaman and Nicobar Islands", serviceability_source: "India Post PIN search" },
       "Port Blair is another State: cancel and re-order")).outcome, "refused");
+    check("X OS2B: a refusal may leave questions unanswered (JSON null); text for a yes/no is still refused", await (async () => {
+      const o = await paidOrder(w.root, w.productId);
+      await asAdmin(w.a, w.admin);
+      await correct(w.a, o, { postal_code: "560001", city: "Bengaluru" });
+      const r = await latestReview(w.root, o);
+      await asAdmin(w.a, w.admin);
+      const bad = refusedWith(await err(decide(w.a, r.id, "refuse", { serviceable: "yes" }, "Typed text for a yes/no answer")), "true or false");
+      if (bad !== "refused: true or false") return `non-boolean not refused: ${bad}`;
+      return (await decide(w.a, r.id, "refuse", { pin_verified: false, state_city_verified: false, serviceable: null, cost_difference_reviewed: false,
+        listed_exclusion_overridden: false, serviceability_source: "" }, "Another State: cancel and re-order")).outcome;
+    })(), "refused");
     check("X OS2B: cancel of the held order works", await err(w.a.query("select public.cancel_order($1, 'Out of State: re-order')", [o5x])), "");
     // State spelled differently but the same: accepted through the key.
     const o5y = await paidOrder(w.root, w.productId);

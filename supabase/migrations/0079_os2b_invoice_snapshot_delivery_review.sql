@@ -939,7 +939,8 @@ begin
     v_cost := (e ->> 'courier_cost_estimate_inr')::numeric::integer;
   end if;
   foreach b in array array['pin_verified', 'state_city_verified', 'serviceable', 'cost_difference_reviewed', 'listed_exclusion_overridden'] loop
-    if e ? b and jsonb_typeof(e -> b) <> 'boolean' then
+    -- JSON null = not answered (a refusal need not answer every question).
+    if e ? b and jsonb_typeof(e -> b) not in ('boolean', 'null') then
       raise exception '% is true or false.', b using errcode = '22023';
     end if;
   end loop;
