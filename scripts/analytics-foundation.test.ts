@@ -494,8 +494,11 @@ async function database(c: Client) {
   await c.query("insert into wishlists (user_id, product_id) values ($1, $2)", [cust, prod]);
   await c.query("delete from wishlists where user_id = $1", [cust]);
   await asRoot(c);
-  await c.query("update orders set payment_status = 'pending' where id = $1", [paidOff]);
-  await c.query("update orders set payment_status = 'paid' where id = $1", [paidOff]);
+  // Order activity while collection is off: a pending order becoming paid.
+  // (From 0078 a paid order can no longer be un-paid, so the activity is a
+  // fresh pending → paid rather than paid → pending → paid.)
+  const pendingOff = await order("asha@example.test", "razorpay");
+  await c.query("update orders set payment_status = 'paid' where id = $1", [pendingOff]);
   t("OFF: zero rows in analytics_events after browser, wishlist, order and purchase activity", (await rows()) === 0);
   t("OFF: not even a rate-limiter row", (await rows("analytics_rate")) === 0);
   t("no trigger on wishlists or orders writes analytics (no DB-originated path)",
@@ -632,7 +635,12 @@ async function database(c: Client) {
   t("diagnostics refuse an absurd window", (await failure(() => diag("now()", "now() - interval '1 day'"))).includes("invalid window"));
   const flaggedBefore = d.purchases_no_longer_paid as number;
   await asRoot(c);
-  await c.query("update orders set payment_status = 'refunded' where id = $1", [pending]);
+  // A purchase whose order stopped being paid. From 0078 nothing can do that
+  // (a paid order stays paid, and payment_status is pending | paid), so it is
+  // built as an out-of-band repair would leave it: triggers off, 'pending'.
+  await c.query("set session_replication_role = replica");
+  await c.query("update orders set payment_status = 'pending' where id = $1", [pending]);
+  await c.query("set session_replication_role = origin");
   await asAdmin(c, admin);
   t("diagnostics flag a purchase whose order is no longer paid", ((await diag()).rows[0].d.purchases_no_longer_paid as number) === flaggedBefore + 1);
   const claims = (await c.query("select current_setting('request.jwt.claims') c")).rows[0].c as string;

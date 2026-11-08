@@ -393,6 +393,36 @@
       },
       "columns": {}
     },
+    "order_contact_corrections": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
+    "order_events": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
     "orders": {
       "kind": "r",
       "rls": true,
@@ -400,8 +430,7 @@
       "privileges": {
         "anon": [],
         "authenticated": [
-          "SELECT",
-          "UPDATE"
+          "SELECT"
         ],
         "service_role": [
           "DELETE",
@@ -410,7 +439,17 @@
           "UPDATE"
         ]
       },
-      "columns": {}
+      "columns": {
+        "authenticated": {
+          "UPDATE": [
+            "admin_note",
+            "awb_number",
+            "courier_actual_cost_inr",
+            "courier_name",
+            "needs_review"
+          ]
+        }
+      }
     },
     "payment_refund_obligations": {
       "kind": "r",
@@ -832,6 +871,16 @@
         "UPDATE",
         "USAGE"
       ]
+    },
+    "order_contact_corrections_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
+    "order_events_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
     }
   },
   "functions": {
@@ -843,6 +892,20 @@
         "service_role"
       ]
     },
+    "admin_correct_order_contact(uuid,text,text,jsonb,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
+    "admin_correct_order_status(uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
     "admin_customers()": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -851,12 +914,26 @@
         "service_role"
       ]
     },
+    "admin_return_in_person_stock(uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
     "admin_reviews(boolean)": {
       "securityDefiner": true,
       "searchPath": "public",
       "execute": [
         "authenticated",
         "service_role"
+      ]
+    },
+    "admin_set_order_status(uuid,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
       ]
     },
     "admin_style_submissions()": {
@@ -1059,6 +1136,13 @@
         "service_role"
       ]
     },
+    "cancel_unpaid_order(uuid,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
     "category_product_profile(uuid)": {
       "securityDefiner": false,
       "searchPath": "public, pg_temp",
@@ -1126,6 +1210,11 @@
         "authenticated",
         "service_role"
       ]
+    },
+    "credit_notes_integrity()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
     },
     "delete_my_account()": {
       "securityDefiner": true,
@@ -1270,10 +1359,7 @@
     "issue_credit_note(uuid,text,numeric,text,jsonb)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
-      "execute": [
-        "authenticated",
-        "service_role"
-      ]
+      "execute": []
     },
     "jsonb_diff(jsonb,jsonb)": {
       "securityDefiner": false,
@@ -1327,6 +1413,41 @@
         "service_role"
       ]
     },
+    "order_contact_corrections_redact()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_correction_reason(text)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_return_unreturned_stock(uuid,text)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_transition_begin(text,text)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_transition_end()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_unreturned_stock(uuid)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "orders_audit()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
     "orders_cancel_needs_credit_note()": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -1342,6 +1463,11 @@
       "execute": [
         "service_role"
       ]
+    },
+    "orders_integrity_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
     },
     "pending_changes()": {
       "securityDefiner": true,
@@ -1590,6 +1716,11 @@
         "authenticated",
         "service_role"
       ]
+    },
+    "stock_movements_order_return_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
     },
     "style_gallery_base()": {
       "securityDefiner": false,
@@ -1914,6 +2045,24 @@
       "check": null
     },
     "public.marketing_sends.Admins read marketing sends": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.order_contact_corrections.Admins read contact corrections": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.order_events.Admins read order events": {
       "cmd": "SELECT",
       "permissive": "PERMISSIVE",
       "roles": [

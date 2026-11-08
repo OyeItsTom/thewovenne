@@ -13,6 +13,7 @@ import {
   type OrderStatus,
 } from "@/lib/orders";
 import InvoiceLink from "@/components/order/InvoiceLink";
+import OrderCorrections from "@/components/admin/OrderCorrections";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
 
 /**
@@ -45,6 +46,12 @@ const FILTER_LABEL: Record<Filter, string> = {
 };
 
 const OPEN_STATUSES: OrderStatus[] = ["placed", "confirmed", "shipped"];
+
+/** The statuses admin_set_order_status moves an order to (0078). */
+type AdvanceStatus = Exclude<OrderStatus, "placed" | "cancelled">;
+
+/** The only order columns an admin writes directly (0078's column grants). */
+type OperationalChanges = Partial<Pick<Order, "admin_note" | "needs_review" | "courier_name" | "awb_number">>;
 
 function matches(order: Order, filter: Filter): boolean {
   switch (filter) {
@@ -87,8 +94,14 @@ export default function OrdersManager() {
    * cancellation email goes out where the cancellation happens.
    */
   async function cancel(order: Order) {
+    // In person, the database does not put the stock back on cancelling: it
+    // cannot tell whether the piece was handed over (0078, O-6).
+    const stockLine =
+      order.payment_provider === "offline"
+        ? "It does NOT return the stock (an in-person sale may already have been handed over): if the piece is back on the shelf, use \"Back on the shelf\" afterwards."
+        : "It returns the stock.";
     const reason = window.prompt(
-      `Cancel order ${orderRef(order.id)}?\n\nThis issues a CREDIT NOTE against invoice ${order.invoice_number ?? "(none)"}, returns the stock, and emails the customer with the credit note attached. The invoice itself is never changed or deleted.\n\nReason (shown to the customer, optional):`
+      `Cancel order ${orderRef(order.id)}?\n\nThis issues a CREDIT NOTE against invoice ${order.invoice_number ?? "(none)"} and emails the customer with the credit note attached. ${stockLine} The invoice itself is never changed or deleted.\n\nReason (shown to the customer, optional):`
     );
     if (reason === null) return;
 
@@ -126,9 +139,16 @@ export default function OrdersManager() {
     }
   }
 
-  async function patch(order: Order, changes: Partial<Order>) {
+  /**
+   * The operational fields only. Since 0078 an admin can write exactly these
+   * order columns directly (note, review flag, courier, tracking number); the
+   * status, the money and the basket change only through the order functions.
+   */
+  async function patch(order: Order, changes: OperationalChanges) {
     setBusy(order.id);
     setError(null);
+    // A notice from an earlier action must not read as this one's outcome.
+    setNotice(null);
     const { error: updateError } = await getBrowserSupabase()
       .from("orders")
       .update(changes)
@@ -141,19 +161,70 @@ export default function OrdersManager() {
     await load();
   }
 
-  /** Stamps the matching timestamp, so "when did it ship?" is answerable. */
-  function advanceTo(order: Order, status: OrderStatus) {
-    const changes: Partial<Order> = { status };
-    if (status === "shipped" && !order.shipped_at)
-      changes.shipped_at = new Date().toISOString();
-    if (status === "delivered" && !order.delivered_at)
-      changes.delivered_at = new Date().toISOString();
-    // Only ever an unpaid order by the time this runs — a paid one goes through
-    // cancel() and its credit note. Stamped here as well as by 0049's trigger so
-    // the column is right whether or not that migration has been applied yet.
-    if (status === "cancelled" && !order.cancelled_at)
-      changes.cancelled_at = new Date().toISOString();
-    return patch(order, changes);
+  /**
+   * Confirm, ship or deliver — through admin_set_order_status (0078), which
+   * checks the move, stamps the time once and records who did it. Shipping
+   * saves the courier and tracking number first: the database refuses to mark
+   * an order shipped without a saved tracking number.
+   */
+  async function advanceTo(order: Order, status: AdvanceStatus, dispatch?: { courier: string; awb: string }) {
+    setBusy(order.id);
+    setError(null);
+    // A notice from an earlier action must not read as this one's outcome.
+    setNotice(null);
+    const supabase = getBrowserSupabase();
+    try {
+      if (status === "shipped" && dispatch) {
+        const { error: saveError } = await supabase
+          .from("orders")
+          .update({ courier_name: dispatch.courier.trim() || null, awb_number: dispatch.awb.trim() || null })
+          .eq("id", order.id);
+        if (saveError) throw new Error(saveError.message);
+      }
+      const { error: rpcError } = await supabase.rpc("admin_set_order_status", {
+        p_order_id: order.id,
+        p_status: status,
+        p_reason: null,
+      });
+      if (rpcError) throw new Error(rpcError.message);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not update that order.");
+    } finally {
+      setBusy(null);
+      await load();
+    }
+  }
+
+  /**
+   * An order that was never paid: no invoice, so no credit note. Any stock it
+   * held comes back once (cancel_unpaid_order, 0078).
+   */
+  async function cancelUnpaid(order: Order) {
+    const reason = window.prompt(
+      `Cancel unpaid order ${orderRef(order.id)}?\n\nNo payment was recorded for it, so no credit note is issued and the customer is not emailed.\n\nReason (internal, optional):`
+    );
+    if (reason === null) return;
+    setBusy(order.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const { data, error: rpcError } = await getBrowserSupabase().rpc("cancel_unpaid_order", {
+        p_order_id: order.id,
+        p_reason: reason.trim() || null,
+      });
+      if (rpcError) throw new Error(rpcError.message);
+      const result = data as { stock_returned?: boolean; stock_note?: string | null } | null;
+      setNotice(
+        ["Unpaid order cancelled.", result?.stock_returned ? "Its stock was returned." : null]
+          .filter(Boolean)
+          .join(" ")
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not cancel that order.");
+    } finally {
+      setBusy(null);
+      await load();
+    }
   }
 
   if (orders === null) return <p className="text-ink/60">Loading orders…</p>;
@@ -368,14 +439,28 @@ export default function OrdersManager() {
                 <StatusControls
                   order={order}
                   busy={working}
-                  onAdvance={(s) => advanceTo(order, s)}
+                  onAdvance={(s, dispatch) => advanceTo(order, s, dispatch)}
+                  onCancelUnpaid={() => cancelUnpaid(order)}
                   onPatch={(c) => patch(order, c)}
                 />
 
-                {/* Paid and not already cancelled. An unpaid order has nothing
-                    to credit — it is cancelled outright in the controls above —
-                    and a cancelled one is already done. */}
-                {order.payment_status === "paid" && order.status !== "cancelled" && (
+                <OrderCorrections
+                  key={`${order.id}:${order.status}:${order.customer_phone ?? ""}:${JSON.stringify(order.shipping_address ?? null)}`}
+                  order={order}
+                  busy={working}
+                  onDone={async (message, problem) => {
+                    setNotice(message);
+                    setError(problem);
+                    await load();
+                  }}
+                />
+
+                {/* Paid and not yet dispatched. An unpaid order has nothing to
+                    credit — it is cancelled in the controls above — a cancelled
+                    one is already done, and a dispatched or delivered one is not
+                    cancelled at all: the database refuses it (0078), because
+                    the goods are no longer on the shelf to put back. */}
+                {order.payment_status === "paid" && (order.status === "placed" || order.status === "confirmed") && (
                   <div className="mt-4 border-t border-ink/10 pt-4">
                     <button
                       onClick={() => cancel(order)}
@@ -386,12 +471,23 @@ export default function OrdersManager() {
                     </button>
                     <p className="mt-1.5 text-xs text-ink/50">
                       Issues a credit note against{" "}
-                      {order.invoice_number ?? "this order"}, returns the stock,
-                      and emails the customer with the credit note attached. The
-                      invoice itself is never changed or deleted.
+                      {order.invoice_number ?? "this order"}
+                      {order.payment_provider === "offline"
+                        ? " and emails the customer with the credit note attached. Taken in person, so the stock is not returned automatically — use “Back on the shelf” once the piece is there."
+                        : ", returns the stock, and emails the customer with the credit note attached."}{" "}
+                      The invoice itself is never changed or deleted.
                       {" "}Paid by {paymentMethodLabel(order.payment_method)}.
                     </p>
                   </div>
+                )}
+
+                {order.payment_status === "paid" && (order.status === "shipped" || order.status === "delivered") && (
+                  <p className="mt-4 border-t border-ink/10 pt-4 text-xs text-ink/50">
+                    This order has been {order.status === "shipped" ? "dispatched" : "delivered"}, so it
+                    cannot be cancelled here. If the parcel comes back, a return is
+                    recorded once it has been received and checked — that step is
+                    not in the app yet; note it on the order and contact us.
+                  </p>
                 )}
 
                 {order.status === "cancelled" && (
@@ -452,21 +548,29 @@ function StatusControls({
   order,
   busy,
   onAdvance,
+  onCancelUnpaid,
   onPatch,
 }: {
   order: Order;
   busy: boolean;
-  onAdvance: (s: OrderStatus) => void;
-  onPatch: (changes: Partial<Order>) => void;
+  onAdvance: (s: AdvanceStatus, dispatch?: { courier: string; awb: string }) => void;
+  onCancelUnpaid: () => void;
+  onPatch: (changes: OperationalChanges) => void;
 }) {
   const [courier, setCourier] = useState(order.courier_name ?? "");
   const [awb, setAwb] = useState(order.awb_number ?? "");
-  const [cost, setCost] = useState(String(order.shipping_cost_inr ?? 0));
   const [note, setNote] = useState(order.admin_note ?? "");
 
   const index = STATUS_FLOW.indexOf(order.status);
-  const next = index >= 0 && index < STATUS_FLOW.length - 1 ? STATUS_FLOW[index + 1] : null;
+  const following = index >= 0 && index < STATUS_FLOW.length - 1 ? STATUS_FLOW[index + 1] : null;
+  // Only a paid order moves on (0078). "placed" is never a target.
+  const next: AdvanceStatus | null =
+    order.payment_status === "paid" && (following === "confirmed" || following === "shipped" || following === "delivered")
+      ? following
+      : null;
   const cancelled = order.status === "cancelled";
+  const dispatched = order.status === "shipped" || order.status === "delivered";
+  const inPerson = order.payment_provider === "offline";
 
   return (
     <div className="space-y-5 rounded-xl bg-linen/40 p-4">
@@ -479,7 +583,13 @@ function StatusControls({
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
           <Field label="Courier" value={courier} onChange={setCourier} placeholder="Delhivery" />
           <Field label="AWB / tracking no." value={awb} onChange={setAwb} placeholder="1234567890" />
-          <Field label="Shipping cost (₹)" value={cost} onChange={setCost} type="number" />
+          {/* What the CUSTOMER was charged for delivery: it is on the invoice
+              and in the P&L, so it is read-only (0078). The courier's own
+              bill is recorded through the courier-costs import. */}
+          <div className="text-xs text-ink/60">
+            <span className="block uppercase tracking-wider text-ink/50">Delivery charged</span>
+            <span className="mt-2 block text-sm text-ink">{formatINR(order.shipping_cost_inr ?? 0)}</span>
+          </div>
         </div>
         <Field
           label="Internal note (never shown to the customer)"
@@ -492,7 +602,6 @@ function StatusControls({
             onPatch({
               courier_name: courier.trim() || null,
               awb_number: awb.trim() || null,
-              shipping_cost_inr: Number(cost) || 0,
               admin_note: note.trim() || null,
             })
           }
@@ -508,7 +617,7 @@ function StatusControls({
         <div className="mt-3 flex flex-wrap items-center gap-3">
           {next && !cancelled && (
             <button
-              onClick={() => onAdvance(next)}
+              onClick={() => onAdvance(next, next === "shipped" ? { courier, awb } : undefined)}
               disabled={busy || (next === "shipped" && !awb.trim())}
               title={
                 next === "shipped" && !awb.trim()
@@ -523,6 +632,24 @@ function StatusControls({
                 <PackageCheck className="h-3.5 w-3.5" />
               )}
               Mark {STATUS_LABEL[next].toLowerCase()}
+            </button>
+          )}
+
+          {/* In person: the customer may take the piece at the counter. That
+              handover is recorded as delivered (0078 allows it only for an
+              order taken in person), and from then on the order is not
+              cancellable with a restock. */}
+          {inPerson && order.payment_status === "paid" && (order.status === "placed" || order.status === "confirmed") && (
+            <button
+              onClick={() => {
+                if (window.confirm(`Record that the customer has taken order ${orderRef(order.id)} with them? It is then marked delivered and can no longer be cancelled with a restock.`)) {
+                  onAdvance("delivered");
+                }
+              }}
+              disabled={busy}
+              className="rounded-full border border-ink/20 px-4 py-2 text-xs text-ink hover:border-ink disabled:opacity-40"
+            >
+              Handed over in person
             </button>
           )}
 
@@ -547,9 +674,9 @@ function StatusControls({
               A paid order now goes through "Cancel & issue credit note" below,
               and 0049 refuses the plain UPDATE in the database so removing the
               button is not the only thing standing between the two. */}
-          {!cancelled && order.payment_status !== "paid" && (
+          {!cancelled && !dispatched && order.payment_status !== "paid" && (
             <button
-              onClick={() => onAdvance("cancelled")}
+              onClick={onCancelUnpaid}
               disabled={busy}
               className="text-xs text-terracotta-dark hover:underline disabled:opacity-40"
             >
@@ -558,11 +685,17 @@ function StatusControls({
           )}
         </div>
 
-        {!cancelled && order.payment_status === "paid" && (
+        {!cancelled && !dispatched && order.payment_status === "paid" && (
           <p className="mt-2 text-xs text-ink/50">
             To cancel this order, use &ldquo;Cancel &amp; issue credit note&rdquo;
             below. It is paid, so undoing it means issuing a credit note — the
             invoice cannot be edited away.
+          </p>
+        )}
+
+        {!cancelled && order.payment_status !== "paid" && (
+          <p className="mt-2 text-xs text-ink/50">
+            Unpaid, so it cannot be confirmed or sent yet.
           </p>
         )}
 
