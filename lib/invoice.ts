@@ -31,6 +31,63 @@ export const BUSINESS = {
   gstin: null as string | null,
 } as const;
 
+/**
+ * Who issued a document and under what tax registration (0079, WP-09): the
+ * copy of invoice_issuer_profiles a snapshot keeps from the moment of issue.
+ */
+export interface InvoiceIssuer {
+  profile_version: number;
+  seller_name: string;
+  address_lines: string[];
+  gst_registration: "unregistered" | "registered";
+  gstin: string | null;
+  document_title: string;
+  tax_treatment: "no_gst_charged_unregistered" | "gst_registered";
+}
+export type IssuerSource = "at_issue" | "code_history_at_migration" | "current_code";
+
+/**
+ * The ONE seller profile this code's documents can print: BUSINESS, unregistered,
+ * titled "Invoice", footer "Not registered for GST…". Equal to 0079's v1 row
+ * (pinned by scripts/os2b-invoice-delivery.test.ts).
+ *
+ * BUSINESS IS NOT EDITED TO CHANGE THE SELLER. A new address or a GST
+ * registration is a new invoice_issuer_profiles version, plus a layout that
+ * prints a document's own issuer. Until then a document issued under any other
+ * profile is refused (issuerRenderable), never reprinted with today's block.
+ */
+export const ISSUER: InvoiceIssuer = {
+  profile_version: 1,
+  seller_name: BUSINESS.name,
+  address_lines: [...BUSINESS.lines],
+  gst_registration: "unregistered",
+  gstin: BUSINESS.gstin,
+  document_title: "Invoice",
+  tax_treatment: "no_gst_charged_unregistered",
+};
+
+const ISSUER_KEYS = Object.keys(ISSUER) as (keyof InvoiceIssuer)[];
+
+/** Whether this code's layout prints exactly the seller block a document was issued under. */
+export function issuerRenderable(issuer: unknown): issuer is InvoiceIssuer {
+  if (!issuer || typeof issuer !== "object") return false;
+  const i = issuer as Record<string, unknown>;
+  return ISSUER_KEYS.every((k) => JSON.stringify(i[k] ?? null) === JSON.stringify(ISSUER[k] ?? null));
+}
+
+/** The issuer a document prints: its own snapshot's, or (no snapshot: pre-0079 database) this code's. */
+export function documentIssuer(snapshot: { issuer?: unknown; issuer_source?: IssuerSource | null } | null | undefined):
+  { issuer: InvoiceIssuer; issuerSource: IssuerSource } | { refused: string } {
+  if (!snapshot || snapshot.issuer === undefined || snapshot.issuer === null) {
+    return { issuer: ISSUER, issuerSource: "current_code" };
+  }
+  if (!issuerRenderable(snapshot.issuer)) {
+    const v = (snapshot.issuer as { profile_version?: unknown }).profile_version;
+    return { refused: `issued under seller profile v${String(v)}, which this layout does not print` };
+  }
+  return { issuer: snapshot.issuer, issuerSource: snapshot.issuer_source ?? "at_issue" };
+}
+
 export interface InvoiceLine {
   name: string;
   size: string;
@@ -70,6 +127,13 @@ export interface InvoiceData {
    *   order_row         no snapshot (a database before 0079)
    */
   detailsSource?: InvoiceDetailsSource;
+  /**
+   * The seller block and tax treatment the document was issued under (0079,
+   * WP-09), and where that came from. Not printed beyond what the layout
+   * already prints; it decides the tax block and whether a reprint is allowed.
+   */
+  issuer?: InvoiceIssuer;
+  issuerSource?: IssuerSource;
 }
 
 export type InvoiceDetailsSource = "at_issue" | "reconstructed" | "row_at_migration" | "order_row";
@@ -86,12 +150,16 @@ export interface InvoiceSnapshotRow {
   document: Record<string, unknown> | null;
   source: "at_issue" | "reconstructed" | "row_at_migration";
   sealed_at: string | null;
+  /** WP-09: the seller profile copied at issue (absent only in pre-WP-09 test fixtures). */
+  issuer?: InvoiceIssuer | Record<string, unknown> | null;
+  issuer_source?: IssuerSource | null;
 }
 
 /** PostgREST one-to-one embed of order_invoice_snapshots (OS-2b, 0079). */
 export const INVOICE_SNAPSHOT_EMBED =
   "invoice_snapshot:order_invoice_snapshots(invoice_number, invoice_issued_at, order_created_at, " +
-  "customer_name, customer_email, customer_phone, delivery_address, document, source, sealed_at)";
+  "customer_name, customer_email, customer_phone, delivery_address, document, source, sealed_at, " +
+  "issuer, issuer_source)";
 
 /**
  * The name, contact and delivery address an invoice PRINTS — the issue
@@ -183,6 +251,15 @@ export function buildInvoice(row: OrderRowLike): InvoiceData | null {
   const order = invoiceInputs(row);
   if (!order.invoice_number) return null;
 
+  // WP-09: the seller block is the one the invoice was issued under. A document
+  // issued under a profile this layout does not print is REFUSED, never
+  // reprinted with today's seller (the routes answer "not ready, contact us").
+  const who = documentIssuer(row.invoice_snapshot);
+  if ("refused" in who) {
+    console.error(`Invoice ${order.invoice_number} not rendered: ${who.refused}.`);
+    return null;
+  }
+
   const rawItems = Array.isArray(order.items) ? order.items : [];
   const lines: InvoiceLine[] = rawItems.map((i) => {
     const item = i as Partial<InvoiceLine>;
@@ -197,11 +274,12 @@ export function buildInvoice(row: OrderRowLike): InvoiceData | null {
 
   const subtotal = lines.reduce((sum, l) => sum + l.price_inr * l.quantity, 0);
 
-  // The tax block stays null while BUSINESS.gstin is null. Structurally the
-  // renderer already has a place for it, so registering later is populating
+  // The tax block stays null unless the invoice was ISSUED by a registered
+  // seller with a GSTIN — the issuer copied at issue, not today's. Structurally
+  // the renderer already has a place for it, so registering later is populating
   // this array rather than rebuilding the document.
   const tax =
-    BUSINESS.gstin && Array.isArray(order.tax)
+    who.issuer.gst_registration === "registered" && who.issuer.gstin && Array.isArray(order.tax)
       ? (order.tax as { label: string; amount: number }[])
       : null;
 
@@ -232,6 +310,8 @@ export function buildInvoice(row: OrderRowLike): InvoiceData | null {
       status: order.payment_status ?? "pending",
     },
     tax,
+    issuer: who.issuer,
+    issuerSource: who.issuerSource,
   };
 }
 

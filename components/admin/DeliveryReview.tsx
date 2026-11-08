@@ -24,6 +24,8 @@ interface Review {
   order_state: string | null;
   charged_delivery_inr: number | null;
   listed_unserviceable_prefix: string | null;
+  /** WP-09: States/UTs the new PIN's postal circle can belong to (first two digits). */
+  pin_circle_states: string[] | null;
   decision_reason: string | null;
   decided_by_email: string | null;
   serviceability_source: string | null;
@@ -64,7 +66,7 @@ export default function DeliveryReview({
         .from("order_delivery_reviews")
         .select(
           "id, status, trigger_kind, previous_pin, new_pin, order_state, charged_delivery_inr, " +
-            "listed_unserviceable_prefix, decision_reason, decided_by_email, serviceability_source"
+            "listed_unserviceable_prefix, pin_circle_states, decision_reason, decided_by_email, serviceability_source"
         )
         .eq("order_id", order.id)
         .order("id", { ascending: false })
@@ -89,8 +91,13 @@ export default function DeliveryReview({
   const charged = Number(review?.charged_delivery_inr ?? order.shipping_cost_inr);
   const cost = courierCost.trim() === "" ? null : Number(courierCost);
   const reasonOk = reason.trim().length >= MIN_REASON;
+  // WP-09: the database refuses approval when the order's State is not one the
+  // PIN's postal circle covers. Shown up front so the admin refuses instead.
+  const circle = review?.pin_circle_states ?? null;
+  const orderStateKey = stateKey(order.shipping_address?.state ?? "");
+  const crossState = circle !== null && (circle.length === 0 || !circle.includes(orderStateKey));
   const canApprove =
-    review?.status === "pending" &&
+    review?.status === "pending" && !crossState &&
     pinOk && stateOk && state.trim() !== "" && city.trim() !== "" &&
     serviceable === "yes" && source.trim().length >= 3 &&
     cost !== null && Number.isInteger(cost) && cost >= 0 && costOk &&
@@ -150,6 +157,15 @@ export default function DeliveryReview({
           )}
         </p>
       )}
+      {review && circle && (
+        <p className={`mt-1 text-xs ${crossState ? "text-terracotta-dark" : "text-ink/60"}`} data-testid="pin-circle">
+          {circle.length === 0
+            ? `No Indian postal circle uses PIN prefix ${String(review.new_pin ?? "").slice(0, 2)}. This review can only be refused.`
+            : crossState
+              ? `PIN ${review.new_pin} is in the postal circle for ${circle.join(" / ")}, but the order is for ${order.shipping_address?.state || "no State"}. A delivery in another State can't be approved here: refuse this review, then cancel and record a new order.`
+              : `PIN ${review.new_pin}'s postal circle covers ${circle.join(" / ")} (a rough check, not proof the courier serves it).`}
+        </p>
+      )}
       {review?.listed_unserviceable_prefix && (
         <p className="mt-1 text-xs text-terracotta-dark">
           This PIN matches &ldquo;{review.listed_unserviceable_prefix}&rdquo; in the &ldquo;we don&apos;t deliver here&rdquo; list.
@@ -200,6 +216,19 @@ export default function DeliveryReview({
       )}
     </div>
   );
+}
+
+/** The same reduction as the database's indian_state_key (0079), for display only. */
+function stateKey(raw: string): string {
+  const k = raw.toLowerCase().replace(/&/g, " and ").replace(/[^a-z]+/g, " ").trim();
+  const alias: Record<string, string> = {
+    "new delhi": "delhi", "nct of delhi": "delhi", "delhi ncr": "delhi", orissa: "odisha",
+    pondicherry: "puducherry", uttaranchal: "uttarakhand", "j and k": "jammu and kashmir",
+    "jammu kashmir": "jammu and kashmir", "andaman and nicobar": "andaman and nicobar islands",
+    "dadra and nagar haveli": "dadra and nagar haveli and daman and diu",
+    "daman and diu": "dadra and nagar haveli and daman and diu",
+  };
+  return alias[k] ?? k;
 }
 
 function Field({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {

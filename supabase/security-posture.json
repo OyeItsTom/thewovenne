@@ -253,6 +253,21 @@
       },
       "columns": {}
     },
+    "credit_note_issuer_snapshots": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
     "credit_notes": {
       "kind": "r",
       "rls": true,
@@ -292,6 +307,17 @@
       },
       "columns": {}
     },
+    "financial_record_retention_rules": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
+      },
+      "columns": {}
+    },
     "image_derivatives": {
       "kind": "r",
       "rls": true,
@@ -308,6 +334,17 @@
           "INSERT",
           "SELECT"
         ]
+      },
+      "columns": {}
+    },
+    "invoice_issuer_profiles": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
       },
       "columns": {}
     },
@@ -732,6 +769,28 @@
       },
       "columns": {}
     },
+    "sealed_record_access_log": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
+      },
+      "columns": {}
+    },
+    "sealed_record_purge_log": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
+      },
+      "columns": {}
+    },
     "site_content": {
       "kind": "r",
       "rls": true,
@@ -904,6 +963,11 @@
         "USAGE"
       ]
     },
+    "financial_record_retention_rules_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
     "invoice_number_seq": {
       "anon": [],
       "authenticated": [],
@@ -924,6 +988,16 @@
       "service_role": []
     },
     "order_events_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
+    "sealed_record_access_log_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
+    "sealed_record_purge_log_id_seq": {
       "anon": [],
       "authenticated": [],
       "service_role": []
@@ -1150,6 +1224,11 @@
         "service_role"
       ]
     },
+    "append_only_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
     "approve_style(uuid,text)": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -1263,6 +1342,16 @@
         "authenticated",
         "service_role"
       ]
+    },
+    "credit_note_issuer_capture()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "credit_note_issuer_snapshots_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
     },
     "credit_notes_integrity()": {
       "securityDefiner": false,
@@ -1392,6 +1481,26 @@
         "authenticated",
         "service_role"
       ]
+    },
+    "indian_pin_circle_states(text)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "indian_state_key(text)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "invoice_issuer_at(timestamp with time zone)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "invoice_issuer_profiles_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
     },
     "is_admin()": {
       "securityDefiner": true,
@@ -1558,6 +1667,16 @@
       "execute": []
     },
     "orders_integrity_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "owner_purge_sealed_invoice_parties(bigint,boolean)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "owner_read_sealed_invoice_party(uuid,text,text)": {
       "securityDefiner": false,
       "searchPath": "public, pg_temp",
       "execute": []
@@ -1769,6 +1888,11 @@
         "authenticated",
         "service_role"
       ]
+    },
+    "sealed_record_expiry(timestamp with time zone,financial_record_retention_rules)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
     },
     "set_product_stock(uuid,integer,integer,uuid,text,text)": {
       "securityDefiner": true,
@@ -2000,6 +2124,15 @@
       ],
       "using": "is_admin()",
       "check": "is_admin()"
+    },
+    "public.credit_note_issuer_snapshots.Read with the credit note": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(EXISTS ( SELECT 1\n   FROM credit_notes cn\n  WHERE (cn.id = credit_note_issuer_snapshots.credit_note_id)))",
+      "check": null
     },
     "public.credit_notes.Admins read credit notes": {
       "cmd": "SELECT",

@@ -6,6 +6,8 @@
  *   OS2B     the full migration set (0079 included): the same scenarios hold.
  *   BACKFILL a 0078 database with history, then 0079 applied on top.
  *   PURE     the builders' fallbacks and the delivery rules (TS only).
+ *   ISSUER   (WP-09) seller identity and tax treatment frozen per document.
+ *   RETAIN   (WP-09) sealed details: logged owner reads, rule-gated purge.
  *
  * Works with or without 0074–0076: dispatch is dispatch_order (0075) when it
  * exists, otherwise admin_set_order_status('shipped').
@@ -21,7 +23,7 @@ import path from "node:path";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { asAdmin, asRoot, asService, asUser, makeAdmin, startEngine, type Client, type Engine } from "./pg-world";
 import { liveProduct } from "./stock-world";
-import { buildInvoice } from "../lib/invoice";
+import { buildInvoice, ISSUER, issuerRenderable } from "../lib/invoice";
 import { buildCreditNote } from "../lib/creditNote";
 import InvoiceDocument from "../components/invoice/InvoiceDocument";
 import { DEFAULT_SHIPPING, quoteShipping } from "../lib/shipping";
@@ -97,7 +99,7 @@ async function invoiceRow(c: Client, id: string) {
                  'order_created_at', s.order_created_at, 'customer_name', s.customer_name,
                  'customer_email', s.customer_email, 'customer_phone', s.customer_phone,
                  'delivery_address', s.delivery_address, 'document', s.document, 'source', s.source,
-                 'sealed_at', s.sealed_at)
+                 'sealed_at', s.sealed_at, 'issuer', s.issuer, 'issuer_source', s.issuer_source)
             from order_invoice_snapshots s where s.order_id = o.id)) j
          from orders o where o.id = $1`
     : "select to_jsonb(o) j from orders o where o.id = $1";
@@ -116,7 +118,7 @@ async function world(engine: Engine, db: string) {
   const customer = (await root.query("insert into auth.users (email) values ('buyer@example.test') returning id")).rows[0].id as string;
   await root.query("insert into profiles (id, email) values ($1, 'buyer@example.test') on conflict (id) do nothing", [customer]);
   const p = await liveProduct(root, admin, { stock: 40 });
-  await root.query(`insert into site_content (key, value) values ('delivery', '{"unserviceable_prefixes": ["744"]}'::jsonb)
+  await root.query(`insert into site_content (key, value) values ('delivery', '{"unserviceable_prefixes": ["744", "6855"]}'::jsonb)
                     on conflict (key) do update set value = excluded.value`);
   for (const c of [a, b]) await pidOf(c);
   return { root, a, b, obs, admin, admin2, customer, productId: p.productId };
@@ -217,7 +219,8 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
   // ── 6/7/9. PIN validity vs deliverability; review before dispatch
   const o5 = await paidOrder(w.root, w.productId);
   await asAdmin(w.a, w.admin);
-  const e5 = await err(correct(w.a, o5, { postal_code: "744101" }));
+  // 685501 (Idukki, Kerala) is on the admin's list: a listed PIN in the order's own State.
+  const e5 = await err(correct(w.a, o5, { postal_code: "685501" }));
   check(`R5 ${label}: PIN on the (non-authoritative) "don't deliver" list`, e5 === "" ? "accepted" : e5, "accepted");
   await asRoot(w.a);
   const h5 = P ? (await w.a.query("select delivery_hold from orders where id = $1", [o5])).rows[0].delivery_hold : "n/a";
@@ -225,13 +228,46 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
   check(`R5 ${label}: dispatch`, await (async () => { await asAdmin(w.a, w.admin); return shipOutcome(w.a, o5); })(), P ? "refused: held" : "dispatched");
   if (P) {
     const r5 = await latestReview(w.root, o5);
-    check("R5 OS2B: the review records the list match", r5.listed_unserviceable_prefix, "744");
+    check("R5 OS2B: the review records the list match", r5.listed_unserviceable_prefix, "6855");
+    check("R5 OS2B: …and the PIN's postal-circle States", r5.pin_circle_states, ["kerala", "lakshadweep", "puducherry"]);
     await asAdmin(w.a, w.admin);
     check("R5 OS2B: approval without confirming the list entry refused",
       refusedWith(await err(decide(w.a, r5.id, "approve", GOOD())), "we don't deliver here"), "refused: we don't deliver here");
     check("R5 OS2B: approval with the override recorded", (await decide(w.a, r5.id, "approve", { ...GOOD(), listed_exclusion_overridden: true },
-      "Speed Post counter confirmed Port Blair is served; list entry is stale")).outcome, "approved");
+      "Speed Post counter confirmed Kattappana is served; list entry is stale")).outcome, "approved");
     check("R5 OS2B: dispatch after approval", await shipOutcome(w.a, o5), "dispatched");
+
+    // WP-09: a listed PIN in ANOTHER State (Port Blair) on a Kerala order. Even
+    // with the override and the admin typing "Kerala", it cannot be approved.
+    const o5x = await paidOrder(w.root, w.productId);
+    await asAdmin(w.a, w.admin);
+    await correct(w.a, o5x, { postal_code: "744101", city: "Port Blair" });
+    const r5x = await latestReview(w.root, o5x);
+    await asAdmin(w.a, w.admin);
+    check("X OS2B: cross-State PIN with State typed as the order's → refused by the postal circle",
+      refusedWith(await err(decide(w.a, r5x.id, "approve", { ...GOOD("Kerala", "Port Blair"), listed_exclusion_overridden: true })), "another State"),
+      "refused: another State");
+    check("X OS2B: …still held", await shipOutcome(w.a, o5x), "refused: held");
+    check("X OS2B: refusing it is the resolution (then cancel and re-order)", (await decide(w.a, r5x.id, "refuse",
+      { pin_verified: true, verified_state: "Andaman and Nicobar Islands", serviceability_source: "India Post PIN search" },
+      "Port Blair is another State: cancel and re-order")).outcome, "refused");
+    check("X OS2B: cancel of the held order works", await err(w.a.query("select public.cancel_order($1, 'Out of State: re-order')", [o5x])), "");
+    // State spelled differently but the same: accepted through the key.
+    const o5y = await paidOrder(w.root, w.productId);
+    await asRoot(w.a);
+    await w.a.query(`update orders set shipping_address = shipping_address || '{"state":"KERALA "}' where id = $1`, [o5y]);
+    await asAdmin(w.a, w.admin);
+    await correct(w.a, o5y, { postal_code: "682011" });
+    const r5y = await latestReview(w.root, o5y);
+    await asAdmin(w.a, w.admin);
+    check("X OS2B: same State, different case/spacing → approvable", (await decide(w.a, r5y.id, "approve", GOOD("KERALA ", "Kochi"))).outcome, "approved");
+    check("X OS2B: postal-circle map: Delhi/Mumbai/Goa/Port Blair/APS",
+      (await w.root.query(`select public.indian_pin_circle_states('110001') a, public.indian_pin_circle_states('400001') b,
+                                  public.indian_pin_circle_states('403001') c, public.indian_pin_circle_states('744101') d,
+                                  public.indian_pin_circle_states('999999') e, public.indian_pin_circle_states('654321') f`)).rows[0],
+      { a: ["delhi"], b: ["maharashtra", "goa"], c: ["maharashtra", "goa"], d: ["west bengal", "sikkim", "andaman and nicobar islands"], e: [], f: [] });
+    check("X OS2B: state key aliases", (await w.root.query(`select public.indian_state_key('New Delhi') a, public.indian_state_key('Jammu & Kashmir') b, public.indian_state_key('Orissa') c`)).rows[0],
+      { a: "delhi", b: "jammu and kashmir", c: "odisha" });
   }
 
   const o5b = await paidOrder(w.root, w.productId);
@@ -242,6 +278,8 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
     // Valid shape is not proof: the reviewer refuses.
     const r = await latestReview(w.root, o5b);
     await asAdmin(w.a, w.admin);
+    check("X OS2B: 999999 cannot be approved even with every box ticked (no postal circle)",
+      refusedWith(await err(decide(w.a, r.id, "approve", GOOD())), "not in any Indian postal circle"), "refused: not in any Indian postal circle");
     check("R5 OS2B: refusing needs only a reason", (await decide(w.a, r.id, "refuse",
       { pin_verified: false, serviceable: false, serviceability_source: "India Post PIN search: no such PIN" }, "PIN does not exist; asked customer")).outcome, "refused");
     await asRoot(w.a);
@@ -296,6 +334,8 @@ async function scenarios(engine: Engine, label: "CONTROL" | "OS2B") {
       const e = await err(decide(w.a, r6.id, "approve", { ...GOOD("Karnataka", "Bengaluru"), verified_state: "Kerala", [k]: v }));
       check(`R6 OS2B: approval without ${k} refused`, e !== "", true);
     }
+    check("X OS2B: Karnataka PIN with State typed as Kerala and every box ticked → refused by the postal circle",
+      refusedWith(await err(decide(w.a, r6.id, "approve", { ...GOOD("Kerala", "Bengaluru"), published_rate_inr: 129 })), "another State"), "refused: another State");
     check("R6 OS2B: approval with too short a reason refused", refusedWith(await err(decide(w.a, r6.id, "approve", GOOD(), "ok")), "at least 10"), "refused: at least 10");
     check("R6 OS2B: still held after the refused attempts", await shipOutcome(w.a, o6), "refused: held");
     // Refuse: the PIN is out of State. Next step is cancel and re-order.
@@ -494,6 +534,16 @@ async function backfill(engine: Engine) {
   await w.root.query("update orders set status = 'delivered', delivered_at = now(), shipped_at = now() where id = $1", [gone]);
   await w.root.query("alter table orders enable trigger user");
   await w.root.query("update orders set customer_email = null, customer_name = null, customer_phone = null, shipping_address = null where id = $1", [gone]);
+  // WP-09: an order with a value in the tax column (nothing in the app writes it).
+  const taxed = await paidOrder(w.root, w.productId);
+  await w.root.query("alter table orders disable trigger user");
+  await w.root.query(`update orders set tax = '[{"label":"GST","amount":10}]' where id = $1`, [taxed]);
+  await w.root.query("alter table orders enable trigger user");
+  // WP-09: a credit note issued before 0079.
+  const credited = await paidOrder(w.root, w.productId);
+  await asAdmin(w.a, w.admin);
+  await w.a.query("select public.cancel_order($1, 'Pre-0079 cancellation')", [credited]);
+  await asRoot(w.a);
   // A PIN corrected under 0078, not yet dispatched: must be held by the backfill.
   const pinFixed = await paidOrder(w.root, w.productId);
   await asAdmin(w.a, w.admin);
@@ -519,11 +569,229 @@ async function backfill(engine: Engine) {
   check("BF: a PIN corrected under 0078 and not dispatched is held", hold[pinFixed], "review_pending");
   check("BF: a line-only correction under 0078 is not held", hold[held], null);
   check("BF: …with a migration_backfill review", (await latestReview(w.root, pinFixed)).trigger_kind, "migration_backfill");
+  check("BF: pre-0079 invoices carry the v1 seller block, labelled code_history_at_migration (not at_issue)",
+    (await w.root.query("select distinct issuer_source, issuer->>'profile_version' v from order_invoice_snapshots")).rows, [{ issuer_source: "code_history_at_migration", v: "1" }]);
+  check("BF: pre-0079 credit notes likewise",
+    (await w.root.query("select issuer_source, issuer->>'profile_version' v from credit_note_issuer_snapshots s join credit_notes cn on cn.id = s.credit_note_id where cn.order_id = $1", [credited])).rows, [{ issuer_source: "code_history_at_migration", v: "1" }]);
+  check("BF: a tax value found at migration is flagged for the accountant, unchanged",
+    (await w.root.query("select provenance_note like '%ACCOUNTANT REVIEW%' f, document->'tax' t from order_invoice_snapshots where order_id = $1", [taxed])).rows[0], { f: true, t: [{ label: "GST", amount: 10 }] });
+  check("BF: …and only that one", (await w.root.query("select count(*)::int n from order_invoice_snapshots where provenance_note like '%ACCOUNTANT REVIEW%'")).rows[0].n, 1);
+  const bfInv = buildInvoice(await invoiceRow(w.root, plain));
+  check("BF: the builder reports the seller block's provenance", bfInv?.issuerSource, "code_history_at_migration");
   check("BF: re-apply refused", (await err(w.root.query(sql))).includes("already applied"), true);
   // New issue after migration: at_issue.
   const fresh = await paidOrder(w.root, w.productId);
   check("BF: an invoice issued after 0079 is captured at_issue",
     (await w.root.query("select source from order_invoice_snapshots where order_id = $1", [fresh])).rows[0].source, "at_issue");
+  for (const c of [w.root, w.a, w.b, w.obs]) await c.end();
+}
+
+/** The credit note a route gets: its row plus the seller-snapshot embed (emulated). */
+async function creditNoteRow(c: Client, orderId: string) {
+  return (await c.query(
+    `select to_jsonb(cn) - 'issued_by' || jsonb_build_object('issuer_snapshot',
+       (select jsonb_build_object('issuer', s.issuer, 'issuer_source', s.issuer_source)
+          from credit_note_issuer_snapshots s where s.credit_note_id = cn.id)) j
+       from credit_notes cn where cn.order_id = $1 order by issued_at desc limit 1`, [orderId])).rows[0]?.j ?? null;
+}
+
+/** WP-09: who issued the document is frozen with it. */
+async function issuerScenarios(engine: Engine) {
+  console.log("\nISSUER (WP-09: seller identity and tax treatment frozen per document)");
+  await engine.database("os2b_iss");
+  const w = await world(engine, "os2b_iss");
+  await asRoot(w.root);
+  const v1 = (await w.root.query("select public.invoice_issuer_at(now()) i")).rows[0].i;
+  check("ISS: lib/invoice ISSUER equals 0079's v1 profile exactly (every field, no extras)",
+    issuerRenderable(v1) && JSON.stringify(Object.keys(v1).sort()) === JSON.stringify(Object.keys(ISSUER).sort()), true);
+  check("ISS: v1 is unregistered, no GSTIN, titled Invoice, no tax charged",
+    [v1.gst_registration, v1.gstin, v1.document_title, v1.tax_treatment], ["unregistered", null, "Invoice", "no_gst_charged_unregistered"]);
+
+  // Tax column with a value BEFORE payment (nothing in the app writes it): kept, not printed.
+  const oTax = await (async () => {
+    seq += 1;
+    const rzp = `order_os2b_tax_${process.pid}_${seq}`;
+    await asRoot(w.root);
+    const id = (await w.root.query(
+      `insert into orders (items, total_inr, shipping_cost_inr, payment_status, status, customer_email, customer_name,
+                           customer_phone, shipping_address, payment_provider, razorpay_order_id, tax)
+       values ($1::jsonb, 2599, 99, 'pending', 'placed', 'buyer@example.test', 'A Buyer', '+91 90000 00001', $2::jsonb, 'razorpay', $3,
+               '[{"label":"IGST 5%","amount":124}]'::jsonb) returning id`,
+      [JSON.stringify([{ id: w.productId, size: "One Size", quantity: 1, price_inr: 2500, name: "Piece" }]), JSON.stringify(KOCHI), rzp])).rows[0].id;
+    await asService(w.root);
+    await w.root.query("select public.settle_razorpay_payment($1, $2, 259900, 'INR', 5900, 900, 'captured')", [rzp, `pay_${rzp}`]);
+    await asRoot(w.root);
+    return id as string;
+  })();
+  const invTax = buildInvoice(await invoiceRow(w.root, oTax));
+  check("ISS: a tax value on the order is NOT printed for an unregistered issuer; total unchanged", [invTax?.tax, invTax?.total], [null, 2599]);
+  check("ISS: …and is kept unchanged in the snapshot document",
+    (await w.root.query("select document->'tax' t from order_invoice_snapshots where order_id = $1", [oTax])).rows[0].t, [{ label: "IGST 5%", amount: 124 }]);
+
+  const o1 = await paidOrder(w.root, w.productId);
+  const s1 = (await w.root.query("select issuer, issuer_source from order_invoice_snapshots where order_id = $1", [o1])).rows[0];
+  check("ISS: an invoice captures the profile in force, at_issue", [s1.issuer.profile_version, s1.issuer_source], [1, "at_issue"]);
+  const inv1 = buildInvoice(await invoiceRow(w.root, o1));
+  check("ISS: builder exposes the issued seller block", [inv1?.issuer?.seller_name, inv1?.issuer?.gst_registration, inv1?.issuerSource], ["THE WOVENNE", "unregistered", "at_issue"]);
+  const before1 = JSON.stringify(inv1);
+  const pdf1 = (await renderToBuffer(InvoiceDocument({ data: inv1! }))).length;
+  check("ISS: the v1 PDF renders", pdf1 > 1000, true);
+
+  // Credit note: its own seller snapshot.
+  await asAdmin(w.a, w.admin);
+  await w.a.query("select public.cancel_order($1, 'Customer changed their mind')", [o1]);
+  await asRoot(w.root);
+  const cnRow1 = await creditNoteRow(w.root, o1);
+  check("ISS: a credit note captures the profile in force, at_issue", [cnRow1?.issuer_snapshot?.issuer?.profile_version, cnRow1?.issuer_snapshot?.issuer_source], [1, "at_issue"]);
+  const cn1 = buildCreditNote(cnRow1, await invoiceRow(w.root, o1));
+  check("ISS: credit note builder exposes its issued seller block", [cn1?.issuer?.profile_version, cn1?.issuerSource], [1, "at_issue"]);
+
+  // Courier expense recorded after issue does not touch the invoice.
+  const o2 = await paidOrder(w.root, w.productId);
+  const inv2a = JSON.stringify(buildInvoice(await invoiceRow(w.root, o2)));
+  await asAdmin(w.a, w.admin);
+  const courierErr = await err(w.a.query("update orders set courier_actual_cost_inr = 61 where id = $1", [o2]));
+  await asService(w.a);
+  const courierErrSvc = courierErr === "" ? "" : await err(w.a.query("update orders set courier_actual_cost_inr = 61 where id = $1", [o2]));
+  await asRoot(w.root);
+  check("ISS: actual courier cost can be recorded after issue (admin or service_role)", courierErr === "" || courierErrSvc === "", true);
+  check("ISS: …kept separately on the order", Number((await w.root.query("select courier_actual_cost_inr c from orders where id = $1", [o2])).rows[0].c), 61);
+  check("ISS: …and the invoice is byte-for-byte the same document data", JSON.stringify(buildInvoice(await invoiceRow(w.root, o2))), inv2a);
+
+  // Profile table: append-only, no registration, no backdating, invisible to the API.
+  check("ISS: a profile cannot be edited", refusedWith(await err(w.root.query("update invoice_issuer_profiles set seller_name = 'X'")), "add a new version"), "refused: add a new version");
+  check("ISS: or removed", refusedWith(await err(w.root.query("delete from invoice_issuer_profiles")), "add a new version"), "refused: add a new version");
+  check("ISS: registering for GST is refused by this version",
+    refusedWith(await err(w.root.query(`insert into invoice_issuer_profiles (version, effective_from, seller_name, address_lines, gst_registration, gstin, document_title, tax_treatment, basis)
+      values (2, now(), 'THE WOVENNE', '["Somewhere"]', 'registered', '32ABCDE1234F1Z5', 'Tax Invoice', 'gst_registered', 'test registration attempt, must be refused')`)), "not supported"), "refused: not supported");
+  check("ISS: an unregistered profile cannot carry a GSTIN or a tax title",
+    (await err(w.root.query(`insert into invoice_issuer_profiles (version, effective_from, seller_name, address_lines, gst_registration, gstin, document_title, tax_treatment, basis)
+      values (2, now(), 'THE WOVENNE', '["Somewhere"]', 'unregistered', '32ABCDE1234F1Z5', 'Tax Invoice', 'no_gst_charged_unregistered', 'inconsistent profile, must be refused')`))).includes("invoice_issuer_profiles_consistent"), true);
+  check("ISS: a new profile cannot be backdated",
+    refusedWith(await err(w.root.query(`insert into invoice_issuer_profiles (version, effective_from, seller_name, address_lines, gst_registration, gstin, document_title, tax_treatment, basis)
+      values (2, now() - interval '1 day', 'THE WOVENNE', '["Somewhere"]', 'unregistered', null, 'Invoice', 'no_gst_charged_unregistered', 'backdated profile, must be refused')`)), "never backdated"), "refused: never backdated");
+  for (const role of ["anon", "authenticated", "service_role"]) {
+    check(`ISS: ${role} cannot read the profile table`, (await w.root.query(`select has_table_privilege('${role}', 'public.invoice_issuer_profiles', 'SELECT') v`)).rows[0].v, false);
+  }
+  check("ISS: the snapshot's seller block cannot be rewritten",
+    refusedWith(await err(w.root.query(`update order_invoice_snapshots set issuer = issuer || '{"seller_name":"X"}' where order_id = $1`, [o2])), "do not change"), "refused: do not change");
+  check("ISS: a credit note's seller block cannot be rewritten",
+    refusedWith(await err(w.root.query(`update credit_note_issuer_snapshots set issuer = '{"profile_version":9}'`)), "does not change"), "refused: does not change");
+
+  // RLS on the credit-note seller snapshot: the customer of the order, not another.
+  await asCustomer(w.a, w);
+  check("ISS: the customer reads their credit note's seller snapshot",
+    (await w.a.query("select count(*)::int n from credit_note_issuer_snapshots")).rows[0].n >= 1, true);
+  await asRoot(w.root);
+  const other = (await w.root.query("insert into auth.users (email) values ('other@example.test') returning id")).rows[0].id;
+  await asUser(w.b, other, "aal1");
+  await w.b.query("select set_config('request.jwt.claim.email', 'other@example.test', false)");
+  check("ISS: another customer reads none", (await w.b.query("select count(*)::int n from credit_note_issuer_snapshots")).rows[0].n, 0);
+  check("ISS: …nor any invoice seller block", (await w.b.query("select count(*)::int n from order_invoice_snapshots")).rows[0].n, 0);
+  await asRoot(w.b);
+
+  // A later profile (a new address — registration is refused) reaches only new documents.
+  await asRoot(w.root);
+  await w.root.query(`insert into invoice_issuer_profiles (version, effective_from, seller_name, address_lines, gst_registration, gstin, document_title, tax_treatment, basis)
+    values (2, now(), 'THE WOVENNE', '["New Studio", "Kochi", "Kerala 682001", "India"]', 'unregistered', null, 'Invoice', 'no_gst_charged_unregistered', 'TEST ONLY: a moved studio, to prove old documents keep v1')`);
+  check("ISS: after v2, the old invoice still carries v1",
+    (await w.root.query("select issuer->>'profile_version' v from order_invoice_snapshots where order_id = $1", [o2])).rows[0].v, "1");
+  check("ISS: …and reprints exactly as before", JSON.stringify(buildInvoice(await invoiceRow(w.root, o2))), inv2a);
+  check("ISS: …as does the earlier credit note's seller block", buildCreditNote(await creditNoteRow(w.root, o1), await invoiceRow(w.root, o1))?.issuer?.address_lines, ISSUER.address_lines);
+  const o3 = await paidOrder(w.root, w.productId);
+  check("ISS: a new invoice captures v2",
+    (await w.root.query("select issuer->>'profile_version' v, issuer->'address_lines'->>0 a from order_invoice_snapshots where order_id = $1", [o3])).rows[0], { v: "2", a: "New Studio" });
+  const orig = console.error;
+  const logged: string[] = [];
+  console.error = (m: string) => logged.push(String(m));
+  const inv3 = buildInvoice(await invoiceRow(w.root, o3));
+  console.error = orig;
+  check("ISS: v1 code REFUSES to reprint a v2 document (never prints today's block on it)", inv3, null);
+  check("ISS: …and logs why", logged.some((m) => m.includes("seller profile v2")), true);
+  check("ISS: issuerRenderable rejects any drift (address, GST status, GSTIN, title)",
+    [issuerRenderable({ ...ISSUER, address_lines: ["x"] }), issuerRenderable({ ...ISSUER, gst_registration: "registered" }),
+     issuerRenderable({ ...ISSUER, gstin: "32ABCDE1234F1Z5" }), issuerRenderable({ ...ISSUER, document_title: "Tax Invoice" }), issuerRenderable(ISSUER)],
+    [false, false, false, false, true]);
+  for (const c of [w.root, w.a, w.b, w.obs]) await c.end();
+}
+
+/** WP-09: sealed details after account deletion — removed from ordinary access, retained, read with a log, purged only under a recorded rule. */
+async function retention(engine: Engine) {
+  console.log("\nRETAIN (WP-09: deletion, restricted retention, lawful expiry)");
+  await engine.database("os2b_ret");
+  const w = await world(engine, "os2b_ret");
+  const oldOne = await paidOrder(w.root, w.productId);
+  const newOne = await paidOrder(w.root, w.productId);
+  await asAdmin(w.a, w.admin);
+  for (const o of [oldOne, newOne]) {
+    await ship(w.a, o);
+  }
+  await asRoot(w.root);
+  await w.root.query("alter table orders disable trigger user");
+  await w.root.query("update orders set status = 'delivered', delivered_at = now() where id = any($1)", [[oldOne, newOne]]);
+  await w.root.query("alter table orders enable trigger user");
+  await asUser(w.a, w.customer, "aal1");
+  check("RET: customer deletes their account", (await w.a.query("select public.delete_my_account() r")).rows[0].r.ok, true);
+  await asRoot(w.root);
+  check("RET: the auth user and profile are gone (no sign-in, no profile data)",
+    (await w.root.query("select (select count(*) from auth.users where id = $1)::int u, (select count(*) from profiles where id = $1)::int p", [w.customer])).rows[0], { u: 0, p: 0 });
+  check("RET: orders anonymised (no name/email/phone/address)",
+    (await w.root.query("select count(*)::int n from orders where id = any($1) and (customer_email is not null or customer_name is not null or customer_phone is not null or shipping_address is not null)", [[oldOne, newOne]])).rows[0].n, 0);
+  check("RET: both invoices sealed; details retained in the restricted store",
+    (await w.root.query("select count(*)::int n from order_invoice_sealed_parties where order_id = any($1) and customer_email = 'buyer@example.test'", [[oldOne, newOne]])).rows[0].n, 2);
+
+  // Ordinary access: admin and service_role see nothing personal.
+  await asAdmin(w.a, w.admin);
+  const adminInv = buildInvoice(await invoiceRow(w.a, oldOne));
+  check("RET: admin reprint names nobody", [adminInv?.customer.name, adminInv?.customer.email, adminInv?.address], ["", "", null]);
+  check("RET: admin cannot read the sealed store", refusedWith(await err(w.a.query("select * from order_invoice_sealed_parties")), "permission denied"), "refused: permission denied");
+  check("RET: admin cannot call the owner read", refusedWith(await err(w.a.query("select * from public.owner_read_sealed_invoice_party($1, 'accountant_review', 'test ref')", [oldOne])), "permission denied"), "refused: permission denied");
+  await asService(w.a);
+  check("RET: service_role cannot read the sealed store", refusedWith(await err(w.a.query("select * from order_invoice_sealed_parties")), "permission denied"), "refused: permission denied");
+  check("RET: service_role cannot purge", refusedWith(await err(w.a.query("select * from public.owner_purge_sealed_invoice_parties(1, true)")), "permission denied"), "refused: permission denied");
+  check("RET: service_role cannot read the access log", refusedWith(await err(w.a.query("select * from sealed_record_access_log")), "permission denied"), "refused: permission denied");
+  await asRoot(w.a);
+
+  // Owner read: purpose and reference required, logged first.
+  check("RET: owner read needs a known purpose", (await err(w.root.query("select * from public.owner_read_sealed_invoice_party($1, 'curiosity', 'ref 12345')", [oldOne]))).includes("sealed_record_access_log_purpose_check"), true);
+  check("RET: owner read needs a reference", (await err(w.root.query("select * from public.owner_read_sealed_invoice_party($1, 'accountant_review', '')", [oldOne]))).includes("sealed_record_access_log_reference_check"), true);
+  const read = (await w.root.query("select * from public.owner_read_sealed_invoice_party($1, 'tax_or_regulatory_enquiry', 'Notice ref TEST/123')", [oldOne])).rows[0];
+  check("RET: owner read returns the issued details", [read.customer_name, read.delivery_address.postal_code], ["A Buyer", "682001"]);
+  check("RET: …and the read is logged with purpose and reference",
+    (await w.root.query("select purpose, reference from sealed_record_access_log where order_id = $1", [oldOne])).rows, [{ purpose: "tax_or_regulatory_enquiry", reference: "Notice ref TEST/123" }]);
+  check("RET: the access log cannot be edited", refusedWith(await err(w.root.query("update sealed_record_access_log set reference = 'x'")), "append-only"), "refused: append-only");
+
+  // Purge: nothing without a rule; a rule only purges what has expired; logged first.
+  check("RET: no rule → purge refused (period unknown ≠ forever, but nothing is guessed)",
+    refusedWith(await err(w.root.query("select * from public.owner_purge_sealed_invoice_parties(1, true)")), "No such retention rule"), "refused: No such retention rule");
+  check("RET: a rule needs a basis and who confirmed it", (await err(w.root.query(
+    "insert into financial_record_retention_rules (record_kind, period_months, starts_from, basis, confirmed_by) values ('invoice_party_details', 12, 'invoice_issued', 'short', '')"))) !== "", true);
+  const rule = (await w.root.query(`insert into financial_record_retention_rules (record_kind, period_months, starts_from, basis, confirmed_by)
+    values ('invoice_party_details', 12, 'invoice_issued', 'TEST ONLY: 12 months from issue, fictional CA confirmation', 'Test CA') returning id`)).rows[0].id;
+  // Make one invoice two years old (test only: the snapshot guard is lifted for the backdate).
+  await w.root.query("alter table order_invoice_snapshots disable trigger order_invoice_snapshots_guard");
+  await w.root.query("update order_invoice_snapshots set invoice_issued_at = now() - interval '2 years' where order_id = $1", [oldOne]);
+  await w.root.query("alter table order_invoice_snapshots enable trigger order_invoice_snapshots_guard");
+  const dry = (await w.root.query("select order_id, purged from public.owner_purge_sealed_invoice_parties($1)", [rule])).rows;
+  check("RET: dry run lists only the expired record, removes nothing", [dry.map((r) => r.order_id), dry.map((r) => r.purged),
+    (await w.root.query("select count(*)::int n from order_invoice_sealed_parties where order_id = any($1)", [[oldOne, newOne]])).rows[0].n],
+    [[oldOne], [false], 2]);
+  check("RET: a direct delete is still refused", refusedWith(await err(w.root.query("delete from order_invoice_sealed_parties where order_id = $1", [oldOne])), "not changed or removed"), "refused: not changed or removed");
+  check("RET: …even with the purge flag set by hand (no log entry)", refusedWith(await err(w.root.query(
+    "select set_config('wovenne.sealed_purge', 'on', false); delete from order_invoice_sealed_parties where order_id = '" + oldOne + "'")), "not changed or removed"), "refused: not changed or removed");
+  await w.root.query("select set_config('wovenne.sealed_purge', '', false)");
+  const done = (await w.root.query("select order_id, purged from public.owner_purge_sealed_invoice_parties($1, true)", [rule])).rows;
+  check("RET: execute purges the expired record", [done.map((r) => r.order_id), done.map((r) => r.purged)], [[oldOne], [true]]);
+  check("RET: …the sealed details are gone, the unexpired one stays",
+    (await w.root.query("select order_id from order_invoice_sealed_parties where order_id = any($1)", [[oldOne, newOne]])).rows.map((r) => r.order_id), [newOne]);
+  check("RET: …the purge is logged (no personal data) under the rule",
+    (await w.root.query("select order_id, rule_id::int r from sealed_record_purge_log")).rows, [{ order_id: oldOne, r: Number(rule) }]);
+  check("RET: …and the invoice number and figures remain readable",
+    (await w.root.query("select invoice_number is not null n, (document->>'total_inr')::numeric::int t from order_invoice_snapshots where order_id = $1", [oldOne])).rows[0], { n: true, t: 2599 });
+  check("RET: a rule cannot be edited after the fact", refusedWith(await err(w.root.query("update financial_record_retention_rules set period_months = 1")), "append-only"), "refused: append-only");
+  check("RET: expiry from the financial year end (issued 10 May 2026 → 1 Apr 2027 + 12 months)",
+    (await w.root.query(`select to_char(public.sealed_record_expiry('2026-05-10T10:00:00+05:30',
+       row(0, 'invoice_party_details', 12, 'financial_year_end', 'x', 'x', now())::financial_record_retention_rules) at time zone 'Asia/Kolkata', 'YYYY-MM-DD') d`)).rows[0].d, "2028-04-01");
   for (const c of [w.root, w.a, w.b, w.obs]) await c.end();
 }
 
@@ -562,6 +830,8 @@ function pure() {
     await scenarios(engine, "CONTROL");
     await scenarios(engine, "OS2B");
     await backfill(engine);
+    await issuerScenarios(engine);
+    await retention(engine);
   } catch (e) {
     failed++;
     console.error("CRASH", e);
