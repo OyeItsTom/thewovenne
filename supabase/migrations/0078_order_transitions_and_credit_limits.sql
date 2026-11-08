@@ -849,7 +849,14 @@ begin
 
   perform public.order_transition_begin('admin_correct_order_status', v_reason);
   perform set_config('wovenne.order_correction', 'undeliver', true);
+  -- Where 0075 exists, its guard admits a move into 'shipped' only while this
+  -- flag is on. This update writes status and delivered_at and nothing else
+  -- (not the courier, the consignment number or the dispatch time), and the
+  -- 0078 guard above still checks it is exactly delivered -> shipped on a
+  -- dispatched order. Before 0075 the flag has no reader.
+  perform set_config('wovenne.dispatching', 'on', true);
   update orders set status = 'shipped', delivered_at = null where id = o.id;
+  perform set_config('wovenne.dispatching', '', true);
   perform set_config('wovenne.order_correction', '', true);
   perform public.order_transition_end();
   return jsonb_build_object('outcome', 'corrected', 'from', 'delivered', 'status', 'shipped',

@@ -789,7 +789,15 @@ async function os2(engine: Engine) {
     const r = await as(root, who as never, w, () => outcome(correct(md.id, "Parcel is still with the courier")));
     truthy(`${label} cannot correct a status`, Boolean(r.error));
   }
+  await asRoot(root);
+  const consignment = async () => (await root.query("select courier_name, awb_number, shipped_at from orders where id = $1", [md.id])).rows[0];
+  const outbox = async () => (await root.query("select to_regclass('public.order_email_deliveries') is not null as t")).rows[0].t
+    ? (await root.query("select count(*)::int n from order_email_deliveries where order_id = $1", [md.id])).rows[0].n : 0;
+  const [consBefore, outboxBefore] = [await consignment(), await outbox()];
   const fixed = await as(root, "admin", w, () => correct(md.id, "Parcel is still with the courier"));
+  await asRoot(root);
+  check("…the courier, consignment number and dispatch time are untouched", JSON.stringify(await consignment()), JSON.stringify(consBefore));
+  check("…and no second shipment email is queued (where 0074/0075 exist)", await outbox(), outboxBefore);
   const mdRow = await orderRow(root, md.id);
   check("delivered → shipped; delivered time cleared; shipped time kept; still paid",
     [fixed.outcome, mdRow.status, mdRow.delivered_stamped, mdRow.shipped_stamped, mdRow.payment_status], ["corrected", "shipped", false, true, "paid"]);
