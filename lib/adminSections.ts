@@ -11,6 +11,7 @@ import {
   PanelBottom,
   Receipt,
   Rocket,
+  RotateCcw,
   Scroll,
   Settings,
   Sheet,
@@ -158,6 +159,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: "/admin/dashboard/invoices",
     blurb: "Every invoice issued, with downloads and resends",
     icon: Scroll,
+  },
+  {
+    id: "refunds",
+    label: "Refunds",
+    href: "/admin/dashboard/refunds",
+    blurb: "Money owed back, refunds Razorpay confirmed, reconciliation",
+    icon: RotateCcw,
   },
   {
     id: "export",

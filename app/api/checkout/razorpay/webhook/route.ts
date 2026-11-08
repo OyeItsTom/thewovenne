@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { handleRazorpayWebhook } from "@/lib/razorpayWebhook";
 
 /**
- * Razorpay's server-to-server notification that a payment was captured.
+ * Razorpay's server-to-server notifications: a payment was captured
+ * (payment.captured / order.paid), or a refund changed (refund.*, OS-3).
  *
  * Thin on purpose: the raw bytes, two headers and the secret go to
  * lib/razorpayWebhook, which decides everything and answers with a status.
  * Settlement itself is lib/settleOrder — the same function the browser
- * callback uses — so a payment reported both ways is recorded once.
+ * callback uses — so a payment reported both ways is recorded once. A refund
+ * event is only a trigger: lib/refundLedger asks Razorpay's API about the
+ * refund and records that answer.
  */
 
 // Node, not Edge: the signature check needs node:crypto and settlement uses
