@@ -686,6 +686,12 @@ async function issuerScenarios(engine: Engine) {
   }
   check("ISS: the snapshot's seller block cannot be rewritten",
     refusedWith(await err(w.root.query(`update order_invoice_snapshots set issuer = issuer || '{"seller_name":"X"}' where order_id = $1`, [o2])), "do not change"), "refused: do not change");
+  check("ISS: …not even inside a legitimate seal (details retained first)", await (async () => {
+    await w.root.query(`insert into order_invoice_sealed_parties (order_id, invoice_number, customer_name, customer_email, customer_phone, delivery_address, basis)
+      select order_id, invoice_number, customer_name, customer_email, customer_phone, delivery_address, 'test: seal attempt' from order_invoice_snapshots where order_id = $1`, [o2]);
+    return refusedWith(await err(w.root.query(`update order_invoice_snapshots set customer_name = null, customer_email = null, customer_phone = null,
+      delivery_address = null, sealed_at = now(), issuer = issuer || '{"seller_name":"X"}' where order_id = $1`, [o2])), "do not change");
+  })(), "refused: do not change");
   check("ISS: a credit note's seller block cannot be rewritten",
     refusedWith(await err(w.root.query(`update credit_note_issuer_snapshots set issuer = '{"profile_version":9}'`)), "does not change"), "refused: does not change");
 
