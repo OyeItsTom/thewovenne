@@ -14,6 +14,7 @@ import {
 } from "@/lib/orders";
 import InvoiceLink from "@/components/order/InvoiceLink";
 import OrderCorrections from "@/components/admin/OrderCorrections";
+import DeliveryReview from "@/components/admin/DeliveryReview";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
 
 /**
@@ -62,7 +63,7 @@ function matches(order: Order, filter: Filter): boolean {
     case "cancelled":
       return order.status === "cancelled";
     case "attention":
-      return order.needs_review;
+      return order.needs_review || Boolean(order.delivery_hold);
     case "all":
       return true;
   }
@@ -321,7 +322,7 @@ export default function OrdersManager() {
           <section
             key={order.id}
             className={
-              order.needs_review
+              order.needs_review || order.delivery_hold
                 ? "rounded-2xl border border-terracotta/40 bg-cream p-5"
                 : "rounded-2xl border border-ink/10 bg-cream p-5"
             }
@@ -347,6 +348,11 @@ export default function OrdersManager() {
                   {formatINR(order.total_inr)}
                   {order.needs_review && (
                     <span className="ml-2 text-terracotta-dark">· needs review</span>
+                  )}
+                  {order.delivery_hold && (
+                    <span className="ml-2 text-terracotta-dark">
+                      · {order.delivery_hold === "refused" ? "delivery refused" : "held: PIN changed"}
+                    </span>
                   )}
                 </p>
               </div>
@@ -442,6 +448,17 @@ export default function OrdersManager() {
                   onAdvance={(s, dispatch) => advanceTo(order, s, dispatch)}
                   onCancelUnpaid={() => cancelUnpaid(order)}
                   onPatch={(c) => patch(order, c)}
+                />
+
+                <DeliveryReview
+                  key={`dr:${order.id}:${order.delivery_hold ?? ""}:${JSON.stringify(order.shipping_address ?? null)}`}
+                  order={order}
+                  busy={working}
+                  onDone={async (message, problem) => {
+                    setNotice(message);
+                    setError(problem);
+                    await load();
+                  }}
                 />
 
                 <OrderCorrections

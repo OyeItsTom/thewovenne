@@ -1,9 +1,17 @@
 import { orderRef } from "./orders";
 
 /**
- * Invoice data, shaped from an order row.
+ * Invoice data, shaped from the invoice's issue snapshot (OS-2b, 0079) or,
+ * where none exists, from the order row.
  *
- * RENDERED ON DEMAND, NOT STORED. Every figure comes from the order itself:
+ * THE SNAPSHOT WINS. order_invoice_snapshots is written once, in the same
+ * statement that assigns the number, and never rewritten. 0078 lets an admin
+ * correct the delivery details before dispatch and 0033 erases them on account
+ * deletion; neither may change what an invoice that was already issued says.
+ * The order row keeps the LATEST delivery details for the parcel.
+ *
+ * Before 0079 (and on a database without it) the document was rendered from
+ * the order row, as described below:
  * `items` is a snapshot written at payment, and `total_inr` is what Razorpay
  * actually captured. Neither moves afterwards — admins edit courier and status,
  * not amounts — so rendering the same order twice produces the same document,
@@ -52,6 +60,69 @@ export interface InvoiceData {
   payment: { provider: string; reference: string | null; status: string };
   /** Null until GST registration — see BUSINESS.gstin. */
   tax: { label: string; amount: number }[] | null;
+  /**
+   * Where the printed details came from (OS-2b). Not printed on the document:
+   * the admin screen and the evidence trail use it.
+   *   at_issue          captured when the invoice was issued
+   *   reconstructed     0078 corrections after issue reversed at migration
+   *   row_at_migration  the order row when 0079 was applied — not proven to be
+   *                     what was issued
+   *   order_row         no snapshot (a database before 0079)
+   */
+  detailsSource?: InvoiceDetailsSource;
+}
+
+export type InvoiceDetailsSource = "at_issue" | "reconstructed" | "row_at_migration" | "order_row";
+
+/** order_invoice_snapshots as embedded on the order (PostgREST, one-to-one). */
+export interface InvoiceSnapshotRow {
+  invoice_number: string;
+  invoice_issued_at: string | null;
+  order_created_at: string | null;
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  delivery_address: Record<string, string> | null;
+  document: Record<string, unknown> | null;
+  source: "at_issue" | "reconstructed" | "row_at_migration";
+  sealed_at: string | null;
+}
+
+/** PostgREST one-to-one embed of order_invoice_snapshots (OS-2b, 0079). */
+export const INVOICE_SNAPSHOT_EMBED =
+  "invoice_snapshot:order_invoice_snapshots(invoice_number, invoice_issued_at, order_created_at, " +
+  "customer_name, customer_email, customer_phone, delivery_address, document, source, sealed_at)";
+
+/**
+ * The name, contact and delivery address an invoice PRINTS — the issue
+ * snapshot's when there is one (blank once sealed by an account deletion,
+ * exactly as the erased order row printed before), otherwise the order row.
+ * Shared with the credit note so both documents name the same party.
+ */
+export function issuedParty(order: {
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  shipping_address: Record<string, string> | null;
+  invoice_snapshot?: InvoiceSnapshotRow | null;
+}): {
+  customer: { name: string; email: string; phone: string | null };
+  address: Record<string, string> | null;
+  detailsSource: InvoiceDetailsSource;
+} {
+  const s = order.invoice_snapshot;
+  if (s) {
+    return {
+      customer: { name: s.customer_name ?? "", email: s.customer_email ?? "", phone: s.customer_phone ?? null },
+      address: s.delivery_address ?? null,
+      detailsSource: s.source,
+    };
+  }
+  return {
+    customer: { name: order.customer_name ?? "", email: order.customer_email ?? "", phone: order.customer_phone ?? null },
+    address: order.shipping_address ?? null,
+    detailsSource: "order_row",
+  };
 }
 
 interface OrderRowLike {
@@ -74,9 +145,42 @@ interface OrderRowLike {
   payment_status: string | null;
   razorpay_order_id: string | null;
   tax?: unknown;
+  invoice_snapshot?: InvoiceSnapshotRow | null;
 }
 
-export function buildInvoice(order: OrderRowLike): InvoiceData | null {
+/**
+ * The invoice inputs: the snapshot's where it exists (OS-2b), otherwise the
+ * row's. Amounts, items and payment details are frozen on a paid order by 0078
+ * anyway; reading them from the snapshot means a reprint does not depend on
+ * that guard still being in place.
+ */
+function invoiceInputs(order: OrderRowLike): OrderRowLike {
+  const s = order.invoice_snapshot;
+  if (!s) return order;
+  const d = (s.document ?? {}) as Record<string, unknown>;
+  const pick = <T,>(k: string, fallback: T): T => (k in d ? (d[k] as T) : fallback);
+  return {
+    ...order,
+    invoice_number: s.invoice_number,
+    invoice_issued_at: s.invoice_issued_at ?? order.invoice_issued_at,
+    created_at: s.order_created_at ?? order.created_at,
+    items: pick("items", order.items),
+    total_inr: pick("total_inr", order.total_inr),
+    shipping_cost_inr: pick("shipping_cost_inr", order.shipping_cost_inr),
+    coupon_code: pick("coupon_code", order.coupon_code ?? null),
+    coupon_discount_inr: pick("coupon_discount_inr", order.coupon_discount_inr ?? null),
+    loyalty_discount_inr: pick("loyalty_discount_inr", order.loyalty_discount_inr ?? null),
+    loyalty_points_spent: pick("loyalty_points_spent", order.loyalty_points_spent ?? null),
+    payment_provider: pick("payment_provider", order.payment_provider),
+    payment_status: pick("payment_status", order.payment_status),
+    razorpay_order_id: pick("razorpay_order_id", order.razorpay_order_id),
+    tax: pick("tax", order.tax),
+  };
+}
+
+export function buildInvoice(row: OrderRowLike): InvoiceData | null {
+  if (!row.invoice_number && !row.invoice_snapshot) return null;
+  const order = invoiceInputs(row);
   if (!order.invoice_number) return null;
 
   const rawItems = Array.isArray(order.items) ? order.items : [];
@@ -113,12 +217,7 @@ export function buildInvoice(order: OrderRowLike): InvoiceData | null {
     // goes into their records should quote the same thing.
     orderReference: order.razorpay_order_id ?? orderRef(order.id),
     orderDate: order.created_at,
-    customer: {
-      name: order.customer_name ?? "",
-      email: order.customer_email ?? "",
-      phone: order.customer_phone ?? null,
-    },
-    address: order.shipping_address ?? null,
+    ...issuedParty(order),
     lines,
     subtotal,
     couponCode: order.coupon_code ?? null,
@@ -141,7 +240,8 @@ export const INVOICE_SELECT =
   "id, invoice_number, invoice_issued_at, created_at, customer_name, customer_email, " +
   "customer_phone, shipping_address, items, total_inr, shipping_cost_inr, coupon_code, " +
   "coupon_discount_inr, loyalty_discount_inr, loyalty_points_spent, payment_provider, " +
-  "payment_status, razorpay_order_id, tax";
+  "payment_status, razorpay_order_id, tax, " +
+  INVOICE_SNAPSHOT_EMBED;
 
 /**
  * "INR 8,900" — Indian digit grouping, no decimals.

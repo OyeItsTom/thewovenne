@@ -1,4 +1,4 @@
-import type { InvoiceLine } from "./invoice";
+import { INVOICE_SNAPSHOT_EMBED, issuedParty, type InvoiceLine, type InvoiceSnapshotRow } from "./invoice";
 import { orderRef } from "./orders";
 
 /**
@@ -12,6 +12,10 @@ import { orderRef } from "./orders";
  * THE ORDER IS ONLY FOR THE NAME AND ADDRESS. Every figure on the document
  * comes from the credit note row — an amount read back off the order would
  * quietly become wrong the first time a partial return exists.
+ *
+ * AND THE NAME AND ADDRESS ARE THE INVOICE'S (OS-2b, 0079): the party the
+ * reversed invoice was issued to, from its issue snapshot, not the order's
+ * later-corrected delivery details. The two documents name the same party.
  */
 
 export interface CreditNoteRow {
@@ -42,12 +46,15 @@ export interface CreditNoteOrderRow {
   payment_provider: string | null;
   payment_method: string | null;
   razorpay_order_id: string | null;
+  /** OS-2b: the reversed invoice's issue snapshot. */
+  invoice_snapshot?: InvoiceSnapshotRow | null;
 }
 
 /** The order columns a credit note needs. Nothing financial is among them. */
 export const CREDIT_NOTE_ORDER_SELECT =
   "id, created_at, customer_name, customer_email, customer_phone, " +
-  "shipping_address, payment_provider, payment_method, razorpay_order_id";
+  "shipping_address, payment_provider, payment_method, razorpay_order_id, " +
+  INVOICE_SNAPSHOT_EMBED;
 
 export interface CreditNoteData {
   creditNoteNumber: string;
@@ -105,12 +112,9 @@ export function buildCreditNote(
       (note.order_id ? orderRef(note.order_id) : null) ??
       "—",
     orderDate: order?.created_at ?? null,
-    customer: {
-      name: order?.customer_name ?? "",
-      email: order?.customer_email ?? "",
-      phone: order?.customer_phone ?? null,
-    },
-    address: order?.shipping_address ?? null,
+    ...(order
+      ? (({ customer, address }) => ({ customer, address }))(issuedParty(order))
+      : { customer: { name: "", email: "", phone: null }, address: null }),
     lines,
   };
 }

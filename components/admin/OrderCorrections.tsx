@@ -92,7 +92,7 @@ export default function OrderCorrections({
         await onDone(
           outcome === "unchanged"
             ? "Nothing to correct: those are the details already on the order."
-            : "Delivery details corrected. The previous values and your reason are kept in the correction log; the invoice number and amounts are unchanged.",
+            : "Delivery details corrected. The previous values and your reason are kept in the correction log; the invoice keeps the details it was issued with. If the PIN changed, the order is now held for a delivery review.",
           null
         );
       } else {
@@ -166,6 +166,25 @@ export default function OrderCorrections({
                 ({addr?.country || "none"}) cannot be changed here. The delivery charge is not
                 re-quoted. The previous values are kept in the correction log.
               </p>
+              {/* OS-2b (0079): what the database will do with this correction. */}
+              {pin.replace(/\D/g, "") !== (addr?.postal_code ?? "").replace(/\D/g, "") && (
+                <p className="text-xs text-terracotta-dark" data-testid="pin-change-advisory">
+                  Changing the PIN holds this order: it cannot be dispatched until a delivery review records that the
+                  courier serves the new PIN, the State and city it belongs to, and the courier cost.
+                </p>
+              )}
+              {order.invoice_number && (
+                <p className="text-xs text-ink/60">
+                  Invoice {order.invoice_number} keeps the details it was issued with; this changes only where the
+                  parcel goes.
+                </p>
+              )}
+              {order.invoice_snapshot?.source === "row_at_migration" && (
+                <p className="text-xs text-ink/60">
+                  This invoice predates issue records: its printed details are the order as found when issue records began, not
+                  proven to be what was originally issued.
+                </p>
+              )}
               <div className="grid gap-2 sm:grid-cols-2">
                 <Input label="Name" value={name} onChange={setName} />
                 <Input label="Phone" value={phone} onChange={setPhone} />

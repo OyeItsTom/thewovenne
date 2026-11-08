@@ -891,6 +891,15 @@ async function os2(engine: Engine) {
   }
   // After dispatch, and for a cancelled order: refused.
   await as(root, "admin", w, () => setStatus(root, cc2.id, "confirmed"));
+  // OS-2b (0079): a corrected PIN holds dispatch until a delivery review is recorded.
+  if ((await root.query("select to_regclass('public.order_delivery_reviews') is not null v")).rows[0].v) {
+    const rv = (await root.query("select id, order_state from order_delivery_reviews where order_id = $1 and status = 'pending'", [cc2.id])).rows[0];
+    if (rv) await as(root, "admin", w, () => root.query(
+      "select public.admin_decide_delivery_review($1, 'approve', $2::jsonb, 'Checked PIN, State and courier coverage')",
+      [rv.id, JSON.stringify({ pin_verified: true, state_city_verified: true, verified_state: rv.order_state, verified_city: "Kochi",
+        serviceable: true, serviceability_source: "India Post PIN search", published_rate_inr: 99,
+        courier_cost_estimate_inr: 47, cost_difference_reviewed: true })]));
+  }
   await as(root, "admin", w, () => ship(root, cc2.id));
   truthy("after dispatch, details are not corrected",
     refused(await as(root, "admin", w, () => outcome(fixContact(cc2.id, null, "+91 90000 00003", null, "Customer emailed a fix"))), "only before dispatch"));

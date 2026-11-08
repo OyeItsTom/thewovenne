@@ -408,7 +408,48 @@
       },
       "columns": {}
     },
+    "order_delivery_reviews": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
     "order_events": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
+    "order_invoice_sealed_parties": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
+      },
+      "columns": {}
+    },
+    "order_invoice_snapshots": {
       "kind": "r",
       "rls": true,
       "forceRls": false,
@@ -877,6 +918,11 @@
       "authenticated": [],
       "service_role": []
     },
+    "order_delivery_reviews_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
     "order_events_id_seq": {
       "anon": [],
       "authenticated": [],
@@ -912,6 +958,13 @@
       "execute": [
         "authenticated",
         "service_role"
+      ]
+    },
+    "admin_decide_delivery_review(bigint,text,jsonb,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
       ]
     },
     "admin_return_in_person_stock(uuid,text)": {
@@ -1413,12 +1466,42 @@
         "service_role"
       ]
     },
+    "order_address_fingerprint(jsonb)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
     "order_contact_corrections_redact()": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
       "execute": []
     },
     "order_correction_reason(text)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_delivery_reviews_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_invoice_document(orders)": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_invoice_sealed_parties_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_invoice_snapshot_capture()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "order_invoice_snapshots_guard()": {
       "securityDefiner": false,
       "searchPath": "public, pg_temp",
       "execute": []
@@ -1463,6 +1546,16 @@
       "execute": [
         "service_role"
       ]
+    },
+    "orders_contact_erasure_followup()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "orders_delivery_review()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
     },
     "orders_integrity_guard()": {
       "securityDefiner": false,
@@ -2062,6 +2155,15 @@
       "using": "is_admin()",
       "check": null
     },
+    "public.order_delivery_reviews.Admins read delivery reviews": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
     "public.order_events.Admins read order events": {
       "cmd": "SELECT",
       "permissive": "PERMISSIVE",
@@ -2069,6 +2171,15 @@
         "authenticated"
       ],
       "using": "is_admin()",
+      "check": null
+    },
+    "public.order_invoice_snapshots.Read with the order": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(EXISTS ( SELECT 1\n   FROM orders o\n  WHERE (o.id = order_invoice_snapshots.order_id)))",
       "check": null
     },
     "public.orders.Admins can view orders": {
