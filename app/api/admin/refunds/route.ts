@@ -30,6 +30,9 @@ import { reconcileDeps, refundLedgerDeps } from "@/lib/refundProviders";
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// A reconcile press reads up to 5 pages, each bounded by an 8-second timeout.
+// 60 s is the Hobby plan's ceiling; an interrupted run is resumable anyway.
+export const maxDuration = 60;
 
 type Body = {
   action?: string;

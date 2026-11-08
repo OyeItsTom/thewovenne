@@ -226,6 +226,12 @@ async function main() {
     r = await evidence(c, { refund: rid("rfnd"), payment: o4.pay, rzpOrder: o4.rzp, amount: 50000, payAmount: 259900 });
     check("refund on an active paid order → recorded, refund_without_obligation", [r.status, (await openDiscrepancies(c, "refund_without_obligation")).map((d) => d.order_id)], ["processed", [o4.id]]);
     check("…and the order is flagged for review; still paid, still open", (await c.query("select needs_review, payment_status, status from orders where id = $1", [o4.id])).rows[0], { needs_review: true, payment_status: "paid", status: "placed" });
+    const strangerPay = rid("pay");
+    r = await evidence(c, { refund: rid("rfnd"), payment: strangerPay, rzpOrder: rid("order"), amount: 70000, payAmount: 70000 });
+    check("refund on a payment whose order Wovenne does not know → recorded, discrepancy, no order",
+      [r.status, (await openDiscrepancies(c, "refund_without_obligation")).filter((d) => d.razorpay_payment_id === strangerPay).map((d) => d.order_id)], ["processed", [null]]);
+    r = await evidence(c, { refund: rid("rfnd"), payment: rid("pay"), rzpOrder: null, amount: 100, payAmount: 100 });
+    check("…and one with no Razorpay order at all", r.status, "processed");
     const before = Number((await c.query("select count(*) n from payment_refunds")).rows[0].n);
     r = await evidence(c, { refund: rid("rfnd"), payment: rid("pay"), rzpOrder: rid("order"), amount: 100, payAmount: 100, captured: false });
     check("automatic refund of an uncaptured payment → ignored, nothing written", [r.outcome, Number((await c.query("select count(*) n from payment_refunds")).rows[0].n)], ["ignored_uncaptured", before]);
