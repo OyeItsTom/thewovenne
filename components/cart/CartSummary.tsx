@@ -25,7 +25,7 @@ export default function CartSummary() {
         <span>{formatINR(subtotal)}</span>
       </div>
       <p className="mt-1 text-xs text-ink/50">
-        Shipping &amp; taxes calculated at checkout.
+        Shipping calculated at checkout.
       </p>
 
       <div className="mt-6">

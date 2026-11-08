@@ -1,4 +1,12 @@
-import type { InvoiceLine } from "./invoice";
+import {
+  documentIssuer,
+  INVOICE_SNAPSHOT_EMBED,
+  issuedParty,
+  type InvoiceIssuer,
+  type InvoiceLine,
+  type InvoiceSnapshotRow,
+  type IssuerSource,
+} from "./invoice";
 import { orderRef } from "./orders";
 
 /**
@@ -12,6 +20,15 @@ import { orderRef } from "./orders";
  * THE ORDER IS ONLY FOR THE NAME AND ADDRESS. Every figure on the document
  * comes from the credit note row — an amount read back off the order would
  * quietly become wrong the first time a partial return exists.
+ *
+ * AND THE NAME AND ADDRESS ARE THE INVOICE'S (OS-2b, 0079): the party the
+ * reversed invoice was issued to, from its issue snapshot, not the order's
+ * later-corrected delivery details. The two documents name the same party.
+ *
+ * AND THE SELLER BLOCK IS THE NOTE'S OWN (WP-09, 0079): the profile in force
+ * when the note was issued (credit_note_issuer_snapshots). A note issued under
+ * a profile this layout does not print is refused, never reprinted with
+ * today's seller.
  */
 
 export interface CreditNoteRow {
@@ -24,12 +41,14 @@ export interface CreditNoteRow {
   reason: string | null;
   items: unknown;
   issued_at: string;
+  /** WP-09 (0079): the seller block this note was issued under. */
+  issuer_snapshot?: { issuer: unknown; issuer_source: IssuerSource | null } | null;
 }
 
 /** The columns buildCreditNote needs, so a route cannot drift from it. */
 export const CREDIT_NOTE_SELECT =
   "id, credit_note_number, order_id, invoice_number, kind, amount_inr, reason, " +
-  "items, issued_at";
+  "items, issued_at, issuer_snapshot:credit_note_issuer_snapshots(issuer, issuer_source)";
 
 /** What a credit note needs from the order it reverses. */
 export interface CreditNoteOrderRow {
@@ -42,12 +61,15 @@ export interface CreditNoteOrderRow {
   payment_provider: string | null;
   payment_method: string | null;
   razorpay_order_id: string | null;
+  /** OS-2b: the reversed invoice's issue snapshot. */
+  invoice_snapshot?: InvoiceSnapshotRow | null;
 }
 
 /** The order columns a credit note needs. Nothing financial is among them. */
 export const CREDIT_NOTE_ORDER_SELECT =
   "id, created_at, customer_name, customer_email, customer_phone, " +
-  "shipping_address, payment_provider, payment_method, razorpay_order_id";
+  "shipping_address, payment_provider, payment_method, razorpay_order_id, " +
+  INVOICE_SNAPSHOT_EMBED;
 
 export interface CreditNoteData {
   creditNoteNumber: string;
@@ -65,6 +87,9 @@ export interface CreditNoteData {
   address: Record<string, string> | null;
   /** What was credited. Empty is legitimate for a note issued against a total. */
   lines: InvoiceLine[];
+  /** WP-09: the seller block and tax treatment the note was issued under. */
+  issuer?: InvoiceIssuer;
+  issuerSource?: IssuerSource;
 }
 
 export function buildCreditNote(
@@ -72,6 +97,11 @@ export function buildCreditNote(
   order: CreditNoteOrderRow | null
 ): CreditNoteData | null {
   if (!note.credit_note_number) return null;
+  const who = documentIssuer(note.issuer_snapshot);
+  if ("refused" in who) {
+    console.error(`Credit note ${note.credit_note_number} not rendered: ${who.refused}.`);
+    return null;
+  }
 
   const rawItems = Array.isArray(note.items) ? note.items : [];
   const lines: InvoiceLine[] = rawItems.map((i) => {
@@ -105,13 +135,12 @@ export function buildCreditNote(
       (note.order_id ? orderRef(note.order_id) : null) ??
       "—",
     orderDate: order?.created_at ?? null,
-    customer: {
-      name: order?.customer_name ?? "",
-      email: order?.customer_email ?? "",
-      phone: order?.customer_phone ?? null,
-    },
-    address: order?.shipping_address ?? null,
+    ...(order
+      ? (({ customer, address }) => ({ customer, address }))(issuedParty(order))
+      : { customer: { name: "", email: "", phone: null }, address: null }),
     lines,
+    issuer: who.issuer,
+    issuerSource: who.issuerSource,
   };
 }
 

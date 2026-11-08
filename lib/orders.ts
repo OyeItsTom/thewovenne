@@ -92,6 +92,18 @@ export interface Order {
   /** How the money arrived. "razorpay" is online; anything else was in person. */
   payment_method: string | null;
   cancelled_at: string | null;
+  /**
+   * OS-2b (0079): set by the database when the delivery PIN is corrected
+   * before dispatch. While set, the order cannot be shipped or delivered until
+   * an admin records a delivery review (admin_decide_delivery_review).
+   */
+  delivery_hold?: "review_pending" | "refused" | null;
+  /** Admin list only: what the invoice was issued with (OS-2b, 0079). */
+  invoice_snapshot?: {
+    source: "at_issue" | "reconstructed" | "row_at_migration";
+    delivery_address: ShippingAddress | null;
+    sealed_at: string | null;
+  } | null;
 }
 
 const ORDER_SELECT =
@@ -99,7 +111,11 @@ const ORDER_SELECT =
   "shipping_address, items, total_inr, shipping_cost_inr, payment_provider, " +
   "payment_status, status, needs_review, courier_name, awb_number, " +
   "shipped_at, delivered_at, admin_note, razorpay_order_id, invoice_number, " +
-  "coupon_code, coupon_discount_inr, payment_method, cancelled_at";
+  "coupon_code, coupon_discount_inr, payment_method, cancelled_at, delivery_hold";
+
+/** The admin list also shows what each invoice was issued with (OS-2b). */
+const ADMIN_ORDER_SELECT =
+  ORDER_SELECT + ", invoice_snapshot:order_invoice_snapshots(source, delivery_address, sealed_at)";
 
 function mapOrder(row: Record<string, unknown>): Order {
   return {
@@ -121,7 +137,7 @@ function mapOrder(row: Record<string, unknown>): Order {
 export async function getAllOrders(client: SupabaseClient): Promise<Order[]> {
   const { data, error } = await client
     .from("orders")
-    .select(ORDER_SELECT)
+    .select(ADMIN_ORDER_SELECT)
     .order("created_at", { ascending: false });
 
   if (error) {
