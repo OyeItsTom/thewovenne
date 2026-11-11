@@ -813,6 +813,17 @@
       },
       "columns": {}
     },
+    "refund_closure_approvers": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
+      },
+      "columns": {}
+    },
     "refund_ledger": {
       "kind": "v",
       "rls": false,
@@ -1151,7 +1162,7 @@
         "authenticated"
       ]
     },
-    "admin_close_refund_obligation(uuid,text,text)": {
+    "admin_close_refund_obligation(uuid,text,text,text,text,bigint,date)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
       "execute": [
@@ -2020,6 +2031,13 @@
         "service_role"
       ]
     },
+    "record_test_mode_closure(uuid,uuid,text,text,text,text,bigint,text,boolean,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "redeem_coupon(text,uuid,text,numeric)": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -2034,6 +2052,23 @@
         "service_role"
       ]
     },
+    "refund_closure_approver_is(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "refund_closure_approvers_audit()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "refund_closure_authority()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
     "refund_discrepancy_upsert(text,text,text,text,text,uuid,uuid,jsonb,bigint)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -2045,6 +2080,11 @@
       "execute": []
     },
     "refund_obligation_from_unfulfilled()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "refund_obligations_duplicate_check()": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
       "execute": []

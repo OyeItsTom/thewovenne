@@ -23,7 +23,7 @@ import path from "node:path";
 import { asAdmin, asRoot, asService, asStaffPasswordOnly, asUser, startEngine, type Client } from "./pg-world";
 import {
   cancelPaid, cancelUnpaid, evidence, ledgerFor, obligationsOf, openDiscrepancies, osWorld, paidOrder,
-  placeOrder, rid, settle, type OsWorld,
+  enrolApprover, placeOrder, rid, settle, type OsWorld,
 } from "./os3-world";
 
 let passed = 0;
@@ -93,7 +93,7 @@ async function main() {
 
       const before = (await c.query("select (select count(*) from credit_notes) cn, (select count(*) from payment_refund_obligations) pro")).rows[0];
       await c.query(M0080);
-      const rows = (await c.query("select source, channel, origin, amount_paise, razorpay_payment_id, order_id from refund_obligations order by created_at")).rows;
+      const rows = (await c.query("select source, channel, origin, amount_paise, razorpay_payment_id, order_id, funds_basis from refund_obligations order by created_at")).rows;
       check("every credit note and unfulfilled payment became one obligation", rows.length, Number(before.cn) + Number(before.pro));
       check("all labelled backfill_0080", [...new Set(rows.map((r) => r.origin))], ["backfill_0080"]);
       const by = (id: string) => rows.filter((r) => r.order_id === id).map((r) => [r.source, r.channel, Number(r.amount_paise), r.razorpay_payment_id]);
@@ -101,6 +101,9 @@ async function main() {
       check("payment captured after cancellation: whole payment owed", by(late.id), [["unfulfilled_payment", "razorpay", 259900, late.pay]]);
       check("in-person order: outside Razorpay, no ids", by(offline.id), [["credit_note", "outside_razorpay", 150000, null]]);
       check("pre-0077 order: razorpay, payment unknown", by(legacy.id), [["credit_note", "razorpay", 259900, null]]);
+      check("funds basis: captured, captured, manual (unverified), pre-0077 unlinked (WP-12)",
+        [cancelled, late, offline, legacy].map((o) => rows.find((r) => r.order_id === o.id)?.funds_basis),
+        ["razorpay_captured", "razorpay_captured", "manual_recorded", "razorpay_unlinked"]);
       check("backfill audit rows", Number((await c.query("select count(*) n from payment_refund_events where action = 'obligation_created' and source = 'backfill'")).rows[0].n), rows.length);
       check("applying 0080 again is refused", has(await err(c.query(M0080)), "already applied"), "refused: already applied");
 
@@ -109,6 +112,7 @@ async function main() {
       const r = await evidence(c, { refund: rid("rfnd"), payment: legacyPay, rzpOrder: legacy.rzp, amount: 259900, payAmount: 259900, source: "admin_verify" });
       check("pre-0077 refund recorded processed", [r.outcome, r.status], ["recorded", "processed"]);
       check("its obligation now carries the payment id", (await obligationsOf(c, legacy.id)).map((o) => o.razorpay_payment_id), [legacyPay]);
+      check("…and is now backed by a captured payment", (await obligationsOf(c, legacy.id)).map((o) => o.funds_basis), ["razorpay_captured"]);
       const led = await ledgerFor(c, legacyPay);
       check("ledger: owed 2599, refunded 2599, outstanding 0", [n(led.owed_paise), n(led.refunded_paise), n(led.outstanding_paise)], [259900, 259900, 0]);
       for (const x of [w.root, w.a, w.b]) await x.end();
@@ -237,26 +241,38 @@ async function main() {
     check("automatic refund of an uncaptured payment → ignored, nothing written", [r.outcome, Number((await c.query("select count(*) n from payment_refunds")).rows[0].n)], ["ignored_uncaptured", before]);
     check("bad evidence (unknown status) → refused", has(await err(evidence(c, { refund: rid("rfnd"), payment: o4.pay, rzpOrder: o4.rzp, amount: 1, payAmount: 259900, status: "reversed" })), "unknown refund status"), "refused: unknown refund status");
 
-    console.log("\n=== LEDGER: closing without a refund (write-off) ===");
+    console.log("\n=== LEDGER: closing without a refund (write-off: owner / finance approver only, WP-12) ===");
     const o5 = await paidOrder(c, w);
     await cancelPaid(c, w, o5.id);
     const ob5 = (await obligationsOf(c, o5.id))[0];
-    const close = async (id: string, kind: string, reason: string) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const close = async (id: string, kind: string, reason: string, method: string | null = "bank_transfer",
+                         ref: string | null = "UTR HDFC000123", amount: number | null = 200000, on: string | null = today) => {
       await asAdmin(c, w.admin);
-      try { return (await c.query("select public.admin_close_refund_obligation($1, $2, $3) r", [id, kind, reason])).rows[0].r; } finally { await asRoot(c); }
+      try {
+        return (await c.query("select public.admin_close_refund_obligation($1, $2, $3, $4, $5, $6, $7::date) r",
+          [id, kind, reason, method, ref, amount, on])).rows[0].r;
+      } finally { await asRoot(c); }
     };
-    check("reason under 20 chars → refused", has(await err(close(ob5.id, "test_mode_payment", "test")), "20 characters"), "refused: 20 characters");
+    const WHY = "Rest returned by bank transfer after a partial Razorpay refund.";
+    check("an admin who is not an enrolled approver cannot close", has(await err(close(ob5.id, "refunded_outside_razorpay", WHY)), "authorised finance approver"), "refused: authorised finance approver");
+    await enrolApprover(c, w.admin);
+    check("reason under 20 chars → refused", has(await err(close(ob5.id, "refunded_outside_razorpay", "test")), "20 characters"), "refused: 20 characters");
+    check("test_mode_payment is not closable by an admin's say-so", has(await err(close(ob5.id, "test_mode_payment", WHY)), "Razorpay's own answer"), "refused: Razorpay's own answer");
     const C1 = rid("rfnd");
     await claim(c, w, ob5.id, C1);
-    check("with an unverified refund id → refused", has(await err(close(ob5.id, "test_mode_payment", "Razorpay Test keys; never real money.")), "still unverified"), "refused: still unverified");
+    check("with an unverified refund id → refused", has(await err(close(ob5.id, "refunded_outside_razorpay", WHY)), "still unverified"), "refused: still unverified");
     await evidence(c, { refund: C1, payment: o5.pay, rzpOrder: o5.rzp, amount: 59900, payAmount: 259900 });
-    const cr = await close(ob5.id, "test_mode_payment", "Razorpay Test keys; never real money.");
+    check("amount must equal what is outstanding", has(await err(close(ob5.id, "refunded_outside_razorpay", WHY, "bank_transfer", "UTR HDFC000123", 259900)), "must equal"), "refused: must equal");
+    const cr = await close(ob5.id, "refunded_outside_razorpay", WHY);
     check("closes, writing off only what was outstanding (2000)", [cr.outcome, n(cr.written_off_paise)], ["closed", 200000]);
     led = await ledgerFor(c, o5.pay);
     check("ledger: refunded 599 (verified), written off 2000, outstanding 0", [n(led.refunded_paise), n(led.written_off_paise), n(led.outstanding_paise)], [59900, 200000, 0]);
-    check("cannot close twice", has(await err(close(ob5.id, "test_mode_payment", "Razorpay Test keys; never real money.")), "already closed"), "refused: already closed");
+    check("cannot close twice", has(await err(close(ob5.id, "refunded_outside_razorpay", WHY)), "already closed"), "refused: already closed");
     check("closed obligation takes no new refund id", has(await err(claim(c, w, ob5.id, rid("rfnd"))), "closed"), "refused: closed");
-    check("close is audited with the admin", (await c.query("select actor = $2 a, evidence->>'kind' k from payment_refund_events where obligation_id = $1 and action = 'obligation_closed'", [ob5.id, w.admin])).rows[0], { a: true, k: "test_mode_payment" });
+    check("close is audited with the approver, method and reference",
+      (await c.query("select actor = $2 a, evidence->>'kind' k, evidence->>'method' m, evidence->>'reference' r from payment_refund_events where obligation_id = $1 and action = 'obligation_closed'", [ob5.id, w.admin])).rows[0],
+      { a: true, k: "refunded_outside_razorpay", m: "bank_transfer", r: "UTR HDFC000123" });
 
     console.log("\n=== GUARDS: verified evidence is permanent, for every role ===");
     await asRoot(c);
@@ -296,7 +312,9 @@ async function main() {
     check("service_role: cannot call the internal upsert", has(await err(c.query("select public.refund_discrepancy_upsert('amount_mismatch', 'test', null, null, null, null, null, null, null)")), "permission denied"), "refused: permission denied");
     await asRoot(c);
     const fns = [
-      "admin_claim_refund(uuid,text,text)", "admin_close_refund_obligation(uuid,text,text)", "admin_add_refund_note(uuid,bigint,text)",
+      "admin_claim_refund(uuid,text,text)", "admin_close_refund_obligation(uuid,text,text,text,text,bigint,date)", "admin_add_refund_note(uuid,bigint,text)",
+      "refund_closure_authority()", "record_test_mode_closure(uuid,uuid,text,text,text,text,bigint,text,boolean,text)",
+      "refund_closure_approver_is(uuid)", "refund_obligations_duplicate_check()", "refund_closure_approvers_audit()",
       "admin_resolve_discrepancy(bigint,text,text)",
       "record_refund_evidence(text,text,text,bigint,text,text,timestamptz,text,bigint,text,boolean,bigint,text,text,uuid,jsonb)",
       "record_refund_not_found(text,text,text,text,jsonb)", "recon_start(text,timestamptz,timestamptz,uuid,bigint)",
@@ -307,7 +325,9 @@ async function main() {
         has_function_privilege('authenticated', 'public.' || f, 'EXECUTE') au, has_function_privilege('service_role', 'public.' || f, 'EXECUTE') sv
       from unnest($1::text[]) f`, [fns])).rows.map((x) => `${x.f.split("(")[0]}:${x.an ? "A" : "-"}${x.au ? "U" : "-"}${x.sv ? "S" : "-"}`);
     check("EXECUTE matrix (anon/authenticated/service)", matrix, [
-      "admin_claim_refund:-U-", "admin_close_refund_obligation:-U-", "admin_add_refund_note:-U-", "admin_resolve_discrepancy:-U-",
+      "admin_claim_refund:-U-", "admin_close_refund_obligation:-U-", "admin_add_refund_note:-U-",
+      "refund_closure_authority:-U-", "record_test_mode_closure:--S", "refund_closure_approver_is:---",
+      "refund_obligations_duplicate_check:---", "refund_closure_approvers_audit:---", "admin_resolve_discrepancy:-U-",
       "record_refund_evidence:--S", "record_refund_not_found:--S", "recon_start:--S", "recon_checkpoint:--S",
       "recon_record_discrepancy:--S", "recon_payment_facts:--S", "recon_finish:--S"]);
     const tbl = (await c.query(`select t, has_table_privilege('anon', t, 'SELECT') a_s,
@@ -315,7 +335,7 @@ async function main() {
         has_table_privilege('service_role', t, 'INSERT') or has_table_privilege('service_role', t, 'UPDATE') or has_table_privilege('service_role', t, 'DELETE') s_w,
         (select relrowsecurity from pg_class where oid = t::regclass) rls
       from unnest(array['refund_obligations','payment_refunds','payment_refund_events','payment_reconciliation_runs',
-                        'payment_reconciliation_discrepancies','refund_notes']) t`)).rows;
+                        'payment_reconciliation_discrepancies','refund_notes','refund_closure_approvers']) t`)).rows;
     check("tables: RLS on; anon reads nothing; no direct writes for authenticated or service_role",
       tbl.every((x) => x.rls && !x.a_s && !x.u_w && !x.s_w), true);
 

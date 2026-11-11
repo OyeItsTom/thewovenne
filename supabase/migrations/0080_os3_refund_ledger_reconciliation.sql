@@ -48,6 +48,21 @@
 --      refunded, pending, written off, outstanding, over-refunded, last
 --      verification, open discrepancies.
 --
+-- LAUNCH-SAFETY CORRECTIONS (WP-ORDER-SAFETY-12, 11 Nov 2026, before release):
+--   * funds_basis on every obligation: Razorpay-captured, a pre-0077 Razorpay
+--     order whose payment is not yet known, or a manual payment that staff
+--     recorded and nothing verified. A credit note on a manual order is a
+--     document, not proof that money arrived; it is shown apart.
+--   * Closing WITHOUT a verified refund (owner decision O3-1) needs the owner or
+--     an authorised finance approver: refund_closure_approvers, which ships
+--     EMPTY (write-offs disabled until the owner enrols someone) and which no
+--     API role can write.
+--   * Money returned outside Razorpay needs method, reference, amount and date.
+--     A Test-mode payment is closed only on Razorpay's own answer, fetched by
+--     the server under Test keys (record_test_mode_closure), one at a time.
+--   * One payment never carries obligations from two sources, or more owed than
+--     captured, unnoticed: a 'duplicate_obligation' discrepancy flags it.
+--
 -- WHAT IT DOES NOT DO. Create or initiate a refund (no function here can);
 -- reverse loyalty or coupons (OS-4 / LS-1); returns (OS-6); change any 0077,
 -- 0078 or 0079 object. No personal data is copied: an order's anonymisation or
@@ -112,16 +127,43 @@ create table public.refund_obligations (
   -- What the payment captured, as Wovenne knew it when the obligation arose.
   captured_paise      bigint check (captured_paise is null or captured_paise > 0),
   origin              text not null check (origin in ('recorded', 'backfill_0080')),
+  -- What backs the money (WP-12). razorpay_captured: Razorpay captured it and
+  -- the payment id is known. razorpay_unlinked: a Razorpay order settled before
+  -- 0077 kept no payment id; it becomes captured, once, when Razorpay names the
+  -- payment. manual_recorded: staff recorded an in-person payment; nothing here
+  -- verified that money arrived, so it is never presented as captured funds.
+  funds_basis         text not null check (funds_basis in ('razorpay_captured', 'razorpay_unlinked', 'manual_recorded')),
   created_at          timestamptz not null default now(),
   -- Closing WITHOUT a verified refund. Never means "refunded".
   closed_at           timestamptz,
   closed_by           uuid references auth.users(id) on delete set null,
-  close_kind          text check (close_kind in ('test_mode_payment', 'refunded_outside_razorpay')),
+  close_kind          text check (close_kind in ('test_mode_payment', 'refunded_outside_razorpay', 'no_funds_received')),
   close_reason        text,
+  -- Money returned outside Razorpay (WP-12): how, the bank/UPI/receipt
+  -- reference, how much, and when. A free-text reason alone never closes it.
+  close_method        text check (close_method is null or close_method in ('cash', 'upi', 'bank_transfer', 'card_offline', 'other')),
+  close_reference     text check (close_reference is null or char_length(close_reference) between 4 and 200),
+  close_amount_paise  bigint check (close_amount_paise is null or close_amount_paise > 0),
+  close_settled_on    date,
+  -- A Test-mode closure: what Razorpay itself said about the payment.
+  close_evidence      jsonb,
   -- What was outstanding when it was closed: the amount written off.
   written_off_paise   bigint check (written_off_paise is null or written_off_paise >= 0),
   unique (source, source_id),
   check (channel <> 'razorpay' or razorpay_order_id is not null),
+  check ((channel = 'outside_razorpay') = (funds_basis = 'manual_recorded')),
+  check (funds_basis <> 'razorpay_captured' or razorpay_payment_id is not null),
+  check (funds_basis <> 'razorpay_unlinked' or razorpay_payment_id is null),
+  check (close_kind is distinct from 'refunded_outside_razorpay'
+         or (close_method is not null and close_reference is not null
+             and close_amount_paise is not null and close_settled_on is not null)),
+  check (close_kind is distinct from 'test_mode_payment'
+         or (channel = 'razorpay' and close_evidence ->> 'provider_mode' = 'test')),
+  check (close_kind is distinct from 'no_funds_received'
+         or (funds_basis = 'manual_recorded' and close_reference is not null)),
+  check (closed_at is not null
+         or (close_method is null and close_reference is null and close_amount_paise is null
+             and close_settled_on is null and close_evidence is null)),
   check ((closed_at is null) = (close_kind is null)
          and (closed_at is null) = (close_reason is null)
          and (closed_at is null) = (written_off_paise is null))
@@ -195,9 +237,11 @@ create table public.payment_refund_events (
   action              text not null check (action in (
                         'obligation_created', 'obligation_linked', 'obligation_closed',
                         'refund_claimed', 'refund_verified', 'refund_unchanged',
-                        'refund_stale_ignored', 'refund_uncertain', 'claim_linked')),
+                        'refund_stale_ignored', 'refund_uncertain', 'claim_linked',
+                        'closure_approver_added', 'closure_approver_removed')),
   source              text not null check (source in (
-                        'trigger', 'backfill', 'admin', 'admin_verify', 'webhook', 'reconciliation')),
+                        'trigger', 'backfill', 'admin', 'admin_verify', 'webhook', 'reconciliation',
+                        'database_owner')),
   -- Raw uuid, no foreign key: the trail outlives a deleted staff account.
   actor               uuid,
   obligation_id       uuid,
@@ -255,7 +299,8 @@ create table public.payment_reconciliation_discrepancies (
                         'webhook_payload_mismatch',  -- signed payload disagrees with the API
                         'refund_pending_stale',      -- pending for more than 7 days
                         'refund_claim_unverified',   -- typed id still unverified after 2 days
-                        'provider_data_incomplete')),-- an item Razorpay returned without key fields
+                        'provider_data_incomplete',  -- an item Razorpay returned without key fields
+                        'duplicate_obligation')),    -- one payment owed from two sources, or more than captured
   provider_mode       text check (provider_mode is null or provider_mode in ('test', 'live')),
   razorpay_payment_id text,
   razorpay_order_id   text,
@@ -344,8 +389,10 @@ language plpgsql
 set search_path = public, pg_temp
 as $fn$
 declare
-  free constant text[] := array['order_id', 'closed_by', 'razorpay_payment_id',
-                                'closed_at', 'close_kind', 'close_reason', 'written_off_paise'];
+  free constant text[] := array['order_id', 'closed_by', 'razorpay_payment_id', 'funds_basis',
+                                'closed_at', 'close_kind', 'close_reason', 'written_off_paise',
+                                'close_method', 'close_reference', 'close_amount_paise',
+                                'close_settled_on', 'close_evidence'];
 begin
   if tg_op = 'DELETE' then
     raise exception 'A refund obligation is permanent. Close it with a reason instead.' using errcode = '55000';
@@ -366,11 +413,22 @@ begin
      and (old.razorpay_payment_id is not null or new.channel <> 'razorpay') then
     raise exception 'A refund obligation''s payment cannot be changed once known.' using errcode = '55000';
   end if;
+  -- What backs it changes once: a pre-0077 order learns its captured payment.
+  if new.funds_basis is distinct from old.funds_basis
+     and not (old.funds_basis = 'razorpay_unlinked' and new.funds_basis = 'razorpay_captured'
+              and old.razorpay_payment_id is null and new.razorpay_payment_id is not null) then
+    raise exception 'What backs a refund obligation changes only when Razorpay names its payment.' using errcode = '55000';
+  end if;
   -- Closed once; a closed obligation stays closed.
   if old.closed_at is not null
      and (new.closed_at is distinct from old.closed_at or new.close_kind is distinct from old.close_kind
           or new.close_reason is distinct from old.close_reason
-          or new.written_off_paise is distinct from old.written_off_paise) then
+          or new.written_off_paise is distinct from old.written_off_paise
+          or new.close_method is distinct from old.close_method
+          or new.close_reference is distinct from old.close_reference
+          or new.close_amount_paise is distinct from old.close_amount_paise
+          or new.close_settled_on is distinct from old.close_settled_on
+          or new.close_evidence is distinct from old.close_evidence) then
     raise exception 'A closed refund obligation cannot be reopened or edited.' using errcode = '55000';
   end if;
   return new;
@@ -525,10 +583,10 @@ declare
 begin
   insert into refund_obligations
     (source, source_id, order_id, channel, razorpay_order_id, razorpay_payment_id,
-     amount_paise, currency, captured_paise, origin)
+     amount_paise, currency, captured_paise, origin, funds_basis)
   values
     ('unfulfilled_payment', new.id, new.order_id, 'razorpay', new.razorpay_order_id, new.razorpay_payment_id,
-     new.amount_paise, new.currency, new.amount_paise, 'recorded')
+     new.amount_paise, new.currency, new.amount_paise, 'recorded', 'razorpay_captured')
   on conflict (source, source_id) do nothing
   returning id into v_id;
   if v_id is not null then
@@ -562,14 +620,17 @@ begin
                     then 'razorpay' else 'outside_razorpay' end;
   insert into refund_obligations
     (source, source_id, order_id, channel, razorpay_order_id, razorpay_payment_id,
-     amount_paise, currency, captured_paise, origin)
+     amount_paise, currency, captured_paise, origin, funds_basis)
   values
     ('credit_note', new.id, new.order_id, v_channel,
      case when v_channel = 'razorpay' then o.razorpay_order_id end,
      case when v_channel = 'razorpay' then o.razorpay_payment_id end,
      round(new.amount_inr * 100)::bigint, 'INR',
      case when o.total_inr is not null and o.total_inr > 0 then round(o.total_inr * 100)::bigint end,
-     'recorded')
+     'recorded',
+     case when v_channel <> 'razorpay' then 'manual_recorded'
+          when o.razorpay_payment_id is null then 'razorpay_unlinked'
+          else 'razorpay_captured' end)
   on conflict (source, source_id) do nothing
   returning id into v_id;
   if v_id is not null then
@@ -577,7 +638,10 @@ begin
     values ('obligation_created', 'trigger', new.issued_by, v_id, o.razorpay_payment_id,
             jsonb_build_object('source', 'credit_note', 'credit_note_number', new.credit_note_number,
                                'kind', new.kind, 'amount_paise', round(new.amount_inr * 100)::bigint,
-                               'channel', v_channel));
+                               'channel', v_channel,
+                               'funds_basis', case when v_channel <> 'razorpay' then 'manual_recorded'
+                                                   when o.razorpay_payment_id is null then 'razorpay_unlinked'
+                                                   else 'razorpay_captured' end));
   end if;
   return null;
 end
@@ -591,20 +655,23 @@ create trigger credit_notes_refund_ledger
 -- recognisable and can be closed deliberately before Razorpay Live.
 insert into public.refund_obligations
   (source, source_id, order_id, channel, razorpay_order_id, razorpay_payment_id,
-   amount_paise, currency, captured_paise, origin, created_at)
+   amount_paise, currency, captured_paise, origin, created_at, funds_basis)
 select 'unfulfilled_payment', p.id, p.order_id, 'razorpay', p.razorpay_order_id, p.razorpay_payment_id,
-       p.amount_paise, p.currency, p.amount_paise, 'backfill_0080', p.first_seen_at
+       p.amount_paise, p.currency, p.amount_paise, 'backfill_0080', p.first_seen_at, 'razorpay_captured'
   from public.payment_refund_obligations p;
 
 insert into public.refund_obligations
   (source, source_id, order_id, channel, razorpay_order_id, razorpay_payment_id,
-   amount_paise, currency, captured_paise, origin, created_at)
+   amount_paise, currency, captured_paise, origin, created_at, funds_basis)
 select 'credit_note', cn.id, cn.order_id, ch.channel,
        case when ch.channel = 'razorpay' then o.razorpay_order_id end,
        case when ch.channel = 'razorpay' then o.razorpay_payment_id end,
        round(cn.amount_inr * 100)::bigint, 'INR',
        case when o.total_inr is not null and o.total_inr > 0 then round(o.total_inr * 100)::bigint end,
-       'backfill_0080', cn.issued_at
+       'backfill_0080', cn.issued_at,
+       case when ch.channel <> 'razorpay' then 'manual_recorded'
+            when o.razorpay_payment_id is null then 'razorpay_unlinked'
+            else 'razorpay_captured' end
   from public.credit_notes cn
   left join public.orders o on o.id = cn.order_id
   cross join lateral (select case when o.id is not null and o.payment_provider is distinct from 'offline'
@@ -613,7 +680,8 @@ select 'credit_note', cn.id, cn.order_id, ch.channel,
 
 insert into public.payment_refund_events (action, source, obligation_id, razorpay_payment_id, evidence)
 select 'obligation_created', 'backfill', r.id, r.razorpay_payment_id,
-       jsonb_build_object('source', r.source, 'amount_paise', r.amount_paise, 'channel', r.channel)
+       jsonb_build_object('source', r.source, 'amount_paise', r.amount_paise, 'channel', r.channel,
+                          'funds_basis', r.funds_basis)
   from public.refund_obligations r;
 
 -- ══ 7. Discrepancies ════════════════════════════════════════════════════════
@@ -647,7 +715,8 @@ begin
 
   -- Money that arrived without a record, or left without a reason: a human
   -- must look at the order before anything else happens to it.
-  if p_order is not null and p_kind in ('captured_not_recorded', 'refund_without_obligation', 'refund_exceeds_obligation') then
+  if p_order is not null and p_kind in ('captured_not_recorded', 'refund_without_obligation', 'refund_exceeds_obligation',
+                                        'duplicate_obligation') then
     update orders set needs_review = true where id = p_order and not needs_review;
   end if;
   return v_id;
@@ -655,6 +724,133 @@ end
 $fn$;
 revoke execute on function public.refund_discrepancy_upsert(text, text, text, text, text, uuid, uuid, jsonb, bigint)
   from public, anon, authenticated, service_role;
+
+-- ══ 7a. One payment, one liability (WP-12) ══════════════════════════════════
+-- 0077 records a payment owed whole only when it is NOT the order's settling
+-- payment, and a credit note needs a paid order, so the two sources should
+-- never meet on one payment, and credit notes are capped at the order total.
+-- Should anything break that (a future path, a hand-made row), the liability
+-- is not silently doubled: the payment is flagged for a person, and the
+-- discrepancy stays open until resolved.
+create function public.refund_obligations_duplicate_check()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+declare
+  v record;
+begin
+  if new.razorpay_payment_id is null then
+    return null;
+  end if;
+  select count(distinct source) as sources, sum(amount_paise) as owed, max(captured_paise) as captured
+    into v from refund_obligations where razorpay_payment_id = new.razorpay_payment_id;
+  if v.sources > 1 or (v.captured is not null and v.owed > v.captured) then
+    perform public.refund_discrepancy_upsert('duplicate_obligation', null, new.razorpay_payment_id,
+      new.razorpay_order_id, null, new.order_id, null,
+      jsonb_build_object('owed_paise', v.owed, 'captured_paise', v.captured, 'sources', v.sources,
+                         'latest_obligation', new.id), null);
+  end if;
+  return null;
+end
+$fn$;
+revoke execute on function public.refund_obligations_duplicate_check() from public, anon, authenticated, service_role;
+create trigger refund_obligations_duplicate_check
+  after insert or update of razorpay_payment_id on public.refund_obligations
+  for each row execute function public.refund_obligations_duplicate_check();
+
+-- The backfill ran before this trigger existed: check it once.
+do $$
+declare
+  v record;
+begin
+  for v in
+    select razorpay_payment_id, (array_agg(razorpay_order_id))[1] as rzp_order, (array_agg(order_id))[1] as order_id,
+           count(distinct source) as sources, sum(amount_paise) as owed, max(captured_paise) as captured
+      from public.refund_obligations where razorpay_payment_id is not null
+     group by razorpay_payment_id
+    having count(distinct source) > 1 or sum(amount_paise) > max(captured_paise)
+  loop
+    perform public.refund_discrepancy_upsert('duplicate_obligation', null, v.razorpay_payment_id, v.rzp_order, null,
+      v.order_id, null, jsonb_build_object('owed_paise', v.owed, 'captured_paise', v.captured, 'sources', v.sources,
+                                           'found_by', 'backfill_check'), null);
+  end loop;
+end $$;
+
+-- ══ 7b. Who may close an obligation WITHOUT a verified refund (WP-12) ═══════
+-- Owner decision O3-1: not ordinary admins. Only the business owner or a
+-- separately authorised finance approver. Wovenne had no such role, so this
+-- table IS the role. It ships EMPTY: every write-off is refused until the
+-- owner enrols someone. No API role can write it (not an admin, not
+-- service_role), so enrolment needs the database owner, by name, in the
+-- Supabase SQL editor — and is audited:
+--   insert into public.refund_closure_approvers (user_id, authorised_by, note)
+--   values ('<auth user id>', '<owner name>', '<role and date of the decision>');
+-- The approver must also be an admin, with two-factor and a live session.
+create table public.refund_closure_approvers (
+  user_id       uuid primary key references auth.users(id) on delete cascade,
+  authorised_by text not null check (char_length(btrim(authorised_by)) >= 3),
+  note          text not null check (char_length(btrim(note)) >= 20),
+  created_at    timestamptz not null default now()
+);
+comment on table public.refund_closure_approvers is
+  'Owner or finance approvers who may close a refund obligation without a
+   verified refund (0080, WP-12). Written only by the database owner.';
+alter table public.refund_closure_approvers enable row level security;
+revoke all on table public.refund_closure_approvers from public, anon, authenticated, service_role;
+
+create function public.refund_closure_approvers_audit()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+begin
+  if tg_op = 'UPDATE' then
+    raise exception 'An approver is added or removed, never edited.' using errcode = '55000';
+  end if;
+  insert into payment_refund_events (action, source, actor, evidence)
+  values (case when tg_op = 'INSERT' then 'closure_approver_added' else 'closure_approver_removed' end,
+          'database_owner',
+          case when tg_op = 'INSERT' then new.user_id else old.user_id end,
+          case when tg_op = 'INSERT'
+               then jsonb_build_object('authorised_by', new.authorised_by, 'note', new.note, 'db_user', current_user)
+               else jsonb_build_object('authorised_by', old.authorised_by, 'note', old.note, 'db_user', current_user) end);
+  return null;
+end
+$fn$;
+revoke execute on function public.refund_closure_approvers_audit() from public, anon, authenticated, service_role;
+create trigger refund_closure_approvers_audit
+  after insert or update or delete on public.refund_closure_approvers
+  for each row execute function public.refund_closure_approvers_audit();
+
+-- Internal: is this user an enrolled approver who is still an admin?
+create function public.refund_closure_approver_is(p_user uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $fn$
+  select p_user is not null and exists (
+    select 1 from refund_closure_approvers a join profiles p on p.id = a.user_id
+     where a.user_id = p_user and p.is_admin);
+$fn$;
+revoke execute on function public.refund_closure_approver_is(uuid) from public, anon, authenticated, service_role;
+
+-- For the caller's own session: admin (aal2, live session) AND enrolled.
+create function public.refund_closure_authority()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $fn$
+  select public.is_admin() and public.refund_closure_approver_is(auth.uid());
+$fn$;
+revoke execute on function public.refund_closure_authority() from public, anon, service_role;
+grant execute on function public.refund_closure_authority() to authenticated;
 
 -- ══ 8. Recording a refund ═══════════════════════════════════════════════════
 -- An admin records the refund id Razorpay's dashboard gave them. That is all
@@ -820,7 +1016,7 @@ begin
   if v_order.id is not null and v_order.razorpay_payment_id is null
      and not exists (select 1 from refund_obligations where razorpay_payment_id = p_payment_id) then
     for ob in
-      update refund_obligations set razorpay_payment_id = p_payment_id
+      update refund_obligations set razorpay_payment_id = p_payment_id, funds_basis = 'razorpay_captured'
        where razorpay_payment_id is null and channel = 'razorpay' and razorpay_order_id = p_payment_order_id
       returning *
     loop
@@ -1018,7 +1214,15 @@ grant execute on function public.record_refund_not_found(text, text, text, text,
 -- Close an obligation WITHOUT a verified refund: a Test-mode payment that was
 -- never real money, or money returned outside Razorpay. A written reason; what
 -- was outstanding is recorded as written off. Shown as closed, never refunded.
-create function public.admin_close_refund_obligation(p_obligation_id uuid, p_kind text, p_reason text)
+create function public.admin_close_refund_obligation(
+  p_obligation_id uuid,
+  p_kind          text,
+  p_reason        text,
+  p_method        text   default null,
+  p_reference     text   default null,
+  p_amount_paise  bigint default null,
+  p_settled_on    date   default null
+)
 returns jsonb
 language plpgsql
 security definer
@@ -1026,21 +1230,35 @@ set search_path = public, pg_temp
 as $fn$
 declare
   ob        refund_obligations%rowtype;
-  v_key     text;
-  v_owed    bigint;
   v_refund  bigint;
+  v_owed    bigint;
   v_wo      bigint;
   v_out     bigint;
+  v_ref     text := nullif(btrim(coalesce(p_reference, '')), '');
+  v_ordered date;
 begin
   if not public.is_admin() then
     raise exception 'Only admins can close a refund obligation' using errcode = '42501';
   end if;
-  if p_kind is null or p_kind not in ('test_mode_payment', 'refunded_outside_razorpay') then
-    raise exception 'Say why it is being closed: test_mode_payment or refunded_outside_razorpay.' using errcode = '22023';
+  -- O3-1 (WP-12): an ordinary admin cannot close money owed without a verified refund.
+  if not public.refund_closure_approver_is(auth.uid()) then
+    raise exception 'Only the owner or an authorised finance approver can close a refund obligation without a verified refund.'
+      using errcode = '42501';
+  end if;
+  if p_kind = 'test_mode_payment' then
+    raise exception 'A Test-mode payment is closed only on Razorpay''s own answer: use "Check Test mode", which asks Razorpay.'
+      using errcode = '22023';
+  end if;
+  if p_kind is null or p_kind not in ('refunded_outside_razorpay', 'no_funds_received') then
+    raise exception 'Say why it is being closed: refunded_outside_razorpay or no_funds_received.' using errcode = '22023';
   end if;
   if char_length(btrim(coalesce(p_reason, ''))) < 20 then
     raise exception 'Write at least 20 characters saying why, and where the evidence is.' using errcode = '22023';
   end if;
+  if v_ref is null or char_length(v_ref) not between 4 and 200 then
+    raise exception 'Give the evidence reference (UTR, UPI reference, receipt or document), 4 to 200 characters.' using errcode = '22023';
+  end if;
+
   select * into ob from refund_obligations where id = p_obligation_id for update;
   if not found then
     raise exception 'No such refund obligation' using errcode = 'P0002';
@@ -1048,6 +1266,29 @@ begin
   if ob.closed_at is not null then
     raise exception 'This obligation is already closed.' using errcode = '55000';
   end if;
+
+  if p_kind = 'refunded_outside_razorpay' then
+    if p_method is null or p_method not in ('cash', 'upi', 'bank_transfer', 'card_offline', 'other') then
+      raise exception 'Say how the money was returned: cash, upi, bank_transfer, card_offline or other.' using errcode = '22023';
+    end if;
+    if p_settled_on is null or p_settled_on > current_date then
+      raise exception 'Give the date the money was returned (not in the future).' using errcode = '22023';
+    end if;
+    select created_at::date into v_ordered from orders where id = ob.order_id;
+    if v_ordered is not null and p_settled_on < v_ordered then
+      raise exception 'The money cannot have been returned before the order existed (%).', v_ordered using errcode = '22023';
+    end if;
+  else
+    -- no_funds_received: a manual order recorded as paid when no money came.
+    if ob.funds_basis <> 'manual_recorded' then
+      raise exception 'Razorpay captured this money; it is closed by a verified refund, not as "no money received".'
+        using errcode = '55000';
+    end if;
+    if p_method is not null or p_amount_paise is not null or p_settled_on is not null then
+      raise exception 'No money was received, so there is no repayment method, amount or date.' using errcode = '22023';
+    end if;
+  end if;
+
   if ob.razorpay_payment_id is not null then
     perform pg_advisory_xact_lock(hashtextextended('wovenne.refund:' || ob.razorpay_payment_id, 0));
   end if;
@@ -1059,7 +1300,7 @@ begin
   end if;
 
   -- What is outstanding on the payment (all its obligations, less verified
-  -- refunds and earlier write-offs), capped at this obligation's amount.
+  -- refunds and earlier closures), capped at this obligation's amount.
   if ob.razorpay_payment_id is null then
     v_out := ob.amount_paise;
   else
@@ -1072,21 +1313,153 @@ begin
   if v_out <= 0 then
     raise exception 'Nothing is outstanding on this obligation.' using errcode = '55000';
   end if;
+  if p_kind = 'refunded_outside_razorpay' and p_amount_paise is distinct from v_out then
+    raise exception 'The amount returned (% paise) must equal what is outstanding (% paise). A part-repayment is not closed here: record a note and escalate.',
+      coalesce(p_amount_paise::text, 'none'), v_out using errcode = '22023';
+  end if;
 
   update refund_obligations
      set closed_at = now(), closed_by = auth.uid(), close_kind = p_kind,
-         close_reason = btrim(p_reason), written_off_paise = v_out
+         close_reason = btrim(p_reason), written_off_paise = v_out,
+         close_method = case when p_kind = 'refunded_outside_razorpay' then p_method end,
+         close_reference = v_ref,
+         close_amount_paise = case when p_kind = 'refunded_outside_razorpay' then p_amount_paise end,
+         close_settled_on = case when p_kind = 'refunded_outside_razorpay' then p_settled_on end
    where id = ob.id;
   insert into payment_refund_events (action, source, actor, obligation_id, razorpay_payment_id, evidence)
   values ('obligation_closed', 'admin', auth.uid(), ob.id, ob.razorpay_payment_id,
-          jsonb_build_object('kind', p_kind, 'written_off_paise', v_out, 'reason', btrim(p_reason)));
+          jsonb_build_object('kind', p_kind, 'written_off_paise', v_out, 'reason', btrim(p_reason),
+                             'funds_basis', ob.funds_basis, 'method', p_method, 'reference', v_ref,
+                             'amount_paise', p_amount_paise, 'settled_on', p_settled_on, 'authority', 'closure_approver'));
   insert into refund_notes (obligation_id, note, author)
-  values (ob.id, 'Closed (' || p_kind || '): ' || btrim(p_reason), auth.uid());
+  values (ob.id, 'Closed (' || p_kind || ', ref ' || v_ref || '): ' || btrim(p_reason), auth.uid());
   return jsonb_build_object('outcome', 'closed', 'written_off_paise', v_out);
 end
 $fn$;
-revoke execute on function public.admin_close_refund_obligation(uuid, text, text) from public, anon, service_role;
-grant execute on function public.admin_close_refund_obligation(uuid, text, text) to authenticated;
+revoke execute on function public.admin_close_refund_obligation(uuid, text, text, text, text, bigint, date) from public, anon, service_role;
+grant execute on function public.admin_close_refund_obligation(uuid, text, text, text, text, bigint, date) to authenticated;
+
+-- A Test-mode payment was never real money. It is closed one obligation at a
+-- time, by an approver, on the evidence the SERVER fetched from Razorpay under
+-- Test keys (the payment exists, is captured, and belongs to this order). It is
+-- recorded as a closure, never as "refunded". Under Live keys it cannot run.
+create function public.record_test_mode_closure(
+  p_obligation_id        uuid,
+  p_actor                uuid,
+  p_reason               text,
+  p_provider_mode        text,
+  p_payment_id           text,
+  p_payment_order_id     text,
+  p_payment_amount_paise bigint,
+  p_payment_currency     text,
+  p_payment_captured     boolean,
+  p_payment_status       text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+declare
+  ob        refund_obligations%rowtype;
+  v_refund  bigint;
+  v_owed    bigint;
+  v_wo      bigint;
+  v_out     bigint;
+  v_evidence jsonb;
+begin
+  if not public.refund_closure_approver_is(p_actor) then
+    raise exception 'Only the owner or an authorised finance approver can close a refund obligation without a verified refund.'
+      using errcode = '42501';
+  end if;
+  if p_provider_mode is distinct from 'test' then
+    raise exception 'Only a payment Razorpay confirms under Test keys is closed as Test-mode (mode was %).', coalesce(p_provider_mode, 'unknown')
+      using errcode = '55000';
+  end if;
+  if char_length(btrim(coalesce(p_reason, ''))) < 20 then
+    raise exception 'Write at least 20 characters saying why.' using errcode = '22023';
+  end if;
+  if coalesce(p_payment_id, '') !~ '^pay_[A-Za-z0-9]{6,40}$' or coalesce(btrim(p_payment_order_id), '') = '' then
+    raise exception 'record_test_mode_closure: Razorpay''s payment and order ids are required' using errcode = '22023';
+  end if;
+  if p_payment_captured is not true or p_payment_currency is distinct from 'INR'
+     or p_payment_amount_paise is null or p_payment_amount_paise <= 0 then
+    raise exception 'Razorpay does not show a captured INR payment, so there is nothing to close as Test-mode.' using errcode = '55000';
+  end if;
+
+  select * into ob from refund_obligations where id = p_obligation_id for update;
+  if not found then
+    raise exception 'No such refund obligation' using errcode = 'P0002';
+  end if;
+  if ob.closed_at is not null then
+    raise exception 'This obligation is already closed.' using errcode = '55000';
+  end if;
+  if ob.channel <> 'razorpay' then
+    raise exception 'This money was not taken through Razorpay.' using errcode = '55000';
+  end if;
+  if ob.razorpay_order_id is distinct from p_payment_order_id then
+    raise exception 'Razorpay says that payment belongs to order %, not this obligation''s order %.', p_payment_order_id, ob.razorpay_order_id
+      using errcode = '55000';
+  end if;
+  if ob.razorpay_payment_id is not null and ob.razorpay_payment_id <> p_payment_id then
+    raise exception 'This obligation is for payment %, not %.', ob.razorpay_payment_id, p_payment_id using errcode = '55000';
+  end if;
+  if p_payment_amount_paise < ob.amount_paise then
+    raise exception 'Razorpay captured % paise, less than the % paise owed: investigate, do not close.', p_payment_amount_paise, ob.amount_paise
+      using errcode = '55000';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('wovenne.refund:' || p_payment_id, 0));
+  if exists (select 1 from payment_refunds r
+              where r.status in ('claimed', 'pending', 'uncertain')
+                and (r.obligation_id = ob.id or r.razorpay_payment_id = p_payment_id)) then
+    raise exception 'A refund for this payment is still unverified, pending or uncertain. Settle that first.' using errcode = '55000';
+  end if;
+
+  -- A pre-0077 order learns its payment here, once — unless that payment is
+  -- already owed separately (then a person must look).
+  if ob.razorpay_payment_id is null then
+    if exists (select 1 from refund_obligations where razorpay_payment_id = p_payment_id and id <> ob.id) then
+      raise exception 'Payment % is already recorded against another obligation. Investigate before closing.', p_payment_id
+        using errcode = '55000';
+    end if;
+    update refund_obligations set razorpay_payment_id = p_payment_id, funds_basis = 'razorpay_captured'
+     where id = ob.id returning * into ob;
+    insert into payment_refund_events (action, source, actor, obligation_id, razorpay_payment_id, evidence)
+    values ('obligation_linked', 'admin_verify', p_actor, ob.id, p_payment_id,
+            jsonb_build_object('razorpay_order_id', p_payment_order_id, 'via', 'test_mode_check'));
+  end if;
+
+  select coalesce(sum(amount_paise), 0) into v_refund
+    from payment_refunds where razorpay_payment_id = p_payment_id and status = 'processed';
+  select coalesce(sum(amount_paise), 0), coalesce(sum(written_off_paise), 0) into v_owed, v_wo
+    from refund_obligations where razorpay_payment_id = p_payment_id;
+  v_out := least(ob.amount_paise, greatest(v_owed - v_refund - v_wo, 0));
+  if v_out <= 0 then
+    raise exception 'Nothing is outstanding on this obligation.' using errcode = '55000';
+  end if;
+
+  v_evidence := jsonb_build_object('provider_mode', p_provider_mode, 'payment_id', p_payment_id,
+                                   'razorpay_order_id', p_payment_order_id, 'amount_paise', p_payment_amount_paise,
+                                   'currency', p_payment_currency, 'captured', p_payment_captured,
+                                   'status', p_payment_status, 'checked_at', now());
+  update refund_obligations
+     set closed_at = now(), closed_by = p_actor, close_kind = 'test_mode_payment',
+         close_reason = btrim(p_reason), written_off_paise = v_out, close_evidence = v_evidence
+   where id = ob.id;
+  insert into payment_refund_events (action, source, actor, obligation_id, razorpay_payment_id, evidence)
+  values ('obligation_closed', 'admin_verify', p_actor, ob.id, p_payment_id,
+          jsonb_build_object('kind', 'test_mode_payment', 'written_off_paise', v_out, 'reason', btrim(p_reason),
+                             'provider', v_evidence, 'authority', 'closure_approver'));
+  insert into refund_notes (obligation_id, note, author)
+  values (ob.id, 'Closed (test_mode_payment, Razorpay Test-mode ' || p_payment_id || '): ' || btrim(p_reason), p_actor);
+  return jsonb_build_object('outcome', 'closed', 'written_off_paise', v_out, 'payment_id', p_payment_id);
+end
+$fn$;
+revoke execute on function public.record_test_mode_closure(uuid, uuid, text, text, text, text, bigint, text, boolean, text)
+  from public, anon, authenticated;
+grant execute on function public.record_test_mode_closure(uuid, uuid, text, text, text, text, bigint, text, boolean, text)
+  to service_role;
 
 create function public.admin_add_refund_note(p_obligation_id uuid, p_discrepancy_id bigint, p_note text)
 returns bigint
@@ -1381,7 +1754,10 @@ select
   f.provider_modes,
   f.refunds,
   f.last_verified_at,
-  coalesce(d.open_discrepancies, 0)                      as open_discrepancies
+  coalesce(d.open_discrepancies, 0)                      as open_discrepancies,
+  o.funds_bases,
+  o.close_kinds,
+  o.open_obligation_ids
 from keys k
 left join lateral (
   select (array_agg(ob.order_id) filter (where ob.order_id is not null))[1]            as order_id,
@@ -1396,7 +1772,10 @@ left join lateral (
          min(ob.created_at)                                                            as first_owed_at,
          max(ob.captured_paise)                                                        as captured_paise,
          sum(ob.amount_paise)                                                          as owed_paise,
-         sum(coalesce(ob.written_off_paise, 0))                                        as written_off_paise
+         sum(coalesce(ob.written_off_paise, 0))                                        as written_off_paise,
+         array_agg(distinct ob.funds_basis)                                            as funds_bases,
+         array_agg(distinct ob.close_kind) filter (where ob.close_kind is not null)    as close_kinds,
+         array_agg(ob.id order by ob.created_at, ob.id) filter (where ob.closed_at is null) as open_obligation_ids
     from ob where ob.ledger_key = k.ledger_key
   having count(*) > 0
 ) o on true

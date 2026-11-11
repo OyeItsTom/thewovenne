@@ -144,6 +144,17 @@ export async function evidence(c: Client, e: Evidence) {
   }
 }
 
+/**
+ * The database owner enrols a refund-closure approver (WP-12). In production
+ * this is a deliberate insert in the Supabase SQL editor; no API role can do it.
+ */
+export async function enrolApprover(c: Client, userId: string) {
+  await asRoot(c);
+  await c.query(
+    "insert into refund_closure_approvers (user_id, authorised_by, note) values ($1, 'Owner (test)', 'Owner approval for the test world, fictional.') on conflict do nothing",
+    [userId]);
+}
+
 export async function ledgerFor(c: Client, key: string) {
   await asRoot(c);
   return (await c.query("select * from refund_ledger where ledger_key = $1 or razorpay_payment_id = $1", [key])).rows[0] ?? null;
