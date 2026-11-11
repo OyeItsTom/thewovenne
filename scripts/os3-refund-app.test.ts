@@ -22,12 +22,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { asRoot, startEngine, type Client } from "./pg-world";
 import {
-  cancelPaid, cancelUnpaid, fakeRazorpay, ledgerFor, obligationsOf, openDiscrepancies, osWorld, paidOrder,
+  cancelPaid, cancelUnpaid, enrolApprover, fakeRazorpay, ledgerFor, obligationsOf, openDiscrepancies, osWorld, paidOrder,
   pgRpc, placeOrder, rid, settle, type FakeRazorpay,
 } from "./os3-world";
 import { providerModeFromKey, verifyAndRecordRefund, type RefundLedgerDeps } from "../lib/refundLedger";
 import { handleRazorpayWebhook, type WebhookDeps } from "../lib/razorpayWebhook";
 import { classifyCaptured, runReconciliation, type ReconcileDeps } from "../lib/paymentReconciliation";
+import { closeTestModeObligation, type TestModeDeps } from "../lib/refundClosure";
 
 let passed = 0;
 let failed = 0;
@@ -306,6 +307,101 @@ async function main() {
     check("ledger says more refunded than Razorpay → ledger_exceeds_provider",
       classifyCaptured({ id: "pay_L", amount: 1000, order_id: "order_L", amount_refunded: 0, status: "captured" }, facts).map((x) => x.kind), ["ledger_exceeds_provider"]);
 
+    console.log("\n=== TESTMODE (WP-12): closed only on Razorpay's answer under Test keys ===");
+    {
+      const tm = fakeRazorpay();
+      const orderPayments = new Map<string, unknown[]>();
+      const tmCalls: string[] = [];
+      const tdeps = (over: Partial<TestModeDeps> = {}): TestModeDeps => ({
+        provider: {
+          fetchPayment: (id) => { tmCalls.push(`GET payment ${id}`); return tm.provider.fetchPayment(id); },
+          async fetchOrderPayments(id) {
+            tmCalls.push(`GET order ${id} payments`);
+            const failure = tm.failNext.shift();
+            if (failure === "500") throw Object.assign(new Error("Internal"), { statusCode: 500 });
+            if (failure === "404") throw Object.assign(new Error("nf"), { statusCode: 400, error: { code: "BAD_REQUEST_ERROR" } });
+            return { entity: "collection", count: (orderPayments.get(id) ?? []).length, items: orderPayments.get(id) ?? [] } as never;
+          },
+        },
+        rpc, mode: "test", timeoutMs: 200, ...over,
+      });
+      const why = "Pre-launch order paid with Razorpay Test keys; never real money.";
+      const t = await paidOrder(c, w);
+      await cancelPaid(c, w, t.id);
+      const tob = (await obligationsOf(c, t.id))[0];
+      const input = { obligationId: tob.id, actor: w.admin, reason: why, paymentId: t.pay as string | null, razorpayOrderId: t.rzp };
+      tm.payments.set(t.pay, { id: t.pay, amount: 259900, currency: "INR", status: "captured", captured: true, order_id: t.rzp, amount_refunded: 0 });
+
+      let r = await closeTestModeObligation(input, tdeps({ mode: "live" }));
+      check("Live keys → refused before asking Razorpay", [r.ok, !r.ok && r.kind, tmCalls.length], [false, "not_test_keys", 0]);
+      r = await closeTestModeObligation(input, tdeps({ mode: null }));
+      check("unknown key mode → refused", [r.ok, !r.ok && r.kind], [false, "not_test_keys"]);
+      r = await closeTestModeObligation(input, tdeps());
+      check("Test keys, but the actor is not an enrolled approver → database refuses", [r.ok, !r.ok && r.kind, !r.ok && r.message.includes("authorised finance approver")], [false, "refused", true]);
+      await enrolApprover(c, w.admin);
+      tm.failNext.push("500");
+      r = await closeTestModeObligation(input, tdeps());
+      check("Razorpay down → indeterminate, nothing closed", [r.ok, !r.ok && r.kind, (await obligationsOf(c, t.id))[0].closed_at], [false, "indeterminate", null]);
+      tm.failNext.push("timeout");
+      r = await closeTestModeObligation(input, tdeps());
+      check("Razorpay hangs → indeterminate (timeout)", [r.ok, !r.ok && r.kind], [false, "indeterminate"]);
+      tm.failNext.push("404");
+      r = await closeTestModeObligation(input, tdeps());
+      check("Test mode does not know the payment (maybe Live) → not_found, nothing closed", [r.ok, !r.ok && r.kind], [false, "not_found"]);
+      tm.payments.set(t.pay, { id: t.pay, amount: 259900, currency: "INR", status: "captured", captured: true, order_id: rid("order"), amount_refunded: 0 });
+      r = await closeTestModeObligation(input, tdeps());
+      check("payment on another order → refused", [r.ok, !r.ok && r.kind], [false, "refused"]);
+      tm.payments.set(t.pay, { id: t.pay, amount: "259900", currency: "INR", captured: true, order_id: t.rzp } as never);
+      r = await closeTestModeObligation(input, tdeps());
+      check("malformed answer → invalid, nothing closed", [r.ok, !r.ok && r.kind], [false, "invalid"]);
+      tm.payments.set(t.pay, { id: t.pay, amount: 259900, currency: "INR", status: "authorized", captured: false, order_id: t.rzp, amount_refunded: 0 });
+      r = await closeTestModeObligation(input, tdeps());
+      check("not captured → database refuses", [r.ok, !r.ok && r.kind], [false, "refused"]);
+      tm.payments.set(t.pay, { id: t.pay, amount: 259900, currency: "INR", status: "captured", captured: true, order_id: t.rzp, amount_refunded: 0 });
+      r = await closeTestModeObligation(input, tdeps());
+      check("captured Test-mode payment → closed", [r.ok, r.ok && r.writtenOffPaise], [true, 259900]);
+      const led = await ledgerFor(c, t.pay);
+      check("…ledger: closed, not refunded", [n(led.refunded_paise), n(led.written_off_paise), n(led.outstanding_paise)], [0, 259900, 0]);
+      check("…only GETs were made", tmCalls.every((x) => x.startsWith("GET ")), true);
+
+      // Pre-0077: no payment id; the order's payments decide.
+      await c.query("set session_replication_role = replica");
+      const lg = await placeOrder(c, w);
+      await c.query("update orders set payment_status = 'paid', status = 'confirmed' where id = $1", [lg.id]);
+      await c.query("set session_replication_role = origin");
+      await cancelPaid(c, w, lg.id);
+      const lob = (await obligationsOf(c, lg.id))[0];
+      const lin = { obligationId: lob.id, actor: w.admin, reason: why, paymentId: null, razorpayOrderId: lg.rzp };
+      orderPayments.set(lg.rzp, []);
+      r = await closeTestModeObligation(lin, tdeps());
+      check("pre-0077, no captured payment on the order → not_found", [r.ok, !r.ok && r.kind], [false, "not_found"]);
+      const A = rid("pay");
+      const B = rid("pay");
+      orderPayments.set(lg.rzp, [
+        { id: A, amount: 259900, currency: "INR", status: "captured", captured: true, order_id: lg.rzp, amount_refunded: 0 },
+        { id: B, amount: 259900, currency: "INR", status: "captured", captured: true, order_id: lg.rzp, amount_refunded: 0 },
+      ]);
+      r = await closeTestModeObligation(lin, tdeps());
+      check("pre-0077, two captured payments → ambiguous, nothing closed", [r.ok, !r.ok && r.kind, (await obligationsOf(c, lg.id))[0].closed_at], [false, "ambiguous", null]);
+      orderPayments.set(lg.rzp, [
+        { id: A, amount: 259900, currency: "INR", status: "failed", captured: false, order_id: lg.rzp, amount_refunded: 0 },
+        { id: B, amount: 259900, currency: "INR", status: "captured", captured: true, order_id: lg.rzp, amount_refunded: 0 },
+      ]);
+      r = await closeTestModeObligation(lin, tdeps());
+      const lob2 = (await obligationsOf(c, lg.id))[0];
+      check("pre-0077, one captured payment → linked and closed", [r.ok, lob2.razorpay_payment_id, lob2.funds_basis, lob2.close_kind], [true, B, "razorpay_captured", "test_mode_payment"]);
+    }
+
+    console.log("\n=== STATIC: the Refunds screen uses the six agreed labels (O3-5) ===");
+    {
+      const ui = fs.readFileSync(path.join(process.cwd(), "components/admin/RefundsManager.tsx"), "utf8");
+      const six = ["Refund owed", "Awaiting verification", "Refund pending", "Verified refunded", "Refund failed or uncertain", "Closed without verified refund"];
+      check("all six labels are defined", six.filter((l) => !ui.includes(`"${l}"`)), []);
+      check("the old labels are gone", ["\"Owed\"", "Refund id not yet confirmed", "Refunded (Razorpay: processed)", "Investigate — do not refund again"].filter((l) => ui.includes(l)), []);
+      check("closure controls are shown only to an approver (and the database enforces it)", [ui.includes('supabase.rpc("refund_closure_authority")'), ui.includes("setCanClose(a.data === true)"), ui.includes("canClose &&")], [true, true, true]);
+      check("no Test-mode option in the free-form closure", ui.includes('<option value="test_mode_payment"'), false);
+    }
+
     console.log("\n=== STATIC: nothing in the app can create a refund ===");
     const files: string[] = [];
     const walk = (d: string) => {
@@ -321,9 +417,9 @@ async function main() {
     const offenders = files.filter((p) => /\.(refund|capture)\s*\(|refunds\.create|payments\.refund/.test(fs.readFileSync(p, "utf8")));
     const calls = files.flatMap((p) => (fs.readFileSync(p, "utf8").match(/razorpay\.(\w+)\.(\w+)\(/g) ?? []).map((m) => `${path.basename(p)}:${m}`));
     check("no refund-creating or capturing call anywhere in lib/, app/, components/", offenders.map((p) => path.relative(process.cwd(), p)), []);
-    check("every direct Razorpay SDK call: checkout's orders.create and OS-3's three reads", [...new Set(calls)].sort(), [
-      "refundProviders.ts:razorpay.payments.all(", "refundProviders.ts:razorpay.payments.fetch(",
-      "refundProviders.ts:razorpay.refunds.fetch(", "route.ts:razorpay.orders.create(",
+    check("every direct Razorpay SDK call: checkout's orders.create and OS-3's four reads", [...new Set(calls)].sort(), [
+      "refundProviders.ts:razorpay.orders.fetchPayments(", "refundProviders.ts:razorpay.payments.all(",
+      "refundProviders.ts:razorpay.payments.fetch(", "refundProviders.ts:razorpay.refunds.fetch(", "route.ts:razorpay.orders.create(",
     ]);
 
     await rpcConn.end();

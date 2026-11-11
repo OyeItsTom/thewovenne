@@ -4,7 +4,8 @@ import { isSameOrigin } from "@/lib/sameOrigin";
 import { createRSCClient } from "@/lib/supabaseRSC";
 import { verifyAndRecordRefund, REFUND_ID } from "@/lib/refundLedger";
 import { runReconciliation } from "@/lib/paymentReconciliation";
-import { reconcileDeps, refundLedgerDeps } from "@/lib/refundProviders";
+import { reconcileDeps, refundLedgerDeps, testModeDeps } from "@/lib/refundProviders";
+import { closeTestModeObligation } from "@/lib/refundClosure";
 
 /**
  * Refunds and reconciliation (OS-3, 0080). Admin only.
@@ -14,8 +15,14 @@ import { reconcileDeps, refundLedgerDeps } from "@/lib/refundProviders";
  *   claim      record the refund id Razorpay's dashboard showed them, against
  *              an obligation — then immediately ask Razorpay about it;
  *   verify     ask Razorpay again about a refund already in the ledger;
- *   close      close an obligation WITHOUT a verified refund (Test-mode
- *              payment, or money returned outside Razorpay), with a reason;
+ *   close      close an obligation WITHOUT a verified refund: money returned
+ *              outside Razorpay (method, reference, amount, date) or, for a
+ *              manual order, no money ever received. OWNER / FINANCE
+ *              APPROVER ONLY (WP-12): the database refuses anyone else;
+ *   close_test_mode  the server asks Razorpay, under TEST keys, whether this
+ *              was a Test-mode payment, and closes that one obligation on
+ *              Razorpay's answer. Approver only, checked here AND in the
+ *              database (record_test_mode_closure takes the actor);
  *   note       add a reconciliation note;
  *   resolve    resolve or accept a discrepancy, with a note;
  *   reconcile  run (or resume) a bounded, read-only reconciliation.
@@ -41,6 +48,10 @@ type Body = {
   note?: string;
   kind?: string;
   reason?: string;
+  method?: string | null;
+  reference?: string | null;
+  amountPaise?: number | null;
+  settledOn?: string | null;
   discrepancyId?: number;
   resolution?: string;
   from?: string;
@@ -103,12 +114,61 @@ export async function POST(request: NextRequest) {
       const verified = await verifyAndRecordRefund(refundId, { source: "admin_verify", actor: user.id }, refundLedgerDeps());
       return NextResponse.json({ ok: verified.ok, verification: verified }, { status: verified.ok ? 200 : 502 });
     }
-    case "close":
+    case "close": {
+      if (body.settledOn != null && !/^\d{4}-\d{2}-\d{2}$/.test(body.settledOn)) {
+        return NextResponse.json({ error: "Give the date as YYYY-MM-DD." }, { status: 400 });
+      }
+      if (body.amountPaise != null && !Number.isSafeInteger(body.amountPaise)) {
+        return NextResponse.json({ error: "The amount must be whole paise." }, { status: 400 });
+      }
+      // Authority, the amount rule and every evidence field are enforced by
+      // the database for this admin's own session (auth.uid()).
       return asAdmin("admin_close_refund_obligation", {
         p_obligation_id: body.obligationId ?? null,
         p_kind: body.kind ?? null,
         p_reason: body.reason ?? null,
+        p_method: body.method ?? null,
+        p_reference: body.reference ?? null,
+        p_amount_paise: body.amountPaise ?? null,
+        p_settled_on: body.settledOn ?? null,
       });
+    }
+    case "close_test_mode": {
+      const { data: authority } = await supabase.rpc("refund_closure_authority");
+      if (authority !== true) {
+        return NextResponse.json(
+          { error: "Only the owner or an authorised finance approver can close a refund obligation without a verified refund." },
+          { status: 403 }
+        );
+      }
+      if (!body.obligationId) return NextResponse.json({ error: "Which obligation?" }, { status: 400 });
+      // Read through the admin's own RLS: the obligation must be visible to them.
+      const { data: ob } = await supabase
+        .from("refund_obligations")
+        .select("id, channel, razorpay_order_id, razorpay_payment_id, closed_at")
+        .eq("id", body.obligationId)
+        .maybeSingle();
+      const row = ob as { id: string; channel: string; razorpay_order_id: string | null; razorpay_payment_id: string | null; closed_at: string | null } | null;
+      if (!row) return NextResponse.json({ error: "No such refund obligation." }, { status: 404 });
+      if (row.channel !== "razorpay" || !row.razorpay_order_id) {
+        return NextResponse.json({ error: "This money was not taken through Razorpay." }, { status: 400 });
+      }
+      if (row.closed_at) return NextResponse.json({ error: "This obligation is already closed." }, { status: 400 });
+      const result = await closeTestModeObligation(
+        {
+          obligationId: row.id,
+          actor: user.id,
+          reason: body.reason ?? "",
+          paymentId: row.razorpay_payment_id,
+          razorpayOrderId: row.razorpay_order_id,
+        },
+        testModeDeps()
+      );
+      if (!result.ok) {
+        return NextResponse.json({ error: result.message, kind: result.kind }, { status: result.kind === "indeterminate" ? 502 : 400 });
+      }
+      return NextResponse.json({ ok: true, result: { message: `Closed as a Test-mode payment (${result.paymentId}), on Razorpay's answer. Not a refund.` } });
+    }
     case "note":
       return asAdmin("admin_add_refund_note", {
         p_obligation_id: body.obligationId ?? null,

@@ -11,8 +11,15 @@ import { orderRef } from "@/lib/orders";
  *
  * THIS SCREEN NEVER MAKES A REFUND. The refund is made in Razorpay's
  * dashboard; here the admin records the refund id it showed them, and the
- * server asks Razorpay about it. "Refunded" on this screen only ever means
- * Razorpay said processed. Nothing here accepts an amount or a status.
+ * server asks Razorpay about it. "Verified refunded" on this screen only ever
+ * means Razorpay said processed. Nothing here accepts a refund amount or status.
+ *
+ * Six labels, used everywhere (owner decision O3-5, WP-12): Refund owed,
+ * Awaiting verification, Refund pending, Verified refunded, Refund failed or
+ * uncertain, Closed without verified refund. A credit note or a cancellation
+ * is never shown as money returned. A manual (in-person) payment is marked as
+ * recorded by staff, not verified. Closing without a verified refund is shown
+ * only to an enrolled owner / finance approver — and enforced by the database.
  *
  * Reads go through the admin's own session (RLS: is_admin, aal2). Writes go
  * through /api/admin/refunds.
@@ -55,6 +62,9 @@ interface LedgerRow {
   refunds: RefundItem[] | null;
   last_verified_at: string | null;
   open_discrepancies: number;
+  funds_bases: string[] | null;
+  close_kinds: string[] | null;
+  open_obligation_ids: string[] | null;
 }
 
 interface Discrepancy {
@@ -103,6 +113,13 @@ const KIND_LABEL: Record<string, string> = {
   refund_pending_stale: "Refund pending for more than 7 days",
   refund_claim_unverified: "Refund id still unverified after 2 days",
   provider_data_incomplete: "Razorpay returned a payment without key fields",
+  duplicate_obligation: "One payment owed twice, or more than was captured",
+};
+
+const CLOSE_LABEL: Record<string, string> = {
+  test_mode_payment: "Test-mode payment, confirmed by Razorpay",
+  refunded_outside_razorpay: "Returned outside Razorpay (recorded with evidence)",
+  no_funds_received: "Manual order: no money was received",
 };
 
 const rupees = (paise: number | null | undefined) =>
@@ -111,16 +128,29 @@ const rupees = (paise: number | null | undefined) =>
     : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 2 }).format(paise / 100);
 const when = (s: string | null) => (s ? new Date(s).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) : "never");
 
-function stateOf(r: LedgerRow): { label: string; tone: "red" | "amber" | "green" | "grey" } {
-  if (r.uncertain_count > 0 || r.over_refunded_paise > 0) return { label: "Investigate — do not refund again", tone: "red" };
-  if (r.open_discrepancies > 0) return { label: "Needs review", tone: "red" };
-  if (r.pending_paise > 0) return { label: "Refund pending at Razorpay", tone: "amber" };
-  if (r.claimed_count > 0) return { label: "Refund id not yet confirmed", tone: "amber" };
-  if (r.outstanding_paise > 0) return { label: "Owed", tone: "red" };
-  if (r.written_off_paise > 0) return { label: "Closed without verified refund", tone: "grey" };
-  if (r.refunded_paise > 0) return { label: "Refunded (Razorpay: processed)", tone: "green" };
-  return { label: "Nothing owed", tone: "grey" };
+export const LABELS = {
+  owed: "Refund owed",
+  awaiting: "Awaiting verification",
+  pending: "Refund pending",
+  verified: "Verified refunded",
+  uncertain: "Refund failed or uncertain",
+  closed: "Closed without verified refund",
+  none: "Nothing owed",
+} as const;
+
+export function stateOf(r: LedgerRow): { label: string; tone: "red" | "amber" | "green" | "grey"; why?: string } {
+  if (r.uncertain_count > 0) return { label: LABELS.uncertain, tone: "red", why: "Razorpay's answers disagree — do not refund again until resolved" };
+  if (r.over_refunded_paise > 0) return { label: LABELS.uncertain, tone: "red", why: "more was refunded than owed — do not refund again" };
+  if (r.open_discrepancies > 0) return { label: LABELS.uncertain, tone: "red", why: "an open discrepancy needs a person" };
+  if (r.failed_count > 0 && r.outstanding_paise > 0) return { label: LABELS.uncertain, tone: "red", why: "a refund failed at Razorpay; the money is still owed" };
+  if (r.pending_paise > 0) return { label: LABELS.pending, tone: "amber", why: "Razorpay says pending" };
+  if (r.claimed_count > 0) return { label: LABELS.awaiting, tone: "amber", why: "refund id recorded, Razorpay not yet asked or not yet answered" };
+  if (r.outstanding_paise > 0) return { label: LABELS.owed, tone: "red" };
+  if (r.written_off_paise > 0) return { label: LABELS.closed, tone: "grey" };
+  if (r.refunded_paise > 0) return { label: LABELS.verified, tone: "green", why: "Razorpay: processed" };
+  return { label: LABELS.none, tone: "grey" };
 }
+const isManual = (r: LedgerRow) => !!r.funds_bases?.includes("manual_recorded");
 const TONE = {
   red: "bg-terracotta/10 text-terracotta",
   amber: "bg-amber-100 text-amber-900",
@@ -139,15 +169,19 @@ export default function RefundsManager() {
   const [message, setMessage] = useState<{ text: string; bad: boolean } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [showSettled, setShowSettled] = useState(false);
+  const [canClose, setCanClose] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
-    const [l, d, r] = await Promise.all([
+    const [l, d, r, a] = await Promise.all([
       supabase.from("refund_ledger").select("*").order("first_owed_at", { ascending: true }),
       supabase.from("payment_reconciliation_discrepancies").select("*").eq("status", "open").order("first_seen_at"),
       supabase.from("payment_reconciliation_runs").select("*").order("id", { ascending: false }).limit(5),
+      supabase.rpc("refund_closure_authority"),
     ]);
+    // Display only: the database refuses a closure from anyone else regardless.
+    setCanClose(a.data === true);
     if (l.error || d.error || r.error) {
       setLoadError((l.error ?? d.error ?? r.error)?.message ?? "Could not load the ledger.");
     }
@@ -181,6 +215,11 @@ export default function RefundsManager() {
           text: `Razorpay says: ${v.status}${v.outcome === "uncertain" ? ` — UNCERTAIN: ${v.reason}` : ""}${v.discrepancies?.length ? " (discrepancy recorded)" : ""}.`,
           bad: v.outcome === "uncertain",
         });
+      } else if (json.result?.outcome === "closed") {
+        setMessage({
+          text: `${LABELS.closed}: ${rupees(Number(json.result.written_off_paise))} closed with your name and the evidence. This is not a refund.`,
+          bad: false,
+        });
       } else if (json.result?.message) {
         setMessage({ text: json.result.message, bad: !json.ok });
       } else {
@@ -197,7 +236,8 @@ export default function RefundsManager() {
   const totals = useMemo(() => {
     const live = rows.filter((r) => !r.backfilled);
     return {
-      outstanding: rows.reduce((s, r) => s + r.outstanding_paise, 0),
+      outstanding: rows.filter((r) => !isManual(r)).reduce((s, r) => s + r.outstanding_paise, 0),
+      manualOutstanding: rows.filter(isManual).reduce((s, r) => s + r.outstanding_paise, 0),
       refunded: rows.reduce((s, r) => s + r.refunded_paise, 0),
       pending: rows.reduce((s, r) => s + r.pending_paise, 0),
       attention: rows.filter((r) => stateOf(r).tone === "red").length,
@@ -222,7 +262,7 @@ export default function RefundsManager() {
       <p className="max-w-3xl text-sm text-ink/70">
         Refunds are made in <strong>Razorpay&apos;s dashboard</strong>. Then record the refund id here; Wovenne asks
         Razorpay and shows its answer. A cancellation or a credit note does not mean the money went back — only
-        Razorpay saying <em>processed</em> does.
+        Razorpay saying <em>processed</em> makes it <strong>{LABELS.verified}</strong>.
       </p>
 
       {loadError && <p className="rounded bg-terracotta/10 p-3 text-sm text-terracotta">{loadError}</p>}
@@ -232,11 +272,12 @@ export default function RefundsManager() {
         </p>
       )}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         {[
-          ["Outstanding", rupees(totals.outstanding)],
-          ["Pending at Razorpay", rupees(totals.pending)],
-          ["Verified refunded", rupees(totals.refunded)],
+          [`${LABELS.owed} (Razorpay)`, rupees(totals.outstanding)],
+          [`${LABELS.owed} (manual, unverified)`, rupees(totals.manualOutstanding)],
+          [LABELS.pending, rupees(totals.pending)],
+          [LABELS.verified, rupees(totals.refunded)],
           ["Need attention", String(totals.attention + disc.length)],
         ].map(([k, v]) => (
           <div key={k} className="rounded border border-ink/10 p-3">
@@ -288,6 +329,7 @@ export default function RefundsManager() {
                       toggle={() => setOpen(isOpen ? null : r.ledger_key)}
                       busy={busy}
                       post={post}
+                      canClose={canClose}
                     />
                   );
                 })}
@@ -297,8 +339,9 @@ export default function RefundsManager() {
         )}
         {totals.backfilled > 0 && (
           <p className="mt-2 text-xs text-ink/50">
-            {totals.backfilled} row(s) were brought in when the ledger was created (marked “before ledger”). Payments
-            taken with Razorpay Test keys were never real money: close those as “Test-mode payment”.
+            {totals.backfilled} row(s) were brought in when the ledger was created (marked “before ledger”). A payment
+            taken with Razorpay Test keys was never real money: an approver closes each one with “Check Test mode with
+            Razorpay”, which asks Razorpay before closing. Never in bulk.
           </p>
         )}
       </section>
@@ -328,6 +371,7 @@ function RowBlock({
   toggle,
   busy,
   post,
+  canClose,
 }: {
   r: LedgerRow;
   st: ReturnType<typeof stateOf>;
@@ -335,12 +379,27 @@ function RowBlock({
   toggle: () => void;
   busy: string | null;
   post: (k: string, p: Record<string, unknown>) => Promise<void>;
+  canClose: boolean;
 }) {
   const [refundId, setRefundId] = useState("");
   const [note, setNote] = useState("");
-  const [closeKind, setCloseKind] = useState("test_mode_payment");
+  const manual = isManual(r);
+  const [closeKind, setCloseKind] = useState("refunded_outside_razorpay");
   const [closeReason, setCloseReason] = useState("");
-  const obligation = r.obligation_ids?.[0] ?? null;
+  const [method, setMethod] = useState("");
+  const [reference, setReference] = useState("");
+  const [amountInr, setAmountInr] = useState("");
+  const [settledOn, setSettledOn] = useState("");
+  const [testReason, setTestReason] = useState("");
+  // The first OPEN obligation on this payment (closed ones stay as history).
+  const obligation = r.open_obligation_ids?.[0] ?? r.obligation_ids?.[0] ?? null;
+  const openObligation = r.open_obligation_ids?.[0] ?? null;
+  const repaying = closeKind === "refunded_outside_razorpay";
+  const paise = Math.round(Number(amountInr) * 100);
+  const closeReady =
+    closeReason.trim().length >= 20 &&
+    reference.trim().length >= 4 &&
+    (!repaying || (method !== "" && settledOn !== "" && Number.isFinite(paise) && paise > 0));
   return (
     <>
       <tr className="cursor-pointer border-t border-ink/10 align-top hover:bg-ink/[0.02]" onClick={toggle}>
@@ -351,6 +410,9 @@ function RowBlock({
         <td className="py-2 pr-3 font-mono text-xs">
           {r.channel === "outside_razorpay" ? "not via Razorpay" : r.razorpay_payment_id ?? "unknown (pre-0077)"}
           {r.provider_modes?.includes("test") && <span className="ml-1 text-[10px] text-ink/50">TEST</span>}
+          {manual && (
+            <div className="mt-0.5 font-sans text-[10px] text-amber-900">Manual payment — recorded by staff, not verified</div>
+          )}
         </td>
         <td className="py-2 pr-3 text-right tabular-nums">{rupees(r.captured_paise)}</td>
         <td className="py-2 pr-3 text-right tabular-nums">{rupees(r.owed_paise)}</td>
@@ -361,6 +423,10 @@ function RowBlock({
         <td className="py-2 pr-3 text-right font-medium tabular-nums">{rupees(r.outstanding_paise)}</td>
         <td className="py-2 pr-3">
           <span className={`rounded px-2 py-0.5 text-xs ${TONE[st.tone]}`}>{st.label}</span>
+          {st.why && <div className="mt-0.5 text-[10px] text-ink/50">{st.why}</div>}
+          {(r.close_kinds ?? []).map((k) => (
+            <div key={k} className="mt-0.5 text-[10px] text-ink/50">{CLOSE_LABEL[k] ?? k}</div>
+          ))}
         </td>
         <td className="py-2 pr-3 text-xs text-ink/60">{when(r.last_verified_at)}</td>
       </tr>
@@ -423,31 +489,105 @@ function RowBlock({
               </form>
             )}
 
-            {obligation && r.open_obligations > 0 && r.outstanding_paise > 0 && (
+            {openObligation && r.outstanding_paise > 0 && !canClose && (
+              <p className="text-xs text-ink/50">
+                Only the owner or an authorised finance approver can close this without a verified Razorpay refund.
+              </p>
+            )}
+
+            {openObligation && r.outstanding_paise > 0 && canClose && r.channel === "razorpay" && (
               <details className="text-xs">
-                <summary className="cursor-pointer text-ink/60">Close without a Razorpay refund…</summary>
+                <summary className="cursor-pointer text-ink/60">Test-mode payment? Check with Razorpay…</summary>
                 <form
                   className="mt-2 flex flex-wrap items-end gap-2"
                   onSubmit={(e) => {
                     e.preventDefault();
-                    void post(`x-${r.ledger_key}`, { action: "close", obligationId: obligation, kind: closeKind, reason: closeReason });
+                    void post(`t-${r.ledger_key}`, { action: "close_test_mode", obligationId: openObligation, reason: testReason });
                   }}
                 >
-                  <select value={closeKind} onChange={(e) => setCloseKind(e.target.value)} className="rounded border border-ink/20 px-2 py-1">
-                    <option value="test_mode_payment">Test-mode payment (never real money)</option>
-                    <option value="refunded_outside_razorpay">Refunded outside Razorpay (cash / bank)</option>
-                  </select>
                   <input
-                    value={closeReason}
-                    onChange={(e) => setCloseReason(e.target.value)}
-                    placeholder="Why, and where the evidence is (20+ characters)"
+                    value={testReason}
+                    onChange={(e) => setTestReason(e.target.value)}
+                    placeholder="Why you believe it is Test-mode (20+ characters)"
                     className="w-96 rounded border border-ink/20 px-2 py-1"
                   />
-                  <button disabled={!!busy || closeReason.trim().length < 20} className="rounded border border-terracotta px-3 py-1 text-terracotta disabled:opacity-40">
-                    Close as written off
+                  <button disabled={!!busy || testReason.trim().length < 20} className="rounded border border-terracotta px-3 py-1 text-terracotta disabled:opacity-40">
+                    {busy === `t-${r.ledger_key}` ? "Asking Razorpay…" : "Check Test mode with Razorpay"}
                   </button>
                 </form>
-                <p className="mt-1 text-ink/50">Recorded as written off with your name. It is never shown as “refunded”.</p>
+                <p className="mt-1 text-ink/50">
+                  The server asks Razorpay under Test keys. Only if Razorpay confirms a captured Test-mode payment on this
+                  order is this one obligation closed — as “{LABELS.closed}”, never as refunded.
+                </p>
+              </details>
+            )}
+
+            {openObligation && r.outstanding_paise > 0 && canClose && (
+              <details className="text-xs">
+                <summary className="cursor-pointer text-ink/60">Close without a Razorpay refund (evidence required)…</summary>
+                <form
+                  className="mt-2 grid max-w-3xl grid-cols-1 gap-2 sm:grid-cols-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void post(`x-${r.ledger_key}`, {
+                      action: "close",
+                      obligationId: openObligation,
+                      kind: closeKind,
+                      reason: closeReason,
+                      reference,
+                      method: repaying ? method : null,
+                      amountPaise: repaying ? paise : null,
+                      settledOn: repaying ? settledOn : null,
+                    });
+                  }}
+                >
+                  <label className="flex flex-col text-ink/60">
+                    What happened
+                    <select value={closeKind} onChange={(e) => setCloseKind(e.target.value)} className="mt-1 rounded border border-ink/20 px-2 py-1">
+                      <option value="refunded_outside_razorpay">Money returned outside Razorpay (cash / UPI / bank)</option>
+                      {manual && <option value="no_funds_received">Manual order: no money was ever received</option>}
+                    </select>
+                  </label>
+                  <label className="flex flex-col text-ink/60">
+                    Evidence reference (UTR, UPI ref, receipt, document)
+                    <input value={reference} onChange={(e) => setReference(e.target.value)} className="mt-1 rounded border border-ink/20 px-2 py-1" />
+                  </label>
+                  {repaying && (
+                    <>
+                      <label className="flex flex-col text-ink/60">
+                        Method
+                        <select value={method} onChange={(e) => setMethod(e.target.value)} className="mt-1 rounded border border-ink/20 px-2 py-1">
+                          <option value="">Choose…</option>
+                          <option value="cash">Cash</option>
+                          <option value="upi">UPI</option>
+                          <option value="bank_transfer">Bank transfer</option>
+                          <option value="card_offline">Card (offline terminal)</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </label>
+                      <label className="flex flex-col text-ink/60">
+                        Amount returned (₹) — must equal {rupees(r.outstanding_paise)}
+                        <input value={amountInr} onChange={(e) => setAmountInr(e.target.value)} inputMode="decimal" className="mt-1 rounded border border-ink/20 px-2 py-1" />
+                      </label>
+                      <label className="flex flex-col text-ink/60">
+                        Date returned
+                        <input type="date" value={settledOn} onChange={(e) => setSettledOn(e.target.value)} className="mt-1 rounded border border-ink/20 px-2 py-1" />
+                      </label>
+                    </>
+                  )}
+                  <label className="flex flex-col text-ink/60 sm:col-span-2">
+                    Why, and where the evidence is kept (20+ characters)
+                    <input value={closeReason} onChange={(e) => setCloseReason(e.target.value)} className="mt-1 rounded border border-ink/20 px-2 py-1" />
+                  </label>
+                  <div className="sm:col-span-2">
+                    <button disabled={!!busy || !closeReady} className="rounded border border-terracotta px-3 py-1 text-terracotta disabled:opacity-40">
+                      Close as “{LABELS.closed}”
+                    </button>
+                  </div>
+                </form>
+                <p className="mt-1 text-ink/50">
+                  Recorded permanently with your name and the evidence. It is never shown as “{LABELS.verified}”.
+                </p>
               </details>
             )}
 
