@@ -155,6 +155,9 @@ async function main(engine: Engine) {
     [s?.value.loyalty_enabled, s?.value.coupons_enabled, s?.draft_value.loyalty_enabled, s?.draft_value.coupons_enabled], [false, false, false, false]);
   const others = (d?: Record<string, unknown>) => Object.fromEntries(Object.entries(d ?? {}).filter(([k]) => !["loyalty_enabled", "coupons_enabled"].includes(k)));
   check("store_settings: every other key kept (vip_min_orders 4 etc.)", [others(s?.value), others(s?.draft_value)], [others(settingsBefore?.value), others(settingsBefore?.draft_value)]);
+  check("both LS-1 guards exist (orders, store_settings)",
+    (await c.query("select array_agg(tgname::text order by tgname) t from pg_trigger where tgname in ('orders_discount_switch_guard', 'store_settings_discount_lock') and not tgisinternal")).rows[0].t,
+    ["orders_discount_switch_guard", "store_settings_discount_lock"]);
   const audit = Number((await c.query("select count(*) n from admin_audit_log where table_name = 'site_content' and changes::text like '%coupons_enabled%'")).rows[0]?.n ?? 0);
   check("the settings change is in the audit log", audit >= 1, true);
 
@@ -164,7 +167,13 @@ async function main(engine: Engine) {
     await asRoot(c);
     await c.query("begin");
     try {
-      await c.query("alter table site_content disable trigger store_settings_discount_lock");
+      // Lets the test store values the lock would refuse, to exercise the READER.
+      // Tolerant of a missing lock so a mutation that drops it is caught by the
+      // "nobody can switch them on" checks, not by this helper.
+      await c.query(`do $$ begin
+                       if exists (select 1 from pg_trigger where tgname = 'store_settings_discount_lock') then
+                         alter table site_content disable trigger store_settings_discount_lock;
+                       end if; end $$`);
       if (value === null) await c.query("delete from site_content where key = 'store_settings'");
       else await c.query("update site_content set value = $1::jsonb where key = 'store_settings'", [value]);
       const r = (await c.query(
