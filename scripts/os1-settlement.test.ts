@@ -652,8 +652,18 @@ async function main() {
     console.log("\nOS-1 — loyalty moves only for a settled, uncancelled order");
     {
       await asRoot(w.root);
-      await w.root.query(`insert into site_content (key, value, draft_value) values ('store_settings', '{"loyalty_enabled": true}', '{"loyalty_enabled": true}')
+      // LS-1 (0081) holds loyalty off for launch and refuses to switch it on.
+      // These checks are 0077's rules for when it IS on, so with 0081 present
+      // they run under what the separately approved re-enable release will do
+      // (drop the lock), and the lock is put back afterwards.
+      const has0081 = (await w.root.query("select to_regprocedure('public.discount_switch_on(text)') is not null r")).rows[0].r as boolean;
+      const enableLoyalty = () => w.root.query(`insert into site_content (key, value, draft_value) values ('store_settings', '{"loyalty_enabled": true}', '{"loyalty_enabled": true}')
                           on conflict (key) do update set value = coalesce(site_content.value, '{}'::jsonb) || '{"loyalty_enabled": true}'`);
+      if (has0081) {
+        check("0081: switching loyalty on is refused, even by the database owner", (await outcome(enableLoyalty())).code, "55000");
+        await w.root.query("alter table site_content disable trigger store_settings_discount_lock");
+      }
+      await enableLoyalty();
       const uid = (await w.root.query("insert into auth.users (email) values ('loyal-os1@example.test') returning id")).rows[0].id;
       await w.root.query("insert into profiles (id, email, is_admin) values ($1, 'loyal-os1@example.test', false) on conflict (id) do nothing", [uid]);
       await w.root.query("insert into loyalty_ledger (user_id, points, reason) values ($1, 1000, 'opening balance')", [uid]);
@@ -695,6 +705,12 @@ async function main() {
       check("paid then cancelled: a late redeem/award moves nothing", [(await redeem(thenCancelled.id)).ok, await award(thenCancelled.id), await balance()], [false, 0, before]);
 
       check("a redemption with no order is unchanged by 0077", (await redeem(null)).ok, true);
+      if (has0081) {
+        await asRoot(w.root);
+        await w.root.query(`update site_content set value = value || '{"loyalty_enabled": false}', draft_value = coalesce(draft_value, '{}'::jsonb) || '{"loyalty_enabled": false}' where key = 'store_settings'`);
+        await w.root.query("alter table site_content enable trigger store_settings_discount_lock");
+        check("0081: with loyalty back off, a redemption with no order is refused", (await redeem(null)).ok, false);
+      }
     }
 
     console.log("\nOS-1 — permissions");
