@@ -34,7 +34,9 @@ export type CouponRejection =
   | "expired"
   | "exhausted"
   | "below_minimum"
-  | "already_used";
+  | "already_used"
+  /** LS-1: coupons are switched off store-wide; the code was not looked up. */
+  | "disabled";
 
 export interface CouponEvaluation {
   ok: boolean;
@@ -56,7 +58,16 @@ const REJECTION_MESSAGE: Record<CouponRejection, string> = {
   exhausted: "That code has been fully claimed.",
   below_minimum: "", // filled in with the threshold, which the customer can act on
   already_used: "You've already used that code.",
+  disabled: "Discount codes aren't available at the moment.",
 };
+
+/**
+ * LS-1: the answer while coupons are switched off. Says nothing about whether
+ * the code exists — it was never looked up — and takes nothing off the order.
+ */
+export function couponsUnavailable(): CouponEvaluation {
+  return { ok: false, discount: 0, reason: "disabled", message: REJECTION_MESSAGE.disabled, code: null };
+}
 
 /** Rupees, whole. Money is never carried as a fraction here. */
 function rupees(value: number): number {

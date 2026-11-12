@@ -1555,6 +1555,13 @@
         "service_role"
       ]
     },
+    "discount_switch_on(text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "draft_is_noop(text,uuid)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -1826,6 +1833,11 @@
       "execute": []
     },
     "orders_delivery_review()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "orders_discount_switch_guard()": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
       "execute": []
@@ -2213,6 +2225,11 @@
     },
     "stock_movements_order_return_guard()": {
       "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "store_settings_discount_lock()": {
+      "securityDefiner": true,
       "searchPath": "public, pg_temp",
       "execute": []
     },

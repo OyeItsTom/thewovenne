@@ -417,9 +417,11 @@ async function main() {
     const offenders = files.filter((p) => /\.(refund|capture)\s*\(|refunds\.create|payments\.refund/.test(fs.readFileSync(p, "utf8")));
     const calls = files.flatMap((p) => (fs.readFileSync(p, "utf8").match(/razorpay\.(\w+)\.(\w+)\(/g) ?? []).map((m) => `${path.basename(p)}:${m}`));
     check("no refund-creating or capturing call anywhere in lib/, app/, components/", offenders.map((p) => path.relative(process.cwd(), p)), []);
+    // LS-1 moved checkout's orders.create from the route into lib/checkoutCreate.
     check("every direct Razorpay SDK call: checkout's orders.create and OS-3's four reads", [...new Set(calls)].sort(), [
+      "checkoutCreate.ts:razorpay.orders.create(",
       "refundProviders.ts:razorpay.orders.fetchPayments(", "refundProviders.ts:razorpay.payments.all(",
-      "refundProviders.ts:razorpay.payments.fetch(", "refundProviders.ts:razorpay.refunds.fetch(", "route.ts:razorpay.orders.create(",
+      "refundProviders.ts:razorpay.payments.fetch(", "refundProviders.ts:razorpay.refunds.fetch(",
     ]);
 
     await rpcConn.end();

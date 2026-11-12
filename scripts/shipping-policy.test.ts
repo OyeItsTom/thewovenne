@@ -134,8 +134,10 @@ check("the escape hatch works: a costlier sub-region can be carved out",
 console.log("\n=== ONE QUOTE, EVERY SURFACE ===");
 
 const read = (p: string) => fs.readFileSync(p, "utf8");
-ok("the checkout route quotes from quoteShipping",
-  read("app/api/checkout/razorpay/route.ts").includes("quoteShipping(details.address, total, shippingConfig)"));
+// LS-1 moved the create half of the route into lib/checkoutCreate.
+ok("the checkout route quotes from quoteShipping (via lib/checkoutCreate)",
+  read("app/api/checkout/razorpay/route.ts").includes("createCheckout(") &&
+  read("lib/checkoutCreate.ts").includes("quoteShipping(details.address, total, shippingConfig)"));
 ok("the delivery endpoint resolves through the same module",
   read("app/api/delivery/check/route.ts").includes("getDeliveryQuote"));
 ok("and getDeliveryQuote delegates the money to quoteShipping, not a second opinion",
@@ -144,7 +146,8 @@ ok("the checkout form shows the same function's answer",
   read("components/cart/CheckoutForm.tsx").includes("quoteShipping(form.address, subtotal, shippingConfig)"));
 ok("nothing computes a shipping cost by hand",
   !read("components/cart/CheckoutForm.tsx").includes("flat_rate_inr") &&
-  !read("app/api/checkout/razorpay/route.ts").includes("flat_rate_inr"));
+  !read("app/api/checkout/razorpay/route.ts").includes("flat_rate_inr") &&
+  !read("lib/checkoutCreate.ts").includes("flat_rate_inr"));
 
 console.log("\n=== PRICING REGIONS AND DELIVERY-TIME ZONES STAY SEPARATE ===");
 ok("the shipping config holds no day ranges",

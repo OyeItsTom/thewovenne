@@ -38,7 +38,10 @@ export default function StoreSettingsEditor({ onChange }: { onChange?: () => voi
       });
   }, []);
 
-  async function save(next: StoreSettings) {
+  async function save(requested: StoreSettings) {
+    // LS-1: whatever was loaded, a save always writes both money switches off.
+    // The database refuses anything else (0081).
+    const next: StoreSettings = { ...requested, loyalty_enabled: false, coupons_enabled: false };
     setSettings(next);
     setSaving(true);
     setError(null);
@@ -122,12 +125,15 @@ export default function StoreSettingsEditor({ onChange }: { onChange?: () => voi
 
       <Block
         title="Loyalty points"
-        hint="Off until you turn it on. Nothing accrues and nothing can be redeemed while this is off."
+        hint="Switched off for launch. Nothing accrues and nothing can be redeemed. Existing balances are kept. Switching points on is a separately approved release, not a setting."
       >
+        {/* LS-1 (0081): the database refuses to switch loyalty or coupons on
+            (store_settings_discount_lock), so this is shown, not offered. */}
         <Toggle
-          label="Enable loyalty points"
-          checked={settings.loyalty_enabled}
-          onChange={(v) => set("loyalty_enabled", v)}
+          label="Loyalty points (off for launch)"
+          checked={false}
+          disabled
+          onChange={() => {}}
         />
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <Num
@@ -181,16 +187,19 @@ function Toggle({
   label,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <label className="flex items-center gap-3 text-sm">
+    <label className={`flex items-center gap-3 text-sm${disabled ? " opacity-60" : ""}`}>
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
         className="h-4 w-4 accent-terracotta"
       />

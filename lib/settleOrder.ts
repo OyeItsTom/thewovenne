@@ -485,13 +485,16 @@ export async function settleOrder(
           `Could not record coupon ${used.coupon_code} for paid order ${razorpayOrderId}: ${redeemError.message}`
         );
       } else if (claimed === false) {
-        // Exhausted or withdrawn between checkout and payment. The customer
-        // keeps their discount — they were charged it — and this is a note for
-        // whoever reconciles the promotion, not a problem to push back at them.
+        // Exhausted or withdrawn between checkout and payment — or, since LS-1
+        // (0081), coupons switched off while this checkout was open. The
+        // customer keeps their discount — they were shown it and charged it —
+        // and that is never silent: the order is flagged for a human, the same
+        // as a points redemption that could not be made.
         console.error(
           `Coupon ${used.coupon_code} could not be claimed for paid order ${razorpayOrderId} ` +
-            `(exhausted or withdrawn mid-payment). Discount was honoured.`
+            `(exhausted, withdrawn or coupons switched off mid-payment). Discount was honoured; flagged for review.`
         );
+        await supabase.from("orders").update({ needs_review: true }).eq("id", orderId);
       }
     }
 

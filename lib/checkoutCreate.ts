@@ -1,0 +1,288 @@
+import { razorpay } from "./razorpay";
+import { createServiceClient } from "./supabase";
+import { priceCart } from "./checkoutPricing";
+import { validateOrderDetails } from "./orderDetails";
+import { getShippingConfig, quoteShipping } from "./shipping";
+import { planRedemption, type RedemptionPlan } from "./loyalty";
+import { applyCoupon, couponsUnavailable } from "./coupons";
+import { getDiscountSwitches, type DiscountSwitches } from "./storeSettings";
+import type { CartItem } from "./store";
+import { toPaise } from "./utils";
+
+/**
+ * Starting a Razorpay checkout: price the basket, quote delivery, apply any
+ * discount that is switched on, create the Razorpay order for that exact
+ * amount, and record the pending order. Moved out of the route (LS-1) so the
+ * amount sent to Razorpay can be tested against a fake gateway and database;
+ * the logic is unchanged apart from the discount switches.
+ *
+ * LS-1 — DISCOUNTS ARE OFF FOR LAUNCH. Before anything else decides money, the
+ * two switches are read on the server (getDiscountSwitches, which fails
+ * closed). While a switch is off, the request's couponCode / redeemPoints are
+ * disregarded entirely: no coupon is looked up, no balance is read, and the
+ * customer is charged the full server-priced amount — which is also the amount
+ * the Razorpay modal shows them before they pay. The database refuses a
+ * discounted order row on its own as well (0081 orders_discount_switch_guard).
+ */
+
+export interface CreatePayload {
+  action: "create";
+  items: CartItem[];
+  details: unknown;
+  /** Points the customer asked to spend. Validated and clamped server-side. */
+  redeemPoints?: number;
+  /** The code typed at checkout. Re-read and re-priced server-side. */
+  couponCode?: string;
+}
+
+export interface CheckoutResponse {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+/** Injected only by tests. Production always takes the defaults. */
+export interface CheckoutDeps {
+  priceCart: typeof priceCart;
+  getShippingConfig: typeof getShippingConfig;
+  applyCoupon: typeof applyCoupon;
+  planRedemption: typeof planRedemption;
+  switches: () => Promise<DiscountSwitches>;
+  gateway: { orders: { create: (o: { amount: number; currency: string; receipt: string }) => Promise<{ id: string; amount: number | string; currency: string }> } };
+  supabase: () => ReturnType<typeof createServiceClient>;
+  keyId: () => string | undefined;
+}
+
+const NO_REDEMPTION: RedemptionPlan = { points: 0, discount: 0, error: null };
+
+const json = (body: Record<string, unknown>, init?: { status?: number }): CheckoutResponse => ({
+  status: init?.status ?? 200,
+  body,
+});
+
+export async function createCheckout(
+  { items, details: rawDetails, redeemPoints, couponCode }: CreatePayload,
+  deps?: Partial<CheckoutDeps>
+): Promise<CheckoutResponse> {
+  const d: CheckoutDeps = {
+    priceCart,
+    getShippingConfig,
+    applyCoupon,
+    planRedemption,
+    switches: () => getDiscountSwitches(),
+    // Written out so the one direct SDK call in checkout stays visible to the
+    // source scan in os3-refund-app.test.ts.
+    gateway: { orders: { create: (o) => razorpay.orders.create(o) } } as CheckoutDeps["gateway"],
+    supabase: createServiceClient,
+    keyId: () => process.env.RAZORPAY_KEY_ID,
+    ...deps,
+  };
+  // Validated here, not just in the form: the form runs in a browser the
+  // customer controls, and an order with no deliverable address is worse than
+  // a rejected checkout.
+  const { details, error: detailsError } = validateOrderDetails(rawDetails);
+  if (detailsError || !details) {
+    return json({ error: detailsError }, { status: 400 });
+  }
+
+  // The cart comes from the browser, so its prices are a claim, not a fact.
+  // Re-price from the database — this is what decides the amount charged, and
+  // the client's own price_inr is ignored entirely.
+  const { items: priced, total, error, reason } = await d.priceCart(items);
+  if (error) {
+    // `reason` lets the page tell a basket that asks for too much (worth
+    // editing) from one that cannot be priced at all (worth retrying).
+    return json({ error, reason }, { status: 400 });
+  }
+
+  // Re-read and recomputed from the server-priced subtotal. The code is the
+  // customer's claim about WHICH promotion they want; what it is worth is
+  // decided here, like every other number on this order.
+  //
+  // A bad code does not fail the checkout. The customer is told at the point
+  // they enter it, and an expired code discovered at payment time should not
+  // throw away an order they still want at full price.
+  // LS-1: read once, on the server, fail closed. A switch that is off means
+  // the request's discount fields are disregarded, not evaluated.
+  const switches = await d.switches().catch(() => ({ loyalty: false, coupons: false }));
+
+  const coupon = couponCode
+    ? switches.coupons === true
+      ? await d.applyCoupon(couponCode, total, details.email)
+      : couponsUnavailable()
+    : null;
+  const couponDiscount = coupon?.ok ? coupon.discount : 0;
+
+  // Quoted here, not taken from the request. The browser shows the customer a
+  // figure, but this is the one they are charged — the same rule as prices.
+  //
+  // Quoted on the PRE-COUPON subtotal, deliberately. Free delivery over the
+  // threshold is a promise about the size of the order someone placed, and
+  // re-testing it after a discount means applying a code can make a delivery
+  // charge appear — which reads as a penalty for using the promotion. The cost
+  // is that a large enough coupon can carry free shipping below the threshold.
+  const shippingConfig = await d.getShippingConfig();
+  const shipping = quoteShipping(details.address, total, shippingConfig);
+
+  // Coupon first, then points, so the points are spent against what is actually
+  // left to pay. Passing the pre-coupon total here would let someone redeem
+  // points they cannot use and watch the balance disappear into a floor.
+  const afterCoupon = Math.max(total - couponDiscount, 0);
+
+  // Redemption is recomputed here from the customer's real balance. The number
+  // the browser sent is a request, not a fact — treating it as one would let
+  // anyone mint a discount.
+  const redemption =
+    switches.loyalty === true
+      ? await d.planRedemption(details.email, redeemPoints ?? 0, afterCoupon)
+      : NO_REDEMPTION;
+  if (redemption.error) {
+    return json({ error: redemption.error }, { status: 400 });
+  }
+
+  // Floored at ₹1: Razorpay will not create an order for zero, and a fully
+  // discounted basket still has to become a payment to become an order.
+  const grandTotal = Math.max(
+    afterCoupon + shipping.cost - redemption.discount,
+    1
+  );
+
+  try {
+    // Razorpay expects the amount in the smallest unit — paise for INR. The
+    // stored total is derived from this SAME integer so that settlement, which
+    // compares what Razorpay captured against what this row says was asked,
+    // is comparing like with like to the paisa.
+    const amount = toPaise(grandTotal);
+    const totalInr = amount / 100;
+
+    const order = await d.gateway.orders.create({
+      amount,
+      currency: "INR",
+      receipt: `wovenne_${Date.now()}`,
+    });
+
+    // Recorded BEFORE payment. If the customer abandons the modal we still know
+    // who they were and what they wanted, and verify then updates this row
+    // rather than inserting a second one for the same order.
+    const supabase = d.supabase();
+    const row = {
+      razorpay_order_id: order.id,
+      customer_email: details.email,
+      customer_name: details.name,
+      customer_phone: details.phone,
+      shipping_address: details.address,
+      total_inr: totalInr,
+      shipping_cost_inr: shipping.cost,
+      loyalty_points_spent: redemption.points,
+      loyalty_discount_inr: redemption.discount,
+      // Recorded even though total_inr is already net of it, so the invoice can
+      // show the line and the admin can see which promotion won the order.
+      coupon_code: coupon?.ok ? coupon.code : null,
+      coupon_discount_inr: couponDiscount,
+      // Snapshotted, not looked up later: what these pieces cost US as at this
+      // sale, so a renegotiated cost cannot rewrite historical margin.
+      //
+      // A line with NO recorded cost adds nothing to this total, which means
+      // the P&L will read it as pure margin. That is a real overstatement and
+      // it is not hidden: the per-line cost_price_inr is preserved as null in
+      // `items` below, so a report can find the orders it cannot trust and say
+      // so. The alternative — refusing to sell an uncosted piece — would fail
+      // checkouts over a bookkeeping gap.
+      cogs_inr: priced.reduce(
+        (sum, i) => sum + (i.cost_price_inr ?? 0) * i.quantity,
+        0
+      ),
+      payment_provider: "razorpay",
+      payment_status: "pending",
+      items: priced.map((item) => ({
+        id: item.id,
+        name: item.name,
+        size: item.size,
+        quantity: item.quantity,
+        price_inr: item.price_inr,
+        cost_price_inr: item.cost_price_inr,
+        sku: item.sku,
+      })),
+    };
+
+    let { error: insertError } = await supabase
+      .from("orders")
+      .insert({ ...row, delivery_updates: details.delivery_updates });
+
+    // Deploy-ordering insurance, and it now guards two migrations rather than
+    // one. This code ships the moment a PR merges; migrations are applied by
+    // hand afterwards, so there is always a window where a column this insert
+    // names does not exist yet — and an unknown column fails the whole insert,
+    // which would mean NOBODY CAN CHECK OUT until the migration runs.
+    //
+    // Losing a channel preference (0034) or the record of which coupon won the
+    // order (0037) is a far smaller harm than losing the order itself. The
+    // AMOUNT is never at risk: grandTotal is already computed and already sent
+    // to Razorpay, so a customer who used a valid code still pays the
+    // discounted price even if this row cannot say so.
+    const missingColumn = (e: typeof insertError, column: string) =>
+      e?.code === "PGRST204" || new RegExp(column).test(e?.message ?? "");
+
+    if (missingColumn(insertError, "delivery_updates")) {
+      console.error(
+        "orders.delivery_updates missing — run migration 0034. Recording the order without it."
+      );
+      ({ error: insertError } = await supabase.from("orders").insert(row));
+    }
+
+    if (missingColumn(insertError, "cogs_inr")) {
+      console.error(
+        "orders.cogs_inr missing — run migration 0038. Recording the order without cost capture; " +
+          "this order will show no COGS in the P&L and cannot be backfilled."
+      );
+      const { cogs_inr, ...withoutCost } = row;
+      void cogs_inr;
+      ({ error: insertError } = await supabase.from("orders").insert(withoutCost));
+    }
+
+    if (missingColumn(insertError, "coupon_(code|discount_inr)")) {
+      console.error(
+        "orders.coupon_* missing — run migration 0037. Recording the order without the coupon record; " +
+          `the customer was still charged the discounted amount (₹${grandTotal}).`
+      );
+      const { coupon_code, coupon_discount_inr, ...withoutCoupon } = row;
+      void coupon_code;
+      void coupon_discount_inr;
+      ({ error: insertError } = await supabase.from("orders").insert(withoutCoupon));
+    }
+
+    if (insertError) {
+      // Better to stop than to take money for an order we cannot ship.
+      console.error("Could not record pending order:", insertError.message);
+      return json(
+        { error: "Could not start checkout. Please try again." },
+        { status: 500 }
+      );
+    }
+
+    return json({
+      orderId: order.id,
+      amount: Number(order.amount),
+      currency: order.currency,
+      keyId: d.keyId(),
+      // Echoed back so the page can show what was actually applied, which may
+      // be less than asked for if the balance moved.
+      redeemed: { points: redemption.points, discount: redemption.discount },
+      // Echoed so the page can show what was applied — or say why it was not.
+      coupon: coupon
+        ? { ok: coupon.ok, code: coupon.code, discount: couponDiscount, message: coupon.message }
+        : null,
+      // Saves the customer retyping what they just gave us.
+      prefill: {
+        name: details.name,
+        email: details.email,
+        contact: details.phone,
+      },
+    });
+  } catch (error) {
+    console.error("Razorpay order creation error:", error);
+    return json(
+      { error: "Could not create Razorpay order." },
+      { status: 500 }
+    );
+  }
+}
