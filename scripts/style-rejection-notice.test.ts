@@ -557,14 +557,26 @@ async function database() {
     await asAdmin(c2, admin);
     await c.query("begin");
     await c2.query("begin");
-    const a = claim(c, sc);
-    const b = claim(c2, sc);
-    const ra = await a;
-    await new Promise((r) => setTimeout(r, 150));
-    await c.query("commit");
-    const rb = await b;
-    await c2.query("commit");
-    const outcomes = [ra.outcome, rb.outcome].sort();
+    // Either session may reach the row lock first: the server decides, not the
+    // order the queries were issued in. So commit whichever claim returns first,
+    // then let the other finish. Assuming `c` always wins deadlocked the test
+    // itself under load (Postgres cannot see a wait that is in this script).
+    // lock_timeout bounds the wait, so a real locking regression fails, never hangs.
+    await c.query("set local lock_timeout = '15s'");
+    await c2.query("set local lock_timeout = '15s'");
+    const sessions = [c, c2];
+    const claims = sessions.map((cl, i) =>
+      claim(cl, sc).then(
+        (r) => ({ i, outcome: String(r.outcome) }),
+        (e: Error) => ({ i, outcome: `error: ${e.message}` }),
+      ),
+    );
+    const winner = await Promise.race(claims);
+    await new Promise((r) => setTimeout(r, 150)); // the other claim is now queued behind the winner's row lock
+    await sessions[winner.i].query("commit");
+    const loser = await claims[1 - winner.i];
+    await sessions[loser.i].query("commit"); // ends the transaction (a rollback if it errored)
+    const outcomes = [winner.outcome, loser.outcome].sort();
     t("concurrent claims: exactly one wins", outcomes[0] === "claimed" && outcomes[1] === "in_progress", outcomes.join(","));
     st = await state(sc);
     t("concurrent claims: one attempt counted", st.n[0].attempts === 1 && st.n[0].status === "claimed");
