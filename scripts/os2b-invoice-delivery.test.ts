@@ -970,7 +970,8 @@ function pure() {
   const cart = fs.readFileSync(path.join(process.cwd(), "components/cart/CartSummary.tsx"), "utf8");
   check("PURE: cart says \"Shipping calculated at checkout.\" and no longer mentions taxes",
     [cart.includes("Shipping calculated at checkout."), /tax/i.test(cart)], [true, false]);
-  const checkoutRoute = fs.readFileSync(path.join(process.cwd(), "app/api/checkout/razorpay/route.ts"), "utf8");
+  // LS-1 moved the create half of the route into lib/checkoutCreate.
+  const checkoutRoute = fs.readFileSync(path.join(process.cwd(), "lib/checkoutCreate.ts"), "utf8");
   check("PURE: checkout's grand total is goods − coupon + shipping − redemption (no tax term)",
     /const grandTotal = Math\.max\(\s*afterCoupon \+ shipping\.cost - redemption\.discount,/.test(checkoutRoute) && !/\btax/i.test(checkoutRoute), true);
 }

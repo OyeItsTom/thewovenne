@@ -164,6 +164,17 @@ export default function CouponManager() {
 
   return (
     <div className="space-y-6">
+      {/* LS-1 (0081): coupons are switched off for launch in the database and
+          the checkout. Codes can still be kept and read here; none applies. */}
+      <p
+        role="status"
+        className="rounded-lg border border-ink/15 bg-cream px-4 py-3 text-sm text-ink/75"
+      >
+        Discount codes are switched off for launch. No code takes money off an
+        order at checkout, whatever its status below. Switching them on is a
+        separately approved release, not a setting.
+      </p>
+
       {error && (
         <p className="rounded-lg bg-terracotta/10 px-4 py-3 text-sm text-terracotta-dark">
           {error}

@@ -92,6 +92,8 @@ export function makeWorld(opts: {
   profile?: boolean;
   /** Overrides for what the gateway reports about the payment. */
   payment?: FakePayment;
+  /** LS-1 (0081): both switches off — redeem_coupon and the points functions refuse. */
+  discountsOff?: boolean;
 }): { world: World; deps: Partial<SettlementDeps> } {
   const world: World = {
     orders: new Map(),
@@ -314,6 +316,7 @@ export function makeWorld(opts: {
       }
       case "redeem_loyalty_points": {
         const orderId = args.p_order_id as string;
+        if (opts.discountsOff) return { data: { ok: false, reason: "Loyalty points are not enabled." }, error: null };
         // 0077: only against a paid, uncancelled order.
         const target = world.orders.get(orderId);
         if (orderId && (!target || target.payment_status !== "paid" || target.status === "cancelled")) {
@@ -327,6 +330,7 @@ export function makeWorld(opts: {
       }
       case "award_loyalty_points": {
         const orderId = args.p_order_id as string;
+        if (opts.discountsOff) return { data: 0, error: null };
         const order = world.orders.get(orderId);
         // Awards go to accounts, for paid orders, once (0029's unique index).
         if (!order || order.payment_status !== "paid" || !world.profiles.length || world.awards.has(orderId)) {
@@ -337,6 +341,8 @@ export function makeWorld(opts: {
       }
       case "redeem_coupon": {
         const orderId = args.p_order_id as string;
+        // 0081: a NEW claim is refused while coupons are off; a recorded one still answers true.
+        if (opts.discountsOff && !world.couponUses.includes(orderId)) return { data: false, error: null };
         if (!world.couponUses.includes(orderId)) world.couponUses.push(orderId);
         return { data: true, error: null };
       }
