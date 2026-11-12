@@ -529,7 +529,67 @@
         }
       }
     },
+    "payment_reconciliation_discrepancies": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
+    "payment_reconciliation_runs": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
+    "payment_refund_events": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
     "payment_refund_obligations": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
+    "payment_refunds": {
       "kind": "r",
       "rls": true,
       "forceRls": false,
@@ -749,6 +809,62 @@
           "INSERT",
           "SELECT",
           "UPDATE"
+        ]
+      },
+      "columns": {}
+    },
+    "refund_closure_approvers": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [],
+        "service_role": []
+      },
+      "columns": {}
+    },
+    "refund_ledger": {
+      "kind": "v",
+      "rls": false,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
+    "refund_notes": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
+        ]
+      },
+      "columns": {}
+    },
+    "refund_obligations": {
+      "kind": "r",
+      "rls": true,
+      "forceRls": false,
+      "privileges": {
+        "anon": [],
+        "authenticated": [
+          "SELECT"
+        ],
+        "service_role": [
+          "SELECT"
         ]
       },
       "columns": {}
@@ -992,6 +1108,26 @@
       "authenticated": [],
       "service_role": []
     },
+    "payment_reconciliation_discrepancies_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
+    "payment_reconciliation_runs_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
+    "payment_refund_events_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
+    "refund_notes_id_seq": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": []
+    },
     "sealed_record_access_log_id_seq": {
       "anon": [],
       "authenticated": [],
@@ -1010,6 +1146,27 @@
       "execute": [
         "authenticated",
         "service_role"
+      ]
+    },
+    "admin_add_refund_note(uuid,bigint,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
+    "admin_claim_refund(uuid,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
+    "admin_close_refund_obligation(uuid,text,text,text,text,bigint,date)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
       ]
     },
     "admin_correct_order_contact(uuid,text,text,jsonb,text)": {
@@ -1035,6 +1192,13 @@
       ]
     },
     "admin_decide_delivery_review(bigint,text,jsonb,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
+    "admin_resolve_discrepancy(bigint,text,text)": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
       "execute": [
@@ -1681,6 +1845,21 @@
       "searchPath": "public, pg_temp",
       "execute": []
     },
+    "payment_reconciliation_discrepancies_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "payment_reconciliation_runs_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "payment_refunds_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
     "pending_changes()": {
       "securityDefiner": true,
       "searchPath": "public, pg_temp",
@@ -1779,6 +1958,41 @@
         "service_role"
       ]
     },
+    "recon_checkpoint(bigint,integer,integer,integer,boolean,boolean)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "recon_finish(bigint,text,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "recon_payment_facts(text[],text[])": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "recon_record_discrepancy(bigint,text,text,text,text,jsonb)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "recon_start(text,timestamp with time zone,timestamp with time zone,uuid,bigint)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "record_in_person_consent(uuid)": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -1803,6 +2017,27 @@
         "service_role"
       ]
     },
+    "record_refund_evidence(text,text,text,bigint,text,text,timestamp with time zone,text,bigint,text,boolean,bigint,text,text,uuid,jsonb)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "record_refund_not_found(text,text,text,text,jsonb)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
+    "record_test_mode_closure(uuid,uuid,text,text,text,text,bigint,text,boolean,text)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "service_role"
+      ]
+    },
     "redeem_coupon(text,uuid,text,numeric)": {
       "securityDefiner": true,
       "searchPath": "public",
@@ -1816,6 +2051,48 @@
       "execute": [
         "service_role"
       ]
+    },
+    "refund_closure_approver_is(uuid)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "refund_closure_approvers_audit()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "refund_closure_authority()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": [
+        "authenticated"
+      ]
+    },
+    "refund_discrepancy_upsert(text,text,text,text,text,uuid,uuid,jsonb,bigint)": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "refund_obligation_from_credit_note()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "refund_obligation_from_unfulfilled()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "refund_obligations_duplicate_check()": {
+      "securityDefiner": true,
+      "searchPath": "public, pg_temp",
+      "execute": []
+    },
+    "refund_obligations_guard()": {
+      "securityDefiner": false,
+      "searchPath": "public, pg_temp",
+      "execute": []
     },
     "release_stock(jsonb,uuid,text)": {
       "securityDefiner": true,
@@ -2342,7 +2619,43 @@
       "using": "(lower(customer_email) = lower(auth.email()))",
       "check": null
     },
+    "public.payment_reconciliation_discrepancies.Admins read reconciliation discrepancies": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.payment_reconciliation_runs.Admins read reconciliation runs": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.payment_refund_events.Admins read payment refund events": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
     "public.payment_refund_obligations.Admins read refund obligations": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.payment_refunds.Admins read payment refunds": {
       "cmd": "SELECT",
       "permissive": "PERMISSIVE",
       "roles": [
@@ -2585,6 +2898,24 @@
       ],
       "using": "(id = auth.uid())",
       "check": "(id = auth.uid())"
+    },
+    "public.refund_notes.Admins read refund notes": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
+    },
+    "public.refund_obligations.Admins read refund obligations ledger": {
+      "cmd": "SELECT",
+      "permissive": "PERMISSIVE",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "is_admin()",
+      "check": null
     },
     "public.site_content.Admins can delete site content": {
       "cmd": "DELETE",

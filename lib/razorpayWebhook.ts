@@ -1,6 +1,13 @@
 import crypto from "crypto";
 import { createServiceClient } from "./supabase";
 import { settleOrder, type SettlementResult } from "./settleOrder";
+import {
+  refundWebhookTarget,
+  verifyAndRecordRefund,
+  type RefundLedgerDeps,
+  type RefundWebhookEvent,
+} from "./refundLedger";
+import { refundLedgerDeps } from "./refundProviders";
 
 /**
  * Razorpay tells us a payment succeeded, without asking the customer to.
@@ -143,6 +150,89 @@ export interface WebhookOutcome {
 export interface WebhookDeps {
   supabase: ReturnType<typeof createServiceClient>;
   settle: (input: { razorpayOrderId: string; razorpayPaymentId: string }) => Promise<SettlementResult>;
+  /** OS-3: Razorpay reads and the 0080 functions for refund.* events. */
+  refunds: RefundLedgerDeps;
+}
+
+/**
+ * refund.* (OS-3, 0080). The event is only a trigger, exactly like
+ * payment.captured: the refund id comes out of the verified payload and
+ * everything recorded comes from Razorpay's API (lib/refundLedger). What the
+ * payload claimed (payment, amount, currency) is compared with the API and a
+ * difference is recorded as a discrepancy — the API's answer is the one kept.
+ *
+ *   200  recorded, unchanged, an out-of-order "pending" after a final state
+ *        (kept as it was), uncertain (recorded for a person), the automatic
+ *        refund of a payment never captured (not Wovenne's money), or a refund
+ *        Razorpay cannot find in this mode (recorded as a discrepancy — a
+ *        Test event delivered to a Live endpoint must not be retried for 24
+ *        hours and disable the endpoint).
+ *   500  could not ask Razorpay, could not write, or an answer this code does
+ *        not understand: retry. Nothing was written, so a retry is clean.
+ *
+ * Deduplicated like settlement: the event id is recorded only after the work
+ * is done, and the work is idempotent (record_refund_evidence takes the
+ * per-payment lock and moves a refund only forward).
+ */
+async function handleRefundWebhook(
+  event: RefundWebhookEvent,
+  eventId: string | null,
+  deps?: Partial<WebhookDeps>
+): Promise<WebhookOutcome> {
+  const target = refundWebhookTarget(event);
+  if (!target.act) {
+    console.error(`Razorpay webhook ${event.event ?? "?"}: ${target.reason} — nothing recorded.`);
+    return { status: 200, body: { ok: true, ignored: target.reason } };
+  }
+
+  const supabase = deps?.supabase ?? createServiceClient();
+  if (eventId) {
+    const { data: seen } = await supabase
+      .from("razorpay_webhook_events")
+      .select("event_id")
+      .eq("event_id", eventId)
+      .maybeSingle();
+    if (seen) return { status: 200, body: { ok: true, duplicate: true } };
+  }
+
+  let v;
+  try {
+    v = await verifyAndRecordRefund(
+      target.refundId,
+      { source: "webhook", claimed: target.claimed },
+      deps?.refunds ?? refundLedgerDeps()
+    );
+  } catch (e) {
+    console.error(`Refund webhook for ${target.refundId} threw:`, e);
+    return { status: 500, body: { error: "refund not recorded" } };
+  }
+
+  if (!v.ok) {
+    if (v.kind === "not_found" && v.discrepancyRecorded) {
+      console.error(`Refund webhook: ${v.message}`);
+    } else {
+      console.error(`Refund webhook for ${target.refundId}: ${v.kind} — ${v.message}`);
+      return { status: 500, body: { error: "refund not recorded", kind: v.kind } };
+    }
+  } else if (v.outcome === "uncertain" || v.discrepancies.length) {
+    console.error(`Refund ${target.refundId}: ${v.outcome} ${v.reason ?? ""} (discrepancy ids ${v.discrepancies.join(",") || "none"}).`);
+  }
+
+  if (eventId) {
+    const { error } = await supabase
+      .from("razorpay_webhook_events")
+      .insert({ event_id: eventId, event_type: event.event ?? null });
+    if (error && error.code !== "23505") {
+      console.error(`Could not record webhook event ${eventId}: ${error.message}`);
+      return { status: 500, body: { error: "event not recorded" } };
+    }
+  }
+  return {
+    status: 200,
+    body: v.ok
+      ? { ok: true, refund: v.outcome, status: v.status }
+      : { ok: true, refund: "not_found", recorded: true },
+  };
 }
 
 /**
@@ -198,6 +288,10 @@ export async function handleRazorpayWebhook(
   }
   if (!event || typeof event !== "object") {
     return { status: 200, body: { ok: true, ignored: "not an object" } };
+  }
+
+  if (typeof event.event === "string" && event.event.startsWith("refund.")) {
+    return handleRefundWebhook(event as RefundWebhookEvent, req.eventId, deps);
   }
 
   const target = settlementTarget(event);
